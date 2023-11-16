@@ -42,11 +42,13 @@ The basic prerequisites for *building* the above:
   - Linux;
   - a C++ compiler with C++ 17 support;
   - Boost headers (plus certain libraries) install;
+  - dependency headers and library (from within this overall project) install(s); in this case those of:
+    `flow`;
   - CMake.
 
 The basic prerequisites for *using* the above:
 
-  - Linux, C++ compiler, Boost (but CMake is not required); plus:
+  - Linux, C++ compiler, Boost, above-listed dependency lib(s) (but CMake is not required); plus:
   - your source code `#include`ing any exported `ipc/` headers must be itself built in C++ 17 mode;
   - any executable using the `ipc_*` libraries must be linked with certain Boost and ubiquitous
     system libraries.
