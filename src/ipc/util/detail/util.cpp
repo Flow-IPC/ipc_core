@@ -152,13 +152,3 @@ void remove_persistent_shm_pool(flow::log::Logger* logger_ptr, const Shared_name
 } // remove_persistent_shm_pool()
 
 } // namespace ipc::util
-
-namespace capnp
-{
-
-std::ostream& operator<<(std::ostream& os, const Text::Reader& val)
-{
-  return os << val.cStr();
-}
-
-} // namespace capnp
