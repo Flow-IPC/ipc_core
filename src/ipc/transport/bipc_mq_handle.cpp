@@ -335,7 +335,9 @@ bool Bipc_mq_handle::try_receive(util::Blob_mutable* blob, Error_code* err_code)
     FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-pop to blob @[" << blob->data() << "], "
                    "max-size [" << blob->size() << "].");
 
-    size_t n_rcvd;
+    size_t n_rcvd = {};
+    /* (^-- Initializer not needed algorithmically, but gcc-13 gives maybe-uninitialized warning;
+     * while at least various modern clangs and gcc-9 are fine.  It's OK; we can afford it.) */
     unsigned int pri_ignored;
     not_blocked // Throws <=> error wrapper sets truthy *err_code. --v
       = m_mq->try_receive(blob->data(), blob->size(), n_rcvd, pri_ignored);
@@ -387,7 +389,7 @@ void Bipc_mq_handle::receive(util::Blob_mutable* blob, Error_code* err_code)
    * Update: Now that we have to be interrupt_*()ible, also reuse wait_*() instead of using native
    * m_mq->*(). */
 
-  size_t n_rcvd;
+  size_t n_rcvd = {}; // (Why initialize?  See comment near first such initializer for explanation.)
   unsigned int pri_ignored;
   bool ok;
 
@@ -451,7 +453,7 @@ bool Bipc_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duration
                  "max-size [" << blob->size() << "]; timeout ~[" << round<microseconds>(timeout_from_now) << "].  "
                  "Trying nb-pop first; if it succeeds -- great.  Else will wait/retry/wait/retry/....");
 
-  size_t n_rcvd;
+  size_t n_rcvd = {}; // (Why initialize?  See comment near first such initializer for explanation.)
   unsigned int pri_ignored;
 
   auto now = Fine_clock::now();
