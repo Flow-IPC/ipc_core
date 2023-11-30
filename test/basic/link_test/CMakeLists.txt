@@ -21,8 +21,6 @@ add_executable(${NAME} main.cpp)
 # Do stuff we've resolved to do on all our targets.
 common_set_target_properties(${NAME})
 
-target_compile_options(${NAME} PRIVATE ${WARN_FLAGS})
-
 # Link good ol' libipc_core.
 target_link_libraries(${NAME} PRIVATE ${PROJ})
 

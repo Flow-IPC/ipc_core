@@ -21,7 +21,7 @@
 #include <flow/common.hpp>
 
 #ifndef FLOW_OS_LINUX // Sanity-re-check.  We'll be sending sockets through sockets, etc., which requires Linux.
-#  error "Should not have gotten to this line; should have required Linux; this .cpp file assumes it.";
+#  error "Should not have gotten to this line; should have required Linux; this .cpp file assumes it."
 #endif
 #include <sys/types.h>
 #include <sys/socket.h>

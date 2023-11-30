@@ -24,6 +24,7 @@
 # Beyond that we have nothing to add (even though we do use some of Flow's dependencies directly too; but
 # by convention we're told not to list those redundantly).
 
+message(STATUS "Dependents shall need to import/link libs: flow, (Linux only) rt.")
 if(TARGET flow)
   set(DEP_LIBS flow) # In meta-project mode it's loaded by this short name.
 else()
@@ -31,7 +32,6 @@ else()
 endif()
 
 if(LINUX)
-  message("Adding system `rt` lib in Linux (needed for shm_*() at least).")
   list(APPEND DEP_LIBS rt)
 endif()
 
