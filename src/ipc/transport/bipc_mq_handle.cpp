@@ -163,18 +163,27 @@ bool Bipc_mq_handle::try_send(const util::Blob_const& blob, Error_code* err_code
   op_with_possible_bipc_mq_exception(err_code, "Bipc_mq_handle::try_send(): bipc::message_queue::try_send()",
                                      [&]()
   {
-    FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-push of blob @[" << blob.data() << "], "
+    auto blob_data = blob.data();
+    FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                    "size [" << blob.size() << "].");
-    if (blob.size() != 0)
+    if (blob.size() == 0)
+    {
+      /* bipc::message_queue::try_send() invokes memcpy(X, nullptr, N), even when N == 0;
+       * which is (1) empirically speaking harmless but (2) technically in violation of arg 2's non-null decl
+       * hence (3) causes a clang UBSAN sanitizer error.  So waste a couple cycles by feeding it this dummy
+       * non-null value. */
+      blob_data = static_cast<const void*>(&blob_data);
+    }
+    else // if (blob.size() != 0)
     {
       FLOW_LOG_DATA("Blob contents: [\n" << buffers_dump_string(blob, "  ") << "].");
     }
 
     not_blocked
-      = m_mq->try_send(blob.data(), blob.size(), 0); // Throws <=> error wrapper sets truthy *err_code.
+      = m_mq->try_send(blob_data, blob.size(), 0); // Throws <=> error wrapper sets truthy *err_code.
     if (!not_blocked)
     {
-      FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-push of blob @[" << blob.data() << "], "
+      FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                      "size [" << blob.size() << "]: would-block.");
     }
   }); // op_with_possible_bipc_mq_exception()
@@ -202,10 +211,16 @@ void Bipc_mq_handle::send(const util::Blob_const& blob, Error_code* err_code)
 
   assert(m_mq && "As advertised: send() => undefined behavior if not successfully cted or was moved-from.");
 
-  FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Blocking-push of blob @[" << blob.data() << "], "
+  auto blob_data = blob.data();
+  FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Blocking-push of blob @[" << blob_data << "], "
                  "size [" << blob.size() << "].  Trying nb-push first; if it succeeds -- great.  "
                  "Else will wait/retry/wait/retry/....");
-  if (blob.size() != 0)
+  if (blob.size() == 0)
+  {
+    // See similarly-placed comment in try_send() which explains this.
+    blob_data = static_cast<const void*>(&blob_data);
+  }
+  else // if (blob.size() != 0)
   {
     FLOW_LOG_DATA("Blob contents: [\n" << buffers_dump_string(blob, "  ") << "].");
   }
@@ -220,7 +235,7 @@ void Bipc_mq_handle::send(const util::Blob_const& blob, Error_code* err_code)
     op_with_possible_bipc_mq_exception(err_code, "Bipc_mq_handle::send(): bipc::message_queue::try_send()",
                                        [&]()
     {
-      ok = m_mq->try_send(blob.data(), blob.size(), 0); // Throws <=> error wrapper sets truthy *err_code.
+      ok = m_mq->try_send(blob_data, blob.size(), 0); // Throws <=> error wrapper sets truthy *err_code.
     });
     if (*err_code || ok)
     {
@@ -229,7 +244,7 @@ void Bipc_mq_handle::send(const util::Blob_const& blob, Error_code* err_code)
     }
     // else if (would-block): as promised, INFO logs.
 
-    FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-push of blob @[" << blob.data() << "], "
+    FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                    "size [" << blob.size() << "]: would-block.  Executing blocking-wait.");
 
     wait_sendable(err_code);
@@ -260,10 +275,16 @@ bool Bipc_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_duratio
 
   assert(m_mq && "As advertised: timed_send() => undefined behavior if not successfully cted or was moved-from.");
 
-  FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Blocking-timed-push of blob @[" << blob.data() << "], "
+  auto blob_data = blob.data();
+  FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Blocking-timed-push of blob @[" << blob_data << "], "
                  "size [" << blob.size() << "]; timeout ~[" << round<microseconds>(timeout_from_now) << "].  "
                  "Trying nb-push first; if it succeeds -- great.  Else will wait/retry/wait/retry/....");
-  if (blob.size() != 0)
+  if (blob.size() == 0)
+  {
+    // See similarly-placed comment in try_send() which explains this.
+    blob_data = static_cast<const void*>(&blob_data);
+  }
+  else // if (blob.size() != 0)
   {
     FLOW_LOG_DATA("Blob contents: [\n" << buffers_dump_string(blob, "  ") << "].");
   }
@@ -277,7 +298,7 @@ bool Bipc_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_duratio
     op_with_possible_bipc_mq_exception(err_code, "Bipc_mq_handle::timed_send(): bipc::message_queue::try_send()",
                                        [&]()
     {
-      ok = m_mq->try_send(blob.data(), blob.size(), 0); // Throws <=> error wrapper sets truthy *err_code.
+      ok = m_mq->try_send(blob_data, blob.size(), 0); // Throws <=> error wrapper sets truthy *err_code.
     });
     if (*err_code)
     {
@@ -291,8 +312,8 @@ bool Bipc_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_duratio
     }
     // else if (would-block): as promised, INFO logs.
 
-    FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-push of blob @[" << blob.data() << "], "
-                  "size [" << blob.size() << "]: would-block.  Executing blocking-wait.");
+    FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
+                   "size [" << blob.size() << "]: would-block.  Executing blocking-wait.");
 
     timeout_from_now -= (after - now); // No-op the first time; after that reduces time left.
     const bool ready = timed_wait_sendable(timeout_from_now, err_code);
