@@ -45,6 +45,8 @@ const Shared_name Posix_mq_handle::S_RESOURCE_TYPE_ID = Shared_name::ct("posixQ"
 // Implementations.
 
 Posix_mq_handle::Posix_mq_handle() :
+  m_interrupting_snd(false), // (Not algorithmically needed as of this writing, but avoid some sanitizer complaints.)
+  m_interrupting_rcv(false), // (Ditto.  E.g., swap() through clang's UBSAN => complains it's uninitialized.)
   m_interrupter_snd(m_nb_task_engine),
   m_interrupt_detector_snd(m_nb_task_engine),
   m_interrupter_rcv(m_nb_task_engine),
@@ -684,15 +686,24 @@ bool Posix_mq_handle::try_send(const util::Blob_const& blob, Error_code* err_cod
   assert((!m_mq.null())
          && "As advertised: try_send() => undefined behavior if not successfully cted or was moved-from.");
 
-  FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-push of blob @[" << blob.data() << "], "
+  auto blob_data = blob.data();
+  FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                  "size [" << blob.size() << "].");
-  if (blob.size() != 0)
+  if (blob.size() == 0)
+  {
+    /* ::mq_send(..., nullptr, N), even when N == 0, is (1) empirically speaking harmless but (2) technically
+     * in violation of arg 2's non-null decl (even though `N == 0` is explicitly allowed per `man` page) hence
+     * (3) causes a clang UBSAN sanitizer error.  So waste a couple cycles by feeding it this dummy
+     * non-null value. */
+    blob_data = static_cast<const void*>(&blob_data);
+  }
+  else // if (blob.size() != 0)
   {
     FLOW_LOG_DATA("Blob contents: [\n" << buffers_dump_string(blob, "  ") << "].");
   }
 
   if (mq_send(m_mq.m_native_handle,
-              static_cast<const char*>(blob.data()),
+              static_cast<const char*>(blob_data),
               blob.size(), 0) == 0)
   {
     err_code->clear();
@@ -701,7 +712,7 @@ bool Posix_mq_handle::try_send(const util::Blob_const& blob, Error_code* err_cod
   // else
   if (errno == EAGAIN)
   {
-    FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-push of blob @[" << blob.data() << "], "
+    FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                   "size [" << blob.size() << "]: would-block.");
     err_code->clear();
     return false; // Queue full.
@@ -730,10 +741,16 @@ void Posix_mq_handle::send(const util::Blob_const& blob, Error_code* err_code)
   assert((!m_mq.null())
          && "As advertised: send() => undefined behavior if not successfully cted or was moved-from.");
 
-  FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Blocking-push of blob @[" << blob.data() << "], "
+  auto blob_data = blob.data();
+  FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Blocking-push of blob @[" << blob_data << "], "
                  "size [" << blob.size() << "].  Trying nb-push first; if it succeeds -- great.  "
                  "Else will wait/retry/wait/retry/....");
-  if (blob.size() != 0)
+  if (blob.size() == 0)
+  {
+    // See similarly-placed comment in try_send() which explains this.
+    blob_data = static_cast<const void*>(&blob_data);
+  }
+  else // if (blob.size() != 0)
   {
     FLOW_LOG_DATA("Blob contents: [\n" << buffers_dump_string(blob, "  ") << "].");
   }
@@ -745,7 +762,7 @@ void Posix_mq_handle::send(const util::Blob_const& blob, Error_code* err_code)
   while (true)
   {
     if (mq_send(m_mq.m_native_handle,
-                static_cast<const char*>(blob.data()),
+                static_cast<const char*>(blob_data),
                 blob.size(), 0) == 0)
     {
       err_code->clear();
@@ -760,7 +777,7 @@ void Posix_mq_handle::send(const util::Blob_const& blob, Error_code* err_code)
     }
     // else if (would-block): as promised, INFO logs.
 
-    FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-push of blob @[" << blob.data() << "], "
+    FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                    "size [" << blob.size() << "]: would-block.  Executing blocking-wait.");
 
     wait_sendable(err_code);
@@ -798,10 +815,16 @@ bool Posix_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_durati
   assert((!m_mq.null())
          && "As advertised: timed_send() => undefined behavior if not successfully cted or was moved-from.");
 
-  FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Blocking-timed-push of blob @[" << blob.data() << "], "
+  auto blob_data = blob.data();
+  FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Blocking-timed-push of blob @[" << blob_data << "], "
                  "size [" << blob.size() << "]; timeout ~[" << round<microseconds>(timeout_from_now) << "].  "
                  "Trying nb-push first; if it succeeds -- great.  Else will wait/retry/wait/retry/....");
-  if (blob.size() != 0)
+  if (blob.size() == 0)
+  {
+    // See similarly-placed comment in try_send() which explains this.
+    blob_data = static_cast<const void*>(&blob_data);
+  }
+  else // if (blob.size() != 0)
   {
     FLOW_LOG_DATA("Blob contents: [\n" << buffers_dump_string(blob, "  ") << "].");
   }
@@ -812,7 +835,7 @@ bool Posix_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_durati
   while (true)
   {
     if (mq_send(m_mq.m_native_handle,
-                static_cast<const char*>(blob.data()),
+                static_cast<const char*>(blob_data),
                 blob.size(), 0) == 0)
     {
       err_code->clear();
@@ -827,7 +850,7 @@ bool Posix_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_durati
     }
     // else if (would-block): as promised, INFO logs.
 
-    FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-push of blob @[" << blob.data() << "], "
+    FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                    "size [" << blob.size() << "]: would-block.  Executing blocking-wait.");
 
     timeout_from_now -= (after - now); // No-op the first time; after that reduces time left.
