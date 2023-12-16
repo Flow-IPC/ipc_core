@@ -1625,8 +1625,9 @@ bool CLASS_CHANNEL::async_end_sending(Task_err&& on_done_func)
   static_assert(S_IS_ASYNC_IO_OBJ, "This overload usable only with async-I/O-pattern object.");
 
   using flow::async::Task_asio_err;
+  using flow::util::Mutex_non_recursive;
+  using flow::util::Lock_guard;
   using boost::make_shared;
-  using std::atomic;
 
   if constexpr(S_HAS_BLOB_PIPE_ONLY)
   {
@@ -1676,32 +1677,43 @@ bool CLASS_CHANNEL::async_end_sending(Task_err&& on_done_func)
      * X1.async_end_sending(F1) + X2.async_end_sending(F2), F1() and F2() very well might execute concurrently.
      * So we *do* need to protect against concurrent access if any. */
 
-    /* m_n_done reaching 2 is essentially a barrier for invoking m_on_done_func().  So it is the only datum protected
-     * against concurrent access.  Since it's just an int, we use atomic<> for synchronization. */
     struct State
     {
-      atomic<unsigned int> m_n_done; // Init: 0.  Thread safety: See preceding comment.
-      Error_code m_err_code1; // Init: Success.  Thread safety: It is only touched once hence no sync required.
-      Task_asio_err m_on_done_func; // Assigned just below.  Thread safety: It is only read once hence no sync required.
+      Mutex_non_recursive m_mutex; // Protects m_n_done and m_err_code1.
+      unsigned int m_n_done; // Init: 0.
+      Error_code m_err_code1; // Init: Success.
+      Task_asio_err m_on_done_func; // Set just below.  (Thread safety: It is only read once hence no sync required.)
     };
     const auto state = make_shared<State>();
     state->m_on_done_func = std::move(on_done_func); // @todo Make m_on_done_func const; use {} init semantics.
 
     auto combined_on_done = [state](const Error_code& async_err_code) mutable
     {
-      const auto post_n_done = ++state->m_n_done;
-      const bool all_done = post_n_done == 2;
-      assert((post_n_done == 1) || all_done);
-
-      if (all_done) // I.e., if (<we are the 2nd handler to fire>)
+      Error_code err_code = async_err_code; // We may overwrite it.
       {
+        Lock_guard<Mutex_non_recursive> lock(state->m_mutex);
+        const auto post_n_done = ++state->m_n_done;
+        const bool all_done = post_n_done == 2;
+        assert((post_n_done == 1) || all_done);
+
+        if (!all_done)
+        {
+          // Wwe are the 1st handler to fire>: Mark down the result for the (all_done) clause below.
+          state->m_err_code1 = err_code;
+          return;
+        }
+        // else if (<we are the 2nd handler to fire>):
+
         // Report the 1st error to occur; or success if none occurred.
-        state->m_on_done_func(state->m_err_code1 ? state->m_err_code1 : async_err_code);
-        return;
-      }
-      // else if (<we are the 1st handler to fire>): Mark down the result for the (all_done) clause above.
-      state->m_err_code1 = async_err_code;
-    };
+        if (state->m_err_code1)
+        {
+          err_code = state->m_err_code1;
+        }
+        // else { err_code remains == async_err_code. }
+      } // Lock_guard<Mutex_non_recursive> lock(state->m_mutex);
+
+      state->m_on_done_func(err_code);
+    }; // auto combined_on_done =
 
     if (!peer1->async_end_sending(Task_asio_err(combined_on_done))) // Copy combined_on_done for the call below.
     {
