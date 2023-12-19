@@ -113,7 +113,7 @@ public:
   /**
    * To be invoked after `->stop()`ping `*worker` (from ctor), as well as flushing any still-queued
    * tasks in its `Task_engine` (via `.restart()` and `.poll()`), this satisfies the customer adapter
-   * dtor's contractor which is to invoke any not-yet-fired completion handlers with special
+   * dtor's contract which is to invoke any not-yet-fired completion handlers with special
    * operation-aborted error code.  In our case that is either nothing or 1 `async_end_sending()` completion
    * handler.  If applicable the dtor returns once that handler has completed in an unspecified thread
    * that is not the calling thread.
