@@ -496,7 +496,7 @@ Blob_stream_mq_receiver_impl<Persistent_mq_handle>::Blob_stream_mq_receiver_impl
       m_mq_ready_reader.emplace(*m_nb_task_engine); // No handle inside but will be set-up soon below.
       m_mq_ready_writer.emplace(*m_nb_task_engine); // Ditto.
 
-      // Start thread W, for when we (and if) we need to use it to async-wait for transmissibility.
+      // Start thread W, for when (and if) we need to use it to async-wait for transmissibility.
       m_blocking_worker.emplace(get_logger(),
                                 ostream_op_string("mq_rcv-", nickname())); // Thread W started just below.
       m_blocking_worker->start();
