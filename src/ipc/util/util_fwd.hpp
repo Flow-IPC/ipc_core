@@ -205,7 +205,7 @@ Permissions shared_resource_permissions(Permissions_level permissions_lvl);
  * Note 1: Sometimes there is not even the creation-API argument for `perms`; in which case the rationale is even
  * more straightforward.
  *
- * Note 2: Sometimes there *is* that API... and (namely in Boost.ipc at least) they actually took care to do this
+ * Note 2: Sometimes there *is* that API... and (namely in boost.ipc at least) they actually took care to do this
  * (what we do here) themselves (via `fchmod()` and such)... so we don't need to; in fact I (ygoldfel) treated
  * it as valuable confirmation of the correctness of this maneuver.
  *

@@ -103,7 +103,7 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
   {
     /* Naively: Use mq_open() to both create-or-open/exclusively-create and to set mode `perms`.
      * In reality though there are two subtleties that make it tougher than that.  Fortunately this has been
-     * adjudicated out there, and internal Boost.interprocess code very nicely confirms that adjudication/sets
+     * adjudicated out there, and internal boost.interprocess code very nicely confirms that adjudication/sets
      * a sufficiently-authoritative precedent.
      *
      * Subtlety 1 is that mq_open(), like all POSIX/Linux ::open()-y calls, doesn't listen to `perms` verbatim

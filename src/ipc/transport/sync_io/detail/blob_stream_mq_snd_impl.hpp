@@ -333,21 +333,19 @@ private:
    *
    * @param orig_blob
    *        Blob to send.  Empty blob is allowed.
-   * @param err_code
-   *        Success or failure is registered in `*err_code` per above.  If null behavior is undefined.
    * @param avoided_qing_or_null
    *        See above.
    * @return `false` if outgoing-direction pipe still has queued stuff in it that must be sent once transport
    *         becomes writable; `true` otherwise.  If `true` is returned, but `avoided_qing_or_null != nullptr`, then
    *         possibly `orig_blob` was not sent (at all); was dropped (check `*avoided_qing_or_null` to see if so).
    */
-  bool sync_write_or_q_payload(const util::Blob_const& orig_blob, Error_code* err_code, bool* avoided_qing_or_null);
+  bool sync_write_or_q_payload(const util::Blob_const& orig_blob, bool* avoided_qing_or_null);
 
   /**
    * Writes the 2 payloads corresponding to CONTROL command `cmd` to #m_mq; if unable to do so synchronously --
    * either because items are already queued in #m_pending_payloads_q, or MQ is full -- then enqueue 1-2 of the
    * payloads onto that queue.  In the case of Control_cmd::S_PING it may drop both payloads silently
-   * (see sync_write_or_q_payload() notes regarding `avoided_qing` mode.)
+   * (see sync_write_or_q_payload() notes regarding `avoided_qing` mode).
    *
    * Essentially this combines 1-2 sync_write_or_q_payload() for the specific task of sending out a CONTROL command.
    * If one desires to send a normal (user) message -- use sync_write_or_q_payload() directly (it shall deal
@@ -916,7 +914,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
                      "Emitting error immediately; but pipe continues.  Note that if we don't do this, "
                      "then the low-level MQ will behave this way anyway.");
   }
-  else if (m_pending_err_code) // if (!m_finished) && (blob.size() OK)
+  else if (m_pending_err_code) // && (!m_finished) && (blob.size() OK)
   {
     /* This --^ holds either the last inline-completed send_blob() call's emitted Error_code, or (~rarely) one
      * that was found while attempting to dequeue previously-would-blocked queued-up (due to incomplete s_blob())
