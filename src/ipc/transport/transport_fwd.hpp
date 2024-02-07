@@ -317,6 +317,7 @@ template<typename Persistent_mq_handle>
 class Blob_stream_mq_sender;
 template<typename Persistent_mq_handle>
 class Blob_stream_mq_receiver;
+class Protocol_negotiator;
 
 /// Convenience alias: sync_io::Blob_sender via unidirectional POSIX MQ (message queue).
 using Posix_mq_sender = Blob_stream_mq_sender<Posix_mq_handle>;

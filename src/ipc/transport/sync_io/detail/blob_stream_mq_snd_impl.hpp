@@ -85,6 +85,26 @@ namespace ipc::transport::sync_io
  * the next message, which enters steady state again.  Lastly, `*end_sending()` means we enter CONTROL state
  * similarly, then send `Control_cmd::S_END_SENDING` in the next message, which enters steady state again.
  *
+ * ### Protocol negotiation ###
+ * This adds a bit of stuff onto the above protocol.  It is very simple; please see Protocol_negotiator doc header;
+ * we use that convention.  Moreover, since this is the init version (version 1) of the protocol, we need not worry
+ * about speaking more than one version.  So all we do is send the version just-ahead of the first payload that would
+ * otherwise be sent for any reason (user message from send_blob(), end-sending token from `*end_sending()`, or
+ * ping from auto_ping(), as of this writing), as a special CONTROL message that encodes the value `-1`, meaning
+ * version 1 (as the true `Control_cmd enum` values would be 0, 1, etc.).  Conversely Blob_stream_mq_receiver_impl
+ * expects the first message it does receive to be that CONTROL message encoding a version number; but that's not
+ * our concern here, as we are only the outgoing-direction class.
+ *
+ * After that, we just speak what we speak... which is the protocol's initial version -- as there is no other
+ * version for us.  (The opposing-side peer is responsible for closing the MQs, if it is unable to speak version 1.)
+ *
+ * If we do add protocol version 2, etc., in the future, then things *might* become somewhat more complex (but even
+ * then not necessarily so).  This is discussed in the `Protocol_negotiator m_protocol_negotiator` member doc header.
+ *
+ * @note We suggest that if version 2, etc., is/are added, then the above notes be kept more or less intact; then
+ *       add updates to show changes.  This will provide a good overview of how the protocol evolved; and our
+ *       backwards-compatibility story (even if we decide to have no backwards-compatibility).
+ *
  * @tparam Persistent_mq_handle
  *         See Persistent_mq_handle concept doc header.
  */
@@ -343,6 +363,20 @@ private:
   bool sync_write_or_q_ctl_cmd(Control_cmd cmd);
 
   /**
+   * Equivalent to sync_write_or_q_ctl_cmd() but takes the raw representation of the command to send;
+   * this allows both sending the `enum Control_cmd` value or the special protocol negotiation payload.
+   * We always send the latter as the first message, and never again; and the receiver side expects this;
+   * after that only regular `Control_cmd`-bearing CONTROL messages are sent and expected.
+   *
+   * @param raw_cmd
+   *        Either a non-negative value, which equals the cast of a `Control_cmd` to its underlying type;
+   *        or a negative value, which equals the arithmetic negation of our highest (preferred) protocol
+   *        version.  So in the latter case -1 means version 1, -2 means version 2, etc.
+   * @return See sync_write_or_q_ctl_cmd().
+   */
+  bool sync_write_or_q_ctl_cmd_impl(std::underlying_type_t<Control_cmd> raw_cmd);
+
+  /**
    * Initiates async-write over #m_mq of the low-level payload at the head of out-queue
    * #m_pending_payloads_q, with completion handler also inside this method.
    * The first step of this is an async-wait via `sync_io` pattern.
@@ -353,6 +387,48 @@ private:
 
   /// See nickname().
   const std::string m_nickname;
+
+  /**
+   * Handles the protocol negotiation at the start of the pipe.
+   *
+   * @see Protocol_negotiator doc header for key background on the topic.  In particular check out the discussion
+   *      "Key tip: Coding for version-1 versus one version versus multiple versions."
+   *
+   * ### Maintenace/future ###
+   * This version of the software talks only the initial version of the protocol: version 1 by Protocol_negotiator
+   * convention.  (Deities willing, we won't need to create more, but possibly we will.)  As expained in the
+   * above-mentioned doc header section, we have very little to worry about as the sender: Just send
+   * our version, 1, as the first message (in fact, a special CONTROL message; and we send it just ahead of the
+   * first payload that would be otherwise sent, whether it's a user payload, or the end-sending token, or
+   * an auto-ping).  Only version 1 exists, so we simply speak it.
+   *
+   * This *might* change in the future.  If there is a version 2 or later, *and* at some point we decide to maintain
+   * backwards-compatibility (not a no-brainer decision in either direction), meaning we pass a range of 2 versions
+   * or more to Protocol_negotiator ctor, then:
+   *   - We will need to know which version to speak when sending at least *some* of our messages.
+   *   - Normally we'd get this via a separate incoming pipe -- a paired Blob_stream_mq_receiver handling
+   *     a separate associated MQ.  So we'd need:
+   *     - some kind of internal logic to enter a would-block state of sorts (if we need to know the version
+   *       for a certain out-message, and we haven't been told it yet) during which stuff is queued-up and not
+   *       yet sent until signaled with the negotiated protocol version;
+   *     - some kind of API that would let the paired Blob_stream_mq_receiver signal us to tell us that version,
+   *       when it knows;
+   *     - possibly some kind of API that one could use in the absence of such a paired opposite-facing pipe,
+   *       so that our user can simply tell us what protocol version to speak in lieu of the paired
+   *       Blob_stream_mq_receiver.
+   *
+   * (Just to point a fine point on it: We are *one* direction of a *likely* bidirectional comm pathway.
+   * Protocol_negotiator by definition applies to a bidirectional pathway.  Yet we *can* exist in isolation, with
+   * no partner opposing MQ and therefore no partner local Blob_stream_mq_sender_impl.  If that is indeed the
+   * case, then it is meaningless for *us* to somehow find out what protocol the either side speaks, as the other
+   * side has no way of sending us *anything*!  Hence the dichotomy between those last 2 sub-bullets:
+   * If we exist in isolation and are unidirectional, then you'd best simply tell us what to speak... but
+   * if we're part of a bidirectional setup, then we can cooperate with the other direction more automagically.
+   *
+   * These are decisions and work for another day, though; it is not relevant until version 2 of this protocol
+   * at the earliest.  That might not even happen.
+   */
+  Protocol_negotiator m_protocol_negotiator;
 
   /// See absolute_name().
   const Shared_name m_absolute_name;
@@ -560,6 +636,8 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
 
   flow::log::Log_context(logger_ptr, Log_component::S_TRANSPORT),
   m_nickname(nickname_str),
+  m_protocol_negotiator(get_logger(), nickname(),
+                        1, 1), // Initial protocol!  @todo Magic-number `const`(s), particularly if/when v2 exists.
   m_absolute_name(mq.absolute_name()),
   // m_mq null for now but is set up below.
   m_mq_max_msg_sz(mq.max_msg_size()), // Just grab this now though.
@@ -1233,6 +1311,35 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload
    * This one is actually fairly different from sync_io::Native_socket_stream::Impl::snd_sync_write_or_q_payload(),
    * as we are dealing with a message boundary-preserving low-level transport among other differences. */
 
+  assert((!m_pending_err_code) && "After m_mq is hosed, no point in trying to do anything; pre-condition violated.");
+
+  const auto protocol_ver_to_send_if_needed = m_protocol_negotiator.local_max_proto_ver_for_sending();
+  if (protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_UNKNOWN)
+  {
+    assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
+           && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
+
+    /* Haven't sent it yet.  (However now m_protocol_negotiator.local_max_proto_ver_for_sending() will in fact return
+     * S_VER_UNKNOWN, so we're only doing this the one time.  The following won't infinitely recur, etc.)
+     *
+     * As discussed in m_protocol_negotiator doc header and class doc header "Protocol negotiation" section:
+     * send a special CONTROL message; opposing side expects it as the first in-message.
+     * By the way m_protocol_negotiator logged about the fact we're about to send it, so we can be pretty quiet. */
+    sync_write_or_q_ctl_cmd_impl(-protocol_ver_to_send_if_needed);
+    if (m_pending_err_code)
+    {
+      // New error.  Recursive call already nullified m_mq and all that; if would've returned true; just pass it up.
+      return true;
+    }
+    /* else: Either it inline-sent it (very likely), or it got queued.
+     *       Either way: no error; let's get on with queuing-or-sending the actual payload orig_blob!
+     * P.S. There's only 1 protocol version as of this writing, so there's no ambiguity, and we can just get on with
+     * sending stuff right away.  This could change in the future.  See m_protocol_negotiator doc header for more. */
+
+    // Fall through.
+  }
+  // else { We've already sent protocol-negotiation msg before (i.e., this isn't the first payload going out. }
+
   if (m_pending_payloads_q.empty())
   {
     FLOW_LOG_TRACE("Blob_stream_mq_sender [" << *this << "]: Want to send low-level payload: "
@@ -1342,22 +1449,30 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload
 template<typename Persistent_mq_handle>
 bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd(Control_cmd cmd)
 {
+  return sync_write_or_q_ctl_cmd_impl(static_cast<std::underlying_type_t<Control_cmd>>(cmd));
+}
+
+template<typename Persistent_mq_handle>
+bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd_impl
+       (std::underlying_type_t<Control_cmd> raw_cmd)
+{
   using util::Blob_const;
 
   /* Important: For PING avoided_qing != null; for reasons explained in its doc header.  Namely:
    * Consider S_PING.
    * If both payloads (empty msg, the enum) would-block, then there are already data that would
-   * signal-non-idleness sitting in the kernel buffer, so the auto-ping can be safely dropped in that case.
+   * signal non-idleness sitting in the kernel buffer, so the auto-ping can be safely dropped in that case.
    * If 1 was flushed, while 2 would normally be queued, then dropping the latter would make the
    * protocol stream malformed from the opposing side's point of view; so we can't just drop it. */
   bool avoided_qing = false;
-  bool* const avoided_qing_or_null = (cmd == Control_cmd::S_PING) ? &avoided_qing : nullptr;
+  bool* const avoided_qing_or_null = ((raw_cmd >= 0) && (Control_cmd(raw_cmd) == Control_cmd::S_PING))
+                                       ? &avoided_qing : nullptr;
 
   // Payload 1 first.
   bool q_is_flushed = sync_write_or_q_payload(Blob_const(), &m_pending_err_code, avoided_qing_or_null);
 
   /* Returned true => out-queue flushed fully or dropped PING-payload-1 (avoided_qing)
-                      or new error found (depending on m_pending_err_code).
+   *                  or new error found (depending on m_pending_err_code).
    * Returned false => out-queue has stuff in it and will until transport writable. */
   if (!m_pending_err_code)
   {
@@ -1367,7 +1482,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd(C
     {
       // No error, not avoided_quing => flushed fully (so flush or queue payload 2); or queued (so queue payload 2).
       q_is_flushed
-        = sync_write_or_q_payload(Blob_const(&cmd, sizeof(cmd)), &m_pending_err_code, nullptr);
+        = sync_write_or_q_payload(Blob_const(&raw_cmd, sizeof(raw_cmd)), &m_pending_err_code, nullptr);
       assert(!(m_pending_err_code && (!q_is_flushed)));
     }
     /* else if (avoided_qing)
@@ -1388,7 +1503,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd(C
    *     => depends on whether queue was (and thus remains) empty at the time payload 1 was tried. */
 
   return q_is_flushed;
-} // Blob_stream_mq_sender_impl::sync_write_or_q_ctl_cmd()
+} // Blob_stream_mq_sender_impl::sync_write_or_q_ctl_cmd_impl()
 
 template<typename Persistent_mq_handle>
 void Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_write_q_head_payload()

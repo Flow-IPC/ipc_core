@@ -167,6 +167,12 @@ std::string Category::message(int val) const // Virtual.
   case Code::S_SYNC_IO_WOULD_BLOCK:
     return
       "A sync_io operation could not immediately complete; it will complete contingent on active async-wait event(s).";
+  case S_PROTOCOL_NEGOTIATION_OPPOSING_VER_INVALID:
+    return "In protocol negotiation, opposing side sent invalid version value (not positive, not a number, etc.); "
+           "the comm pathway must close.";
+  case S_PROTOCOL_NEGOTIATION_OPPOSING_VER_TOO_OLD:
+    return "In protocol negotiation, opposing side reported its newest protocol version is even older than the most "
+           "backwards-compatible (oldest, smallest) version we speak; the comm pathway must close.";
 
   case Code::S_END_SENTINEL:
     assert(false && "SENTINEL: Not an error.  "
@@ -220,6 +226,10 @@ util::String_view Category::code_symbol(Code code) // Static.
     return "BLOB_STREAM_MQ_RECEIVER_BAD_CTL_CMD";
   case Code::S_SYNC_IO_WOULD_BLOCK:
     return "SYNC_IO_WOULD_BLOCK";
+  case S_PROTOCOL_NEGOTIATION_OPPOSING_VER_INVALID:
+    return "PROTOCOL_NEGOTIATION_OPPOSING_VER_INVALID";
+  case S_PROTOCOL_NEGOTIATION_OPPOSING_VER_TOO_OLD:
+    return "PROTOCOL_NEGOTIATION_OPPOSING_VER_TOO_OLD";
 
   case Code::S_END_SENTINEL:
     return "END_SENTINEL";
