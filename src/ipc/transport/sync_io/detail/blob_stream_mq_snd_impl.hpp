@@ -302,12 +302,10 @@ private:
    * or if an async-send is in progress queues it to be sent later; dropping-sans-queuing
    * allowed under certain circumstances in `avoided_qing` mode.  For details on the latter see below.
    *
-   * `*err_code` is set to the error to return, suitably for #m_pending_err_code; and if no such
-   * outgoing-pipe-hosing is synchronously encountered it is set to falsy.  In particular, if `!*err_code` upon return,
+   * #m_pending_err_code (pre-condition: it is falsy) is set to the error to ultimately return; and if no such
+   * outgoing-pipe-hosing is synchronously encountered it is left untouched.  In particular, if falsy upon return,
    * you may call this again to send the next low-level payload.  Otherwise #m_mq cannot be subsequently used
-   * (it is hosed).  Yet if `*err_code` is truthy upon return, caller must synchronously assign
-   * #m_pending_err_code accordingly, so as to maintain the invariant that #m_mq is null if and only if
-   * that guy is truthy.
+   * (it is hosed).  Thus we maintain the invariant that #m_mq is null if and only if that guy is truthy.
    *
    * ### `avoided_qing` mode for auto-ping ###
    * If `avoided_qing_or_null` is null, then see above.  If it points to a `bool`, though, then:
@@ -936,17 +934,19 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
      * but there's a small chance either there's either stuff queued already (we've delegated waiting for would-block
      * to clear to user), or not but this can't be pushed (encountered would-block).  We don't care here per
      * se; I am just saying for context, to clarify what "send-or-queue" means. */
-    sync_write_or_q_payload(blob, err_code, nullptr);
+    sync_write_or_q_payload(blob, nullptr);
     /* That may have returned `true` indicating everything (up to and including our payload) was synchronously
      * given to kernel successfuly; or this will never occur, because outgoing-pipe-ending error was encountered.
      * Since this is send_blob(), we do not care: there is no on-done
      * callback to invoke, as m_finished is false, as *end_sending() has not been called yet. */
 
+    /* No new error: Emit to user that this op did not emit error (m_pending_err_code is still falsy).
+     * New error: Any subsequent attempt will emit this truthy value; do not forget to emit it now via *err_code. */
+    *err_code = m_pending_err_code;
+
     // Did it generate a new error?
     if (*err_code)
     {
-      assert(!m_pending_err_code); // *New* error.
-      m_pending_err_code = *err_code; // Ensure any subsequent attempt emits this too.
       FLOW_LOG_TRACE("Blob_stream_mq_sender [" << *this << "]: Wanted to send user message but detected error "
                      "synchronously.  "
                      "Error code details follow: [" << *err_code << "] [" << err_code->message() << "].  "
@@ -1299,8 +1299,8 @@ void Blob_stream_mq_sender_impl<Persistent_mq_handle>::on_ev_auto_ping_now_timer
 } // Blob_stream_mq_sender_impl::on_ev_auto_ping_now_timer_fired()
 
 template<typename Persistent_mq_handle>
-bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload
-       (const util::Blob_const& orig_blob, Error_code* err_code, bool* avoided_qing_or_null)
+bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(const util::Blob_const& orig_blob,
+                                                                               bool* avoided_qing_or_null)
 {
   using flow::util::Blob;
   using util::Blob_const;
