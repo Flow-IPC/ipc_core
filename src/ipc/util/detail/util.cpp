@@ -21,6 +21,7 @@
 #include <flow/error/error.hpp>
 #include <flow/common.hpp>
 #include <boost/interprocess/managed_shared_memory.hpp>
+#include <boost/array.hpp>
 
 namespace ipc::util
 {
