@@ -20,6 +20,7 @@
 // Include Native_socket_stream::Impl class body to complete that type and enable pImpl forwarding.
 #include "ipc/transport/detail/native_socket_stream_impl.hpp"
 #include "ipc/transport/sync_io/native_socket_stream.hpp"
+#include <boost/move/make_unique.hpp>
 
 namespace ipc::transport
 {
