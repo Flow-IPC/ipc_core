@@ -22,6 +22,7 @@
 #include <flow/error/error.hpp>
 #include <flow/common.hpp>
 #include <boost/interprocess/ipc/message_queue.hpp>
+#include <boost/move/make_unique.hpp>
 
 namespace ipc::transport
 {

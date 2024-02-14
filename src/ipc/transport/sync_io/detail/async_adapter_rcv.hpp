@@ -22,6 +22,7 @@
 #include "ipc/transport/error.hpp"
 #include <flow/log/log.hpp>
 #include <flow/async/single_thread_task_loop.hpp>
+#include <boost/move/make_unique.hpp>
 #include <queue>
 
 namespace ipc::transport::sync_io

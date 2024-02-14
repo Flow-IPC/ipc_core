@@ -20,6 +20,7 @@
 
 #include "ipc/transport/sync_io/detail/blob_stream_mq_snd_impl.hpp"
 #include "ipc/transport/blob_stream_mq.hpp"
+#include <boost/move/make_unique.hpp>
 #include <experimental/propagate_const>
 
 namespace ipc::transport::sync_io
