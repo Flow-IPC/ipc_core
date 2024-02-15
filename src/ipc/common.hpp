@@ -270,11 +270,18 @@ namespace ipc
 
 // Types.  They're outside of `namespace ::ipc::util` for brevity due to their frequent use.
 
-/// Short-hand for boost.interprocess namespace.
+/* (The @namespace and @brief thingies shouldn't be needed, but some Doxygen bug necessitated them.
+ * See flow::util::bind_ns for explanation... same thing here.) */
+
+/**
+ * @namespace ipc::bipc
+ * @brief Short-hand for boost.interprocess namespace.
+ */
 namespace bipc = boost::interprocess;
 
 /**
- * Short-hand for `filesystem` namespace.
+ * @namespace ipc::fs
+ * @brief Short-hand for `filesystem` namespace.
  *
  * ### Rationale for aliasing to `boost::filesystem` instead of `std::filesystem` ###
  * `boost::filesystem` is rock-solid and the model/original impl; which is not to say that always is enough
