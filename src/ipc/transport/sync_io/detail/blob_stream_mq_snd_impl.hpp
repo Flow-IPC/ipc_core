@@ -1464,7 +1464,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd_i
                                        ? &avoided_qing : nullptr;
 
   // Payload 1 first.
-  bool q_is_flushed = sync_write_or_q_payload(Blob_const(), &m_pending_err_code, avoided_qing_or_null);
+  bool q_is_flushed = sync_write_or_q_payload(Blob_const(), avoided_qing_or_null);
 
   /* Returned true => out-queue flushed fully or dropped PING-payload-1 (avoided_qing)
    *                  or new error found (depending on m_pending_err_code).
@@ -1477,7 +1477,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd_i
     {
       // No error, not avoided_quing => flushed fully (so flush or queue payload 2); or queued (so queue payload 2).
       q_is_flushed
-        = sync_write_or_q_payload(Blob_const(&raw_cmd, sizeof(raw_cmd)), &m_pending_err_code, nullptr);
+        = sync_write_or_q_payload(Blob_const(&raw_cmd, sizeof(raw_cmd)), nullptr);
       assert(!(m_pending_err_code && (!q_is_flushed)));
     }
     /* else if (avoided_qing)
