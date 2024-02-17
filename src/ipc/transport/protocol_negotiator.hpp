@@ -267,9 +267,9 @@ public:
    *        it from your in-message, you should pass S_VER_UNKNOWN.
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
-   *        error::Code::PROTOCOL_NEGOTIATION_OPPOSING_VER_TOO_OLD (incompatible protocol version -- we're more
+   *        error::Code::S_PROTOCOL_NEGOTIATION_OPPOSING_VER_TOO_OLD (incompatible protocol version -- we're more
    *        advanced and lack backwards-compatibility for their preferred version),
-   *        error::Code::PROTOCOL_NEGOTIATION_OPPOSING_VER_INVALID (`opposing_max_proto_ver` is invalid: not
+   *        error::Code::S_PROTOCOL_NEGOTIATION_OPPOSING_VER_INVALID (`opposing_max_proto_ver` is invalid: not
    *        positive).
    * @return `false` if pre-condition was `negotiated_proto_ver() != S_VER_UNKNOWN`, so we no-oped;
    *         `true` otherwise (unless exception thrown, only if `err_code == nullptr`.

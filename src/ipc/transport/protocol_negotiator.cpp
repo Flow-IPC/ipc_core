@@ -69,7 +69,7 @@ bool Protocol_negotiator::compute_negotiated_proto_ver(proto_ver_t opposing_max_
                      "invalid -- we cannot trust the other side at all; or there may be a bug in user code here.  "
                      "Presumably we will abruptly close this comm pathway shorly.");
     m_negotiated_proto_ver = S_VER_UNSUPPORTED;
-    *err_code = error::Code::PROTOCOL_NEGOTIATION_OPPOSING_VER_INVALID;
+    *err_code = error::Code::S_PROTOCOL_NEGOTIATION_OPPOSING_VER_INVALID;
   }
   // Use the simple algorithm explained/justified in class doc header.
 
@@ -97,7 +97,7 @@ bool Protocol_negotiator::compute_negotiated_proto_ver(proto_ver_t opposing_max_
                      "they speak at most [" << opposing_max_proto_ver << "]; therefore we lack backwards-compatibility "
                      "with that older version.  Presumably we will abruptly close this comm pathway shorly.");
     m_negotiated_proto_ver = S_VER_UNSUPPORTED;
-    *err_code = error::Code::PROTOCOL_NEGOTIATION_OPPOSING_TOO_OLD;
+    *err_code = error::Code::S_PROTOCOL_NEGOTIATION_OPPOSING_TOO_OLD;
   }
 
   return true;
