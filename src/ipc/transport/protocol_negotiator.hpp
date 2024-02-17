@@ -18,6 +18,10 @@
 /// @file
 #pragma once
 
+#include "ipc/common.hpp"
+#include "ipc/util/util_fwd.hpp"
+#include <flow/log/log.hpp>
+
 namespace ipc::transport
 {
 
