@@ -18,6 +18,7 @@
 /// @file
 #pragma once
 
+#include "ipc/transport/protocol_negotiator.hpp"
 #include "ipc/transport/detail/blob_stream_mq_impl.hpp"
 #include "ipc/util/sync_io/asio_waitable_native_hndl.hpp"
 #include "ipc/util/sync_io/detail/timer_ev_emitter.hpp"
