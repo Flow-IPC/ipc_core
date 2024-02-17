@@ -94,7 +94,14 @@ namespace ipc::transport::asio_local_stream_socket
 
 // Types.
 
-/// Short-hand for boost.asio Unix domain socket namespace.  In particular `connect_pair()` free function lives here.
+/* (The @namespace and @brief thingies shouldn't be needed, but some Doxygen bug necessitated them.
+ * See flow::util::bind_ns for explanation... same thing here.) */
+
+/**
+ * @namespace ipc::transport::asio_local_stream_socket::local_ns
+ * @brief Short-hand for boost.asio Unix domain socket namespace.  In particular `connect_pair()` free function lives
+ *        here.
+ */
 namespace local_ns = boost::asio::local;
 
 /// Short-hand for boost.asio Unix domain stream-socket protocol.

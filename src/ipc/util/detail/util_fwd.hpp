@@ -21,6 +21,7 @@
 #include "ipc/util/util_fwd.hpp"
 #include "ipc/util/shared_name_fwd.hpp"
 #include <flow/common.hpp>
+#include <boost/array.hpp>
 
 namespace ipc::util
 {

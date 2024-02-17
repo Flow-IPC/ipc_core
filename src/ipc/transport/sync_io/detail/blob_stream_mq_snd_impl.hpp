@@ -26,6 +26,7 @@
 #include <flow/async/single_thread_task_loop.hpp>
 #include <flow/util/blob.hpp>
 #include <flow/error/error.hpp>
+#include <boost/move/make_unique.hpp>
 #include <queue>
 
 namespace ipc::transport::sync_io

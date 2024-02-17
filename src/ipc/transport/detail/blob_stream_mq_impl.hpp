@@ -25,6 +25,7 @@
 #include <flow/error/error.hpp>
 #include <flow/log/config.hpp>
 #include <boost/interprocess/shared_memory_object.hpp>
+#include <boost/move/make_unique.hpp>
 
 namespace ipc::transport
 {

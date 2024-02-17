@@ -21,6 +21,7 @@
 #include "ipc/transport/error.hpp"
 #include <flow/error/error.hpp>
 #include <boost/chrono/floor.hpp>
+#include <boost/array.hpp>
 
 namespace ipc::transport
 {

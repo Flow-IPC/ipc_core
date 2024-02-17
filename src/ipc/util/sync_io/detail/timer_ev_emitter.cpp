@@ -20,6 +20,7 @@
 #include "ipc/util/sync_io/detail/timer_ev_emitter.hpp"
 #include "ipc/util/detail/util_fwd.hpp"
 #include <flow/error/error.hpp>
+#include <boost/move/make_unique.hpp>
 
 namespace ipc::util::sync_io
 {
