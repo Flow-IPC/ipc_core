@@ -18,6 +18,7 @@
 /// @file
 
 #include "ipc/transport/protocol_negotiator.hpp"
+#include "ipc/transport/error.hpp"
 #include <flow/error/error.hpp>
 
 namespace ipc::transport
