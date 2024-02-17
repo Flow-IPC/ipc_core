@@ -51,6 +51,7 @@ set(SRCS
     ipc/transport/native_socket_stream.cpp
     ipc/transport/native_socket_stream_acceptor.cpp
     ipc/transport/posix_mq_handle.cpp
+    ipc/transport/protocol_negotiator.cpp
     ipc/transport/sync_io/detail/native_socket_stream_impl.cpp
     ipc/transport/sync_io/detail/native_socket_stream_impl_rcv.cpp
     ipc/transport/sync_io/detail/native_socket_stream_impl_snd.cpp
@@ -89,6 +90,7 @@ set(HDRS
     ipc/transport/native_socket_stream_acceptor.hpp
     # ipc/transport/persistent_mq_handle.hpp <-- Not an actual source file (concept/docs only).
     ipc/transport/posix_mq_handle.hpp
+    ipc/transport/protocol_negotiator.hpp
     ipc/transport/sync_io/blob_stream_mq_rcv.hpp
     ipc/transport/sync_io/blob_stream_mq_snd.hpp
     # ipc/transport/sync_io/blob_transport.hpp <-- Not an actual source file (concept/docs only).
