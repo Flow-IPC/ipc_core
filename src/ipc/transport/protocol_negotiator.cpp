@@ -18,13 +18,14 @@
 /// @file
 
 #include "ipc/transport/protocol_negotiator.hpp"
+#include <flow/error/error.hpp>
 
 namespace ipc::transport
 {
 
 Protocol_negotiator::Protocol_negotiator(flow::log::Logger* logger_ptr, util::String_view nickname,
                                          proto_ver_t local_max_proto_ver, proto_ver_t local_min_proto_ver) :
-  flow::log::Logger(logger_ptr, Log_component::S_TRANSPORT),
+  flow::log::Log_context(logger_ptr, Log_component::S_TRANSPORT),
   m_nickname(nickname),
   m_local_max_proto_ver(local_max_proto_ver),
   m_local_min_proto_ver(local_min_proto_ver),
