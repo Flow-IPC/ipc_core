@@ -1347,15 +1347,11 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(c
                    "located @ [" << orig_blob.data() << "]; no write is pending so proceeding immediately.  "
                    "Will drop if would-block? = [" << bool(avoided_qing_or_null) << "].");
 
-    const bool sent = m_mq->try_send(orig_blob, err_code);
-    if (*err_code) // It will *not* emit would-block (will just return false but no error).
+    const bool sent = m_mq->try_send(orig_blob, &m_pending_err_code);
+    if (m_pending_err_code) // It will *not* emit would-block (will just return false but no error).
     {
       m_mq.reset();
-      /* Return resources.  (->try_send() logged WARNING sufficiently.)
-       * We should really be setting m_pending_err_code here, as m_mq==null <=> m_pending_err_code-is-truthy
-       * invariant shall not be violated.  As of this writing we just advertise this in our contract, and indeed
-       * all callers either have err_code==&m_pending_err_code, or they assign the *latter to the *former
-       * on return from the present method. */
+      // Return resources.  (->try_send() logged WARNING sufficiently.)
 
       assert(!sent);
       avoided_qing_or_null && (*avoided_qing_or_null = false);
@@ -1442,7 +1438,6 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(c
   }
   // else { Queue has even more stuff in it now.  Return false. }
 
-  err_code->clear();
   return false;
 } // Blob_stream_mq_sender_impl::sync_write_or_q_payload()
 
