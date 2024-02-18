@@ -581,40 +581,32 @@ bool Native_socket_stream::Impl::snd_sync_write_or_q_payload(Native_handle hndl_
      * except where something different applies (as of this writing that's just: the meaning of recursively-called
      * snd_sync_write_or_q_payload() return value). */
 
-    const auto meta_length_raw = low_lvl_payload_blob_length_t(sizeof(protocol_ver_to_send_if_needed));
-    const Blob_const meta_length_blob(&meta_length_raw, sizeof(meta_length_raw));
-
     // Little helper for below; handles each `(handle or none, blob)` payload.  Sets m_snd_pending_err_code.
     const auto send_low_lvl_payload = [&](unsigned int idx, const Blob_const& payload_blob)
     {
-      FLOW_LOG_TRACE("Socket stream [" << *this << "]: Wanted to protocol-negotiation info.  "
-                     "About to send payload index [" << idx << "] of 2 low-level payloads; "
-                     "includes low-level blob of size [" << payload_blob.size() << "] "
-                     "located @ [" << payload_blob.data() << "].");
-
-      snd_sync_write_or_q_payload({}, payload_blob, false);
-      /* The return value does not matter, even though *our* snd_sync_write_or_q_payload() return value is significant.
-       * The reason is arguably somewhat subtle.  Consider:
-       *   - If that made m_snd_pending_err_code truthy: We will return true regardless of anything.
-       *   - Else: We will need to send-or-queue the actual intended first non-protocol-negotiating payload still
-       *     anyway.  Whatever *that* results in will, by itself, determine whether to return true or false.
-       *     That is, the code below the negotiation stuff is perfectly capable of determining whether the out-queue
-       *     has been emptied or not. */
     }; // const auto send_low_lvl_payload =
 
-    send_low_lvl_payload(1, Blob_const(&meta_length_raw, sizeof(meta_length_raw)));
+    const auto fake_meta_length_raw = low_lvl_payload_blob_length_t(protocol_ver_to_send_if_needed);
+    const Blob_const payload_blob(&fake_meta_length_raw, sizeof(fake_meta_length_raw));
+
+    FLOW_LOG_TRACE("Socket stream [" << *this << "]: Want to send protocol-negotiation info.  "
+                   "About to send payload 1 of 1; "
+                   "contains low-level blob of size [" << payload_blob.size() << "] "
+                   "located @ [" << payload_blob.data() << "].");
+
+    snd_sync_write_or_q_payload({}, payload_blob, false);
+    /* The return value does not matter, even though *our* snd_sync_write_or_q_payload() return value is significant.
+     * The reason is arguably somewhat subtle.  Consider:
+     *   - If that made m_snd_pending_err_code truthy: We will return true regardless of anything.
+     *   - Else: We will need to send-or-queue the actual intended first non-protocol-negotiating payload still
+     *     anyway.  Whatever *that* results in will, by itself, determine whether to return true or false.
+     *     That is, the code below the negotiation stuff is perfectly capable of determining whether the out-queue
+     *     has been emptied or not. */
+
     if (m_snd_pending_err_code)
     {
       return true; // Pipe-direction-ending error encountered; outgoing-direction pipe is finished forevermore.
     }
-    // else
-    send_low_lvl_payload(2, Blob_const(&protocol_ver_to_send_if_needed, sizeof(protocol_ver_to_send_if_needed)));
-    if (m_snd_pending_err_code)
-    {
-      return true; // Ditto.
-    }
-    // else
-
     /* else: Either it inline-sent it (very likely), or it got queued.
      *       Either way: no error; let's get on with queuing-or-sending the actual payload!
      * P.S. There's only 1 protocol version as of this writing, so there's no ambiguity, and we can just get on with

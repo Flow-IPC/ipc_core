@@ -250,13 +250,13 @@ namespace ipc::transport::sync_io
  * about speaking more than one version.  On the send side: All we do is send the version just-ahead of the first
  * payload that would otherwise be sent for any reason (user message from `send_*()`, end-sending token from
  * `*end_sending()`, or ping from auto_ping(), as of this writing), as a special message that is identical to
- * a user message from `send_blob()` whose contents are sized exactly to the protocol version size, and whose contents
- * are the value `1`, meaning version 1.  Conversely on the receive side: we expect the first message received to be
- * a native-handle-free as-if-sent-by-user with contents encoding a version number; then we let Protocol_negotiator
+ * a normal payload 1 (see above) whose contents are (instead of the usual length) the protocol version,
+ * namely the value `1`, meaning version 1.  Conversely on the receive side: we expect the first message received to be
+ * a native-handle-free paylod 1 with contents encoding a version number; then we let Protocol_negotiator
  * do its thing in determining the protocol version spoken.
  *
  * After that, we just speak what we speak... which is the protocol's initial version -- as there is no other
- * version for us.  (The opposing-side peer is responsible for closing the MQs, if it is unable to speak version 1.)
+ * version for us.  (The opposing-side peer is responsible for closing the stream, if it is unable to speak version 1.)
  *
  * If we do add protocol version 2, etc., in the future, then things *might* become somewhat more complex (but even
  * then not necessarily so).  This is discussed in the `Protocol_negotiator m_protocol_negotiator` member doc header.

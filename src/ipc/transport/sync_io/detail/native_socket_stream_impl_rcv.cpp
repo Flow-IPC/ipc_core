@@ -356,7 +356,24 @@ void Native_socket_stream::Impl::rcv_on_handle_finalized(Native_handle hndl_or_n
   assert(!m_rcv_pending_err_code);
   assert(n_rcvd != 0);
 
-  if ((!hndl_or_null.null()) && (!m_rcv_user_request->m_target_hndl_ptr))
+  const bool proto_negotiating
+    = m_protocol_negotiator.negotiated_proto_ver() == Protocol_negotiator::S_VER_UNKNOWN;
+
+  if (proto_negotiating && (!hndl_or_null.null()))
+  {
+    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Expecting protocol-negotiation (first) in-message "
+                     "to contain *only* a meta-blob: but received Native_handle is non-null which is "
+                     "unexpected; emitting error via completion handler (or via sync-args).");
+#ifndef NDEBUG
+    const bool ok =
+#endif
+    m_protocol_negotiator.compute_negotiated_proto_ver(Protocol_negotiator::S_VER_UNKNOWN, &m_rcv_pending_err_code);
+    assert(ok && "Protocol_negotiator breaking contract?  Bug?");
+    assert(m_rcv_pending_err_code
+           && "Protocol_negotiator should have emitted error given intentionally bad version.");
+  }
+  else if ((!hndl_or_null.null()) && (!m_rcv_user_request->m_target_hndl_ptr))
+       // && (!proto_negotiating)
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: User async-receive request for "
                      "*only* a meta-blob: but received Native_handle is non-null which is "
@@ -366,7 +383,9 @@ void Native_socket_stream::Impl::rcv_on_handle_finalized(Native_handle hndl_or_n
   else // if (no prob with hndl_or_null or m_target_hndl_ptr)
   {
     // Finalize the user's Native_handle target variable if applicable.
-    if (m_rcv_user_request->m_target_hndl_ptr)
+    if (m_rcv_user_request->m_target_hndl_ptr
+        // If proto_negotiating, hndl_or_null is null; and anyway m_target_hndl_ptr is not yet in play.
+        && (!proto_negotiating))
     {
       *m_rcv_user_request->m_target_hndl_ptr = hndl_or_null;
     }
@@ -424,6 +443,39 @@ void Native_socket_stream::Impl::rcv_on_head_payload(Error_code* sync_err_code, 
 
   assert(m_rcv_user_request);
   assert(!m_rcv_pending_err_code);
+
+  bool proto_negotiating
+    = m_protocol_negotiator.negotiated_proto_ver() == Protocol_negotiator::S_VER_UNKNOWN;
+
+  if (proto_negotiating)
+  {
+    /* Protocol_negotiator handles everything (invalid value, incompatible range...); we just know
+     * the encoding is to shove the version number into what is normally the length field. */
+#ifndef NDEBUG
+    const bool ok =
+#endif
+    m_protocol_negotiator.compute_negotiated_proto_ver(static_cast<Protocol_negotiator::proto_ver_t>(m_rcv_target_meta_length),
+                                                       &m_rcv_pending_err_code);
+    assert(ok && "Protocol_negotiator breaking contract?  Bug?");
+    proto_negotiating = false; // Just in case (maintainability).
+
+    if (m_rcv_pending_err_code)
+    {
+      // Protocol negotiation failed.  Do what we'd do due to, say, graceful-close below.      
+      *sync_err_code = m_rcv_pending_err_code;
+      *sync_sz = 0;
+      return;
+    }
+    // else: Succeeded; do what we'd do due to, say, receiving auto-ping below.
+
+    FLOW_LOG_TRACE("Socket stream [" << *this << "]: Received all of negotiation payload; passed.  "
+                   "Ignoring other than registering non-idle activity.  Proceeding with the next message read.");
+
+    rcv_not_idle(); // Register activity <= end of complete message, no error.
+    rcv_read_msg(sync_err_code, sync_sz);
+    return;
+  }
+  // else if (!proto_negotiating): Normal payload 1 handling.
 
   if (m_rcv_target_meta_length == S_META_BLOB_LENGTH_PING_SENTINEL)
   {
