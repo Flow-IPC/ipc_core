@@ -480,7 +480,7 @@ Blob_stream_mq_receiver_impl<Persistent_mq_handle>::Blob_stream_mq_receiver_impl
   flow::log::Log_context(logger_ptr, Log_component::S_TRANSPORT),
   m_nickname(nickname_str),
   m_protocol_negotiator(get_logger(), nickname(),
-                        1, 1), // Initial protocol!  @todo Magic-number `const`(s), particularly if/when v2 exists.
+                        1, 2), // XXX Initial protocol!  @todo Magic-number `const`(s), particularly if/when v2 exists.
   m_absolute_name(mq.absolute_name()),
   // m_mq null for now but is set up below.
   m_mq_max_msg_sz(mq.max_msg_size()), // Just grab this now though.
