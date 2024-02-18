@@ -1314,7 +1314,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(c
   assert((!m_pending_err_code) && "After m_mq is hosed, no point in trying to do anything; pre-condition violated.");
 
   const auto protocol_ver_to_send_if_needed = m_protocol_negotiator.local_max_proto_ver_for_sending();
-  if (false) // XXX protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_UNKNOWN)
+  if (protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_UNKNOWN)
   {
     assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
            && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
