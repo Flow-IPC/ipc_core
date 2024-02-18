@@ -176,6 +176,14 @@ namespace ipc::transport
  *
  * To establish this trust is well beyond the mission of `*this` class; and explaining how to do so is well beyond
  * this doc header.
+ *
+ * ### Thread safety ###
+ * For the same `*this`, the standard default assumptions apply (mutating access disallowed concurrently with
+ * any other access) with the following potentially important exception: local_max_proto_ver_for_sending() can
+ * be executed concurrently with any other API except itself.  In other words, the outgoing-direction
+ * (local_max_proto_ver_for_sending()) and incoming-direction work
+ * (compute_negotiated_proto_ver(), negotiated_proto_ver()) can be safely performed independently/concurrently
+ * w/r/t each other.
  */
 class Protocol_negotiator :
   public flow::log::Log_context
