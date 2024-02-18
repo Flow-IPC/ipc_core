@@ -581,11 +581,6 @@ bool Native_socket_stream::Impl::snd_sync_write_or_q_payload(Native_handle hndl_
      * except where something different applies (as of this writing that's just: the meaning of recursively-called
      * snd_sync_write_or_q_payload() return value). */
 
-    // Little helper for below; handles each `(handle or none, blob)` payload.  Sets m_snd_pending_err_code.
-    const auto send_low_lvl_payload = [&](unsigned int idx, const Blob_const& payload_blob)
-    {
-    }; // const auto send_low_lvl_payload =
-
     const auto fake_meta_length_raw = low_lvl_payload_blob_length_t(protocol_ver_to_send_if_needed);
     const Blob_const payload_blob(&fake_meta_length_raw, sizeof(fake_meta_length_raw));
 
