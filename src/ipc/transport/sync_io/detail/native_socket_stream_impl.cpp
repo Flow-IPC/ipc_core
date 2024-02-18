@@ -39,6 +39,8 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
   flow::log::Log_context(logger_ptr, Log_component::S_TRANSPORT),
   m_nickname(nickname_str),
   m_state(State::S_NULL),
+  m_protocol_negotiator(get_logger(), nickname(),
+                        1, 1), // Initial protocol!  @todo Magic-number `const`(s), particularly if/when v2 exists.
   m_ev_wait_hndl_peer_socket(m_ev_hndl_task_engine_unused), // This needs to be .assign()ed still.
   m_timer_worker(get_logger(), flow::util::ostream_op_string(*this)),
 

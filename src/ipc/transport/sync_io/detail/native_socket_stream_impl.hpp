@@ -253,6 +253,27 @@ namespace ipc::transport::sync_io
  * @todo Internal Native_socket_stream and Native_socket_stream_acceptor queue
  * algorithms and data structures should be checked for RAM use; perhaps
  * something should be periodically shrunk if applicable.  Look for `vector`s, `deque`s (including inside `queue`s).
+ *
+ * ### Protocol negotiation ###
+ * This adds a bit of stuff onto the above protocol.  It is very simple; please see Protocol_negotiator doc header;
+ * we use that convention.  Moreover, since this is the init version (version 1) of the protocol, we need not worry
+ * about speaking more than one version.  On the send side: All we do is send the version just-ahead of the first
+ * payload that would otherwise be sent for any reason (user message from `send_*()`, end-sending token from
+ * `*end_sending()`, or ping from auto_ping(), as of this writing), as a special message that is identical to
+ * a user message from `send_blob()` whose contents are sized exactly to the protocol version size, and whose contents
+ * are the value `1`, meaning version 1.  Conversely on the receive side: we expect the first message received to be
+ * a native-handle-free as-if-sent-by-user with contents encoding a version number; then we let Protocol_negotiator
+ * do its thing in determining the protocol version spoken.
+ *
+ * After that, we just speak what we speak... which is the protocol's initial version -- as there is no other
+ * version for us.  (The opposing-side peer is responsible for closing the MQs, if it is unable to speak version 1.)
+ *
+ * If we do add protocol version 2, etc., in the future, then things *might* become somewhat more complex (but even
+ * then not necessarily so).  This is discussed in the `Protocol_negotiator m_protocol_negotiator` member doc header.
+ *
+ * @note We suggest that if version 2, etc., is/are added, then the above notes be kept more or less intact; then
+ *       add updates to show changes.  This will provide a good overview of how the protocol evolved; and our
+ *       backwards-compatibility story (even if we decide to have no backwards-compatibility).
  */
 class Native_socket_stream::Impl :
   public flow::log::Log_context,
@@ -1042,6 +1063,32 @@ private:
    * accessed by both directions' algorithms.)
    */
   State m_state;
+
+  /**
+   * Handles the protocol negotiation at the start of the pipe.
+   *
+   * @see Protocol_negotiator doc header for key background on the topic.  In particular check out the discussion
+   *      "Key tip: Coding for version-1 versus one version versus multiple versions."
+   *
+   * ### Maintenace/future ###
+   * See doc header for sync_io::Blob_stream_mq_sender_impl.  Similar logic applies here.  The only thing
+   * that does not apply, and is arguably simpler in our case, is that we *are* a bidirectional comm pathway;
+   * there is no such thing as being a sender end without a corresponding receiver end.  So the stuff about needing
+   * an API for telling us what protocol version to speak of multiple possibilities (in the hypothetical future
+   * in which we'd support such a thing).
+   *
+   * To restate: These are decisions and work for another day, though; it is not relevant until version 2 of this
+   * protocol at the earliest.  That might not even happen.
+   *
+   * ### Thread safety ###
+   * Firstly this it only touched in PEER state (and one cannot exit PEER state).  Once in PEER state:
+   * First take a look at "Thread safety" in sync_io::Native_socket_stream class public doc header.
+   * Long story short, it says that the only relevant concurrency we must allow is a receive-op being
+   * invoked concurrently with a send-op while in PEER state.  Happily, Protocol_negotiator doc header
+   * specifically allows the outgoing-direction APIs to be invoked concurrently with incoming-direction APIs.
+   * Therefore no locking is needed.
+   */
+  Protocol_negotiator m_protocol_negotiator;
 
   /**
    * The `Task_engine` for #m_peer_socket.  It is necessary to construct the `Peer_socket`, but we never
