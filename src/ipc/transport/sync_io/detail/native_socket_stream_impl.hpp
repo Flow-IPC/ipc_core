@@ -18,6 +18,7 @@
 /// @file
 #pragma once
 
+#include "ipc/transport/protocol_negotiator.hpp"
 #include "ipc/transport/detail/transport_fwd.hpp"
 #include "ipc/transport/sync_io/native_socket_stream.hpp"
 #include "ipc/transport/asio_local_stream_socket_fwd.hpp"
