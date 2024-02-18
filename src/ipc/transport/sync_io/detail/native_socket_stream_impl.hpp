@@ -240,17 +240,6 @@ namespace ipc::transport::sync_io
  * one that pipe is hosed, the appropriate one is set to truthy.  Now any user sending or receiving (whichever
  * is applicable to the pipe) immediately yields that error.
  *
- * @todo Native_socket_stream should have at least basic protocol negotiation at connection start, for forward
- * compatibility.  The protocol is simple and transmits arbitrary messages (leaving structured meaning to higher
- * levels).  So we don't intend to change it... but famous last words!  Protocol negotiation might work something
- * like this: Firstly each side sends some forever-constant magic value (receiver errors-out if wrong).
- * Next each sender says, compactly, "I can speak versions in strict range [M, N]" (so it just sends the M, N values).
- * After the exchange, each side has their range [M1, N1] and the peer range [M2, N2]; computes the intersection/overlap
- * [M', N']; and then speaks the highest protocol in the range: N'.  Both sides will compute the same N'; and if
- * there is no overlap, then both sides will error-out (though 1 is enough).  In the first version, it's [1, 1],
- * so in that case this whole header is basically a matter of sending that magic string including [1, 1] and ensuring
- * almost that same magic string is received back (except the N can be >= 1, not just 1).
- *
  * @todo Internal Native_socket_stream and Native_socket_stream_acceptor queue
  * algorithms and data structures should be checked for RAM use; perhaps
  * something should be periodically shrunk if applicable.  Look for `vector`s, `deque`s (including inside `queue`s).

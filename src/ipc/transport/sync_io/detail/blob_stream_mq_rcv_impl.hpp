@@ -978,11 +978,11 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
          * need to keep our own m_ state about that.  Thus: */
         bool proto_negotiating
           = m_protocol_negotiator.negotiated_proto_ver() == Protocol_negotiator::S_VER_UNKNOWN;
-         /* If false, and we haven't errored-out of the loop, then negotiation is behind us.
-          * If true, then in a couple places below we'll need to zealously handle the negotiation.
-          * Generally speaking, the tactics we follow (when `true`) are consistent with Protocol_negotiator doc
-          * header convention which mandates that we interpret as little as we can, until proto_negotiating
-          * becomes true, or we error out due to negotiation fail. */
+        /* If false, and we haven't errored-out of the loop, then negotiation is behind us.
+         * If true, then in a couple places below we'll need to zealously handle the negotiation.
+         * Generally speaking, the tactics we follow (when `true`) are consistent with Protocol_negotiator doc
+         * header convention which mandates that we interpret as little as we can, until proto_negotiating
+         * becomes true, or we error out due to negotiation fail. */
 
         if (m_control_state)
         {
