@@ -694,8 +694,8 @@ private:
    * of the payload is queued and async-sent via snd_async_write_q_head_payload(), with dropping-sans-queuing
    * allowed under certain circumstances in `avoid_qing` mode.  For details on the latter see below.
    *
-   * `*err_code` is set to the error to return, suitably for #m_snd_pending_err_code; and if no such
-   * outgoing-pipe-hosing is synchronously encountered it is set to falsy.  In particular, if `!*err_code` upon return,
+   * #m_snd_pending_err_code, which as a pre-condition must be falsy, is set to truthy if and only if an
+   * outgoing-pipe-hosing condition is synchronously encountered.  In particular, if it remains falsy upon return,
    * you may call this again to send the next low-level payload.  Otherwise #m_peer_socket cannot be subsequently used
    * in either direction (connection is hosed).
    *
@@ -717,8 +717,6 @@ private:
    * @param orig_blob
    *        Blob to send, with `hndl_or_null` associated with byte 1 of this.  It must have size 1 or greater,
    *        or behavior is undefined.
-   * @param err_code
-   *        Success or failure is registered in `*err_code` per above.  If null behavior is undefined.
    * @param avoid_qing
    *        See above.  `true` <=> will return success (act as-if all of `orig_blob` was sent)
    *        if no bytes of `orig_blob` could be immediately sent.
@@ -727,20 +725,17 @@ private:
    *         possibly `orig_blob` was not sent (at all); was dropped.
    */
   bool snd_sync_write_or_q_payload(Native_handle hndl_or_null,
-                                   const util::Blob_const& orig_blob, Error_code* err_code,
-                                   bool avoid_qing);
+                                   const util::Blob_const& orig_blob, bool avoid_qing);
 
   /**
    * Initiates async-write over #m_peer_socket of the low-level payload at the head of out-queue
    * #m_snd_pending_payloads_q, with completion handler snd_on_ev_peer_socket_writable_or_error().
    * The first step of this is an async-wait via `sync_io` pattern.
    *
-   * `*err_code` has the same semantics as snd_sync_write_or_q_payload().
-   *
-   * @param err_code
-   *        Same as snd_sync_write_or_q_payload().
+   * Behavior w/r/t #m_snd_pending_err_code is the same semantics as described for snd_sync_write_or_q_payload()
+   * (must be falsy as pre-condition, is set to truthy <=> outgoing-pipe-hosing condition is encountered).
    */
-  void snd_async_write_q_head_payload(Error_code* err_code);
+  void snd_async_write_q_head_payload();
 
   /**
    * Completion handler, from outside event loop via `sync_io` pattern, for the async-wait initiated by
@@ -768,7 +763,12 @@ private:
    * @param blob
    *        Same as snd_sync_write_or_q_payload().
    * @param err_code
-   *        Same as snd_sync_write_or_q_payload().  Also see above: would-block is not an error.
+   *        Same as snd_sync_write_or_q_payload() is w/r/t #m_snd_pending_err_code, essentially, with the small
+   *        difference that it does not require `*err_code` to be falsy as pre-condition, and will make it truthy
+   *        or falsy depending on success or failure.  (Minor possible to-do: just have it act on
+   *        `m_snd_pending_err_code` like snd_sync_write_or_q_payload() et al?  It is the way it is now arguably for
+   *        maintenability/reusability, and/or for minor historical reasons.)  Also see above: would-block is
+   *        not an error.
    * @return 0 meaning neither `hndl_or_null` (if any) nor any `blob` bytes were sent;
    *         [1, `blob.size()`] if `hndl_or_null` (if any) and that number of `blob` bytes were sent.
    *         `*err_code` shall be truthy only if (but not necessarily if) `< blob.size()` is returned.

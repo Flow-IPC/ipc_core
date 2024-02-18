@@ -126,7 +126,7 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
 
     // Payload 2, if any, consists of stuff we already have ready, namely simply meta_blob itself.  Nothing to do now.
 
-    // Little helper for below; handles each `(handle or none, blob)` payload.  Sets *err_code.
+    // Little helper for below; handles each `(handle or none, blob)` payload.  Sets m_snd_pending_err_code.
     const auto send_low_lvl_payload
       = [&](unsigned int idx, Native_handle payload_hndl, const Blob_const& payload_blob)
     {
@@ -140,7 +140,7 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
 
       /* As the name indicates this may synchronously finish it or queue up any parts instead to be done once
        * a would-block clears, when user informs of this past the present function's return. */
-      snd_sync_write_or_q_payload(payload_hndl, payload_blob, err_code, false);
+      snd_sync_write_or_q_payload(payload_hndl, payload_blob, false);
       /* That may have returned `true` indicating everything (up to and including our payload) was synchronously
        * given to kernel successfuly; or this will never occur, because outgoing-pipe-ending error was encountered.
        * Since this is send_native_handle(), we do not care: there is no on-done
@@ -151,17 +151,17 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
      * but there's a small chance either there's either stuff queued already (we've delegated waiting for would-block
      * to clear to user), or not but this can't fully complete (encountered would-block).  We don't care here per
      * se; I am just saying for context, to clarify what "send-or-queue" means. */
-    send_low_lvl_payload(1, hndl_or_null, meta_length_blob); // It sets *err_code.
-    if ((meta_length_raw != 0) && (!*err_code))
+    send_low_lvl_payload(1, hndl_or_null, meta_length_blob); // It sets m_snd_pending_err_code.
+    if ((meta_length_raw != 0) && (!m_snd_pending_err_code))
     {
-      send_low_lvl_payload(2, Native_handle(), meta_blob); // It sets *err_code.
+      send_low_lvl_payload(2, Native_handle(), meta_blob); // It sets m_snd_pending_err_code.
     }
+
+    *err_code = m_snd_pending_err_code; // Emit the new error.
 
     // Did either thing generate a new error?
     if (*err_code)
     {
-      assert(!m_snd_pending_err_code); // *New* error.
-      m_snd_pending_err_code = *err_code; // Ensure any subsequent attempt emits this too.
       FLOW_LOG_TRACE("Socket stream [" << *this << "]: Wanted to send user message but detected error "
                      "synchronously.  "
                      "Error code details follow: [" << *err_code << "] [" << err_code->message() << "].  "
@@ -333,7 +333,7 @@ bool Native_socket_stream::Impl::async_end_sending_impl(Error_code* sync_err_cod
      * Returns false => out-queue has stuff in it and will continue to, until transport is writable.
      *   => cannot report completion yet. */
 
-    qd = !snd_sync_write_or_q_payload(Native_handle(), blob_with_0, &m_snd_pending_err_code, false);
+    qd = !snd_sync_write_or_q_payload(Native_handle(), blob_with_0, false);
     if (qd && sync_err_code_ptr_or_null)
     {
       /* It has not been flushed (we will return would-block).
@@ -449,7 +449,7 @@ bool Native_socket_stream::Impl::auto_ping(util::Fine_duration period)
   /* Important: avoid_qing=true for reasons explained in its doc header.  Namely:
    * If blob_with_ff would-block entirely, then there are already data that would signal-non-idleness sitting
    * in the kernel buffer, so the auto-ping can be safely dropped in that case. */
-  snd_sync_write_or_q_payload(Native_handle(), blob_with_ff, &m_snd_pending_err_code, true);
+  snd_sync_write_or_q_payload(Native_handle(), blob_with_ff, true);
   if (m_snd_pending_err_code)
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: Wanted to send initial auto-ping but detected error "
@@ -532,7 +532,7 @@ void Native_socket_stream::Impl::snd_on_ev_auto_ping_now_timer_fired()
 
   const Blob_const blob_with_ff{&S_META_BLOB_LENGTH_PING_SENTINEL, sizeof(S_META_BLOB_LENGTH_PING_SENTINEL)};
 
-  snd_sync_write_or_q_payload(Native_handle(), blob_with_ff, &m_snd_pending_err_code, true);
+  snd_sync_write_or_q_payload(Native_handle(), blob_with_ff, true);
   if (m_snd_pending_err_code)
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: Wanted to send non-initial auto-ping but detected error "
@@ -554,13 +554,14 @@ void Native_socket_stream::Impl::snd_on_ev_auto_ping_now_timer_fired()
 } // Native_socket_stream::Impl::snd_on_ev_auto_ping_now_timer_fired()
 
 bool Native_socket_stream::Impl::snd_sync_write_or_q_payload(Native_handle hndl_or_null,
-                                                             const util::Blob_const& orig_blob, Error_code* err_code,
-                                                             bool avoid_qing)
+                                                             const util::Blob_const& orig_blob, bool avoid_qing)
 {
   using flow::util::Blob;
   using util::Blob_const;
 
   // We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
+
+  assert((!m_snd_pending_err_code) && "Pipe must not be pre-hosed by contract.");
 
   size_t n_sent_or_zero;
   if (m_snd_pending_payloads_q.empty())
@@ -570,8 +571,8 @@ bool Native_socket_stream::Impl::snd_sync_write_or_q_payload(Native_handle hndl_
                    "located @ [" << orig_blob.data() << "]; no write is pending so proceeding immediately.  "
                    "Will drop if all of it would-block? = [" << avoid_qing << "].");
 
-    n_sent_or_zero = snd_nb_write_low_lvl_payload(hndl_or_null, orig_blob, err_code);
-    if (*err_code) // It will *not* emit would-block (will just return 0 but no error).
+    n_sent_or_zero = snd_nb_write_low_lvl_payload(hndl_or_null, orig_blob, &m_snd_pending_err_code);
+    if (m_snd_pending_err_code) // It will *not* emit would-block (will just return 0 but no error).
     {
       assert(n_sent_or_zero == 0);
       return true; // Pipe-direction-ending error encountered; outgoing-direction pipe is finished forevermore.
@@ -673,16 +674,16 @@ bool Native_socket_stream::Impl::snd_sync_write_or_q_payload(Native_handle hndl_
      * If we were operating directly as a boost.asio async loop then the first part would just be
      * m_peer_socket->async_wait(); but we cannot do that; user does it for us, controlling what gets called when
      * synchronously.) */
-    snd_async_write_q_head_payload(err_code);
+    snd_async_write_q_head_payload();
 
-    /* That immediately failed => *err_code is truthy
+    /* That immediately failed => m_snd_pending_err_code is truthy
      *   => Pipe-direction-ending error encountered; outgoing-direction pipe is finished forevermore. => return true;
-     * That did not fail ("async"-wait for writable begins) => *err_code is falsy
+     * That did not fail ("async"-wait for writable begins) => m_snd_pending_err_code is falsy
      *   => Outgoing-direction pipe has pending queued stuff. => return false; */
-    return bool(*err_code);
+    return bool(m_snd_pending_err_code);
   }
   // else
-  err_code->clear();
+  assert(!m_snd_pending_err_code);
   return false; // Outgoing-direction pipe has (even more) pending queued stuff; nothing to do about it for now.
 } // Native_socket_stream::Impl::snd_sync_write_or_q_payload()
 
@@ -792,7 +793,7 @@ size_t Native_socket_stream::Impl::snd_nb_write_low_lvl_payload(Native_handle hn
   return n_sent_or_zero;
 } // Native_socket_stream::Impl::snd_nb_write_low_lvl_payload()
 
-void Native_socket_stream::Impl::snd_async_write_q_head_payload(Error_code* err_code)
+void Native_socket_stream::Impl::snd_async_write_q_head_payload()
 {
   using asio_local_stream_socket::async_write_with_native_handle;
   using util::Task;
@@ -802,6 +803,7 @@ void Native_socket_stream::Impl::snd_async_write_q_head_payload(Error_code* err_
   // We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
 
   assert((!m_snd_pending_payloads_q.empty()) && "Contract is stuff is queued to be async-sent.  Bug?");
+  assert((!m_snd_pending_err_code) && "Pipe must not be pre-hosed by contract.");
 
   /* Conceptually we'd like to do m_peer_socket->async_wait(writable, F), where F() would perform
    * snd_nb_write_low_lvl_payload() (nb-send over m_peer_socket).  However this is the sync_io pattern, so
@@ -836,7 +838,7 @@ void Native_socket_stream::Impl::snd_async_write_q_head_payload(Error_code* err_
     // else:
   } // Lock_guard peer_socket_lock(m_peer_socket_mutex)
 
-  *err_code = error::Code::S_LOW_LVL_TRANSPORT_HOSED_CANNOT_SEND;
+  m_snd_pending_err_code = error::Code::S_LOW_LVL_TRANSPORT_HOSED_CANNOT_SEND;
 
   /* Style note: I (ygoldfel) was tempted to make snd_on_ev_peer_socket_writable_or_error() a closure right in here,
    * which saves boiler-plate lines, but subjectively the reading flow seemed too gnarly here.  Typically I would have
@@ -907,7 +909,7 @@ void Native_socket_stream::Impl::snd_on_ev_peer_socket_writable_or_error()
     FLOW_LOG_TRACE("Out-queue has not been emptied.  Must keep async-send chain going.");
 
     // Continue the chain (this guy "asynchronously" brought us here in the first place).
-    snd_async_write_q_head_payload(&m_snd_pending_err_code);
+    snd_async_write_q_head_payload();
     /* To be clear: queue can now only become empty in "async" handler, not synchronously here.
      *
      * Reasoning sanity check: How could m_snd_pending_err_code become truthy here yet falsy (success)
