@@ -90,12 +90,19 @@ namespace ipc::transport::sync_io
  * ### Protocol negotiation ###
  * This adds a bit of stuff onto the above protocol.  It is very simple; please see Protocol_negotiator doc header;
  * we use that convention.  Moreover, since this is the init version (version 1) of the protocol, we need not worry
- * about speaking more than one version.  So all we do is send the version just-ahead of the first payload that would
+ * about speaking more than one version.  So all we do is send the version ahead of the first payload that would
  * otherwise be sent for any reason (user message from send_blob(), end-sending token from `*end_sending()`, or
  * ping from auto_ping(), as of this writing), as a special CONTROL message that encodes the value `-1`, meaning
  * version 1 (as the true `Control_cmd enum` values would be 0, 1, etc.).  Conversely Blob_stream_mq_receiver_impl
  * expects the first message it does receive to be that CONTROL message encoding a version number; but that's not
  * our concern here, as we are only the outgoing-direction class.
+ *
+ * @note It is very tempting to do that initial send in lazy fashion: meaning, about to send the first "real" payload?
+ *       OK, then pre-pend the negotiation message.  However this can create trouble in the future, if
+ *       a future protocol wants to be backwards-compatible (support more than 2 protocol versions): we'll need
+ *       to have received the opposing guy's preferred version, and thus determined which version to speak,
+ *       before sending further (non-negotiation) messages.  Bottom line... the initial send shall occur as soon
+ *       as we are operational (start_send_blob_ops()).
  *
  * After that, we just speak what we speak... which is the protocol's initial version -- as there is no other
  * version for us.  (The opposing-side peer is responsible for closing the MQs, if it is unable to speak version 1.)
@@ -396,7 +403,7 @@ private:
    * This version of the software talks only the initial version of the protocol: version 1 by Protocol_negotiator
    * convention.  (Deities willing, we won't need to create more, but possibly we will.)  As expained in the
    * above-mentioned doc header section, we have very little to worry about as the sender: Just send
-   * our version, 1, as the first message (in fact, a special CONTROL message; and we send it just ahead of the
+   * our version, 1, as the first message (in fact, a special CONTROL message; and we send it first-thing, ahead of the
    * first payload that would be otherwise sent, whether it's a user payload, or the end-sending token, or
    * an auto-ping).  Only version 1 exists, so we simply speak it.
    *
@@ -826,8 +833,28 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::
   m_ev_wait_func = std::move(ev_wait_func);
 
   FLOW_LOG_INFO("Blob_stream_mq_sender [" << *this << "]: Start-ops requested.  Done.");
+
+  assert((!m_pending_err_code) && "If ctor failed, do not use *this, except to overwrite or destroy it.");
+
+  const auto protocol_ver_to_send = m_protocol_negotiator.local_max_proto_ver_for_sending();
+  assert((protocol_ver_to_send != Protocol_negotiator::S_VER_UNKNOWN)
+         && "How'd we get to this line twice?  Or Protocol_negotiator bug?");
+  assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
+         && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
+
+  /* As discussed in m_protocol_negotiator doc header and class doc header "Protocol negotiation" section:
+   * send a special CONTROL message; opposing side expects it as the first in-message.
+   * By the way m_protocol_negotiator logged about the fact we're about to send it, so we can be pretty quiet. */
+  sync_write_or_q_ctl_cmd_impl(-protocol_ver_to_send);
+  /* m_pending_err_code may have become truthy; just means next send_blob()/whatever will emit that error.
+   *
+   * Otherwise: Either it inline-sent it (very likely), or it got queued.
+   *            Either way: no error; let's get on with queuing-or-sending real stuff like send_blob() payloads.
+   * P.S. There's only 1 protocol version as of this writing, so there's no ambiguity, and we can just get on with
+   * sending stuff right away.  This could change in the future.  See m_protocol_negotiator doc header for more. */
+
   return true;
-}
+} // Blob_stream_mq_sender_impl::start_send_blob_ops()
 
 template<typename Persistent_mq_handle>
 bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::op_started(util::String_view context) const
@@ -916,7 +943,8 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
   }
   else if (m_pending_err_code) // && (!m_finished) && (blob.size() OK)
   {
-    /* This --^ holds either the last inline-completed send_blob() call's emitted Error_code, or (~rarely) one
+    /* This --^ holds either the last inline-completed send_blob() (or protocol-negotiation-send in
+     * start_send_blob_ops()) call's emitted Error_code, or (~rarely) one
      * that was found while attempting to dequeue previously-would-blocked queued-up (due to incomplete s_blob())
      * payload(s).  This may seem odd, but that's part of the design of the send interface which we wanted to be
      * as close to looking like a series of synchronous always-inline-completed send_blob() calls as humanly possible,
@@ -1312,33 +1340,6 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(c
    * as we are dealing with a message boundary-preserving low-level transport among other differences. */
 
   assert((!m_pending_err_code) && "After m_mq is hosed, no point in trying to do anything; pre-condition violated.");
-
-  const auto protocol_ver_to_send_if_needed = m_protocol_negotiator.local_max_proto_ver_for_sending();
-  if (protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_UNKNOWN)
-  {
-    assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
-           && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
-
-    /* Haven't sent it yet.  (However now m_protocol_negotiator.local_max_proto_ver_for_sending() will in fact return
-     * S_VER_UNKNOWN, so we're only doing this the one time.  The following won't infinitely recur, etc.)
-     *
-     * As discussed in m_protocol_negotiator doc header and class doc header "Protocol negotiation" section:
-     * send a special CONTROL message; opposing side expects it as the first in-message.
-     * By the way m_protocol_negotiator logged about the fact we're about to send it, so we can be pretty quiet. */
-    sync_write_or_q_ctl_cmd_impl(-protocol_ver_to_send_if_needed);
-    if (m_pending_err_code)
-    {
-      // New error.  Recursive call already nullified m_mq and all that; if would've returned true; just pass it up.
-      return true;
-    }
-    /* else: Either it inline-sent it (very likely), or it got queued.
-     *       Either way: no error; let's get on with queuing-or-sending the actual payload orig_blob!
-     * P.S. There's only 1 protocol version as of this writing, so there's no ambiguity, and we can just get on with
-     * sending stuff right away.  This could change in the future.  See m_protocol_negotiator doc header for more. */
-
-    // Fall through.
-  }
-  // else { We've already sent protocol-negotiation msg before (i.e., this isn't the first payload going out. }
 
   if (m_pending_payloads_q.empty())
   {
