@@ -27,6 +27,8 @@ namespace ipc::transport::sync_io
 
 bool Native_socket_stream::Impl::start_send_native_handle_ops(util::sync_io::Event_wait_func&& ev_wait_func)
 {
+  using util::Blob_const;
+
   if (!start_ops<Op::S_SND>(std::move(ev_wait_func)))
   {
     return false;
