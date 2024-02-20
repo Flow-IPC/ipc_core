@@ -454,8 +454,9 @@ void Native_socket_stream::Impl::rcv_on_head_payload(Error_code* sync_err_code, 
 #ifndef NDEBUG
     const bool ok =
 #endif
-    m_protocol_negotiator.compute_negotiated_proto_ver(static_cast<Protocol_negotiator::proto_ver_t>(m_rcv_target_meta_length),
-                                                       &m_rcv_pending_err_code);
+    m_protocol_negotiator.compute_negotiated_proto_ver
+      (static_cast<Protocol_negotiator::proto_ver_t>(m_rcv_target_meta_length),
+       &m_rcv_pending_err_code);
     assert(ok && "Protocol_negotiator breaking contract?  Bug?");
     proto_negotiating = false; // Just in case (maintainability).
 
