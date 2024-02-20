@@ -247,13 +247,20 @@ namespace ipc::transport::sync_io
  * ### Protocol negotiation ###
  * This adds a bit of stuff onto the above protocol.  It is very simple; please see Protocol_negotiator doc header;
  * we use that convention.  Moreover, since this is the init version (version 1) of the protocol, we need not worry
- * about speaking more than one version.  On the send side: All we do is send the version just-ahead of the first
+ * about speaking more than one version.  On the send side: All we do is send the version ahead of the first
  * payload that would otherwise be sent for any reason (user message from `send_*()`, end-sending token from
  * `*end_sending()`, or ping from auto_ping(), as of this writing), as a special message that is identical to
  * a normal payload 1 (see above) whose contents are (instead of the usual length) the protocol version,
  * namely the value `1`, meaning version 1.  Conversely on the receive side: we expect the first message received to be
  * a native-handle-free paylod 1 with contents encoding a version number; then we let Protocol_negotiator
  * do its thing in determining the protocol version spoken.
+ *
+ * @note It is very tempting to do that initial send in lazy fashion: meaning, about to send the first "real" payload?
+ *       OK, then pre-pend the negotiation message.  However this can create trouble in the future, if
+ *       a future protocol wants to be backwards-compatible (support more than 2 protocol versions): we'll need
+ *       to have received the opposing guy's preferred version, and thus determined which version to speak,
+ *       before sending further (non-negotiation) messages.  Bottom line... the initial send shall occur as soon
+ *       as we are operational (start_send_blob_ops()).
  *
  * After that, we just speak what we speak... which is the protocol's initial version -- as there is no other
  * version for us.  (The opposing-side peer is responsible for closing the stream, if it is unable to speak version 1.)
