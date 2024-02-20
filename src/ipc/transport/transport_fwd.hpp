@@ -45,16 +45,6 @@
  * for the various required `Shared_name`s taken by the various ipc::transport constructors.  Formally speaking
  * there can certainly be other fashions of organizing ipc::transport resources.  Therefore the API design of
  * ipc::transport is not rigid.
- *
- * @internal
- * @todo An ipc::transport internal protocol versioning system is likely necessary at some point.  This can *probably*
- * be put off until after the first production-used version of Flow-IPC is shipped.  It's probably best to at least
- * make a plan (and verify that it can indeed be put off in a forward-compatible way) before then however.
- * One should contemplate any protocol that might change which includes the low-level (core-layer-internal)
- * protocols used by each of ipc::transport::Blob_stream_mq_sender + ipc::transport::Blob_stream_mq_receiver,
- * ipc::transport::Native_socket_stream; and struc::Channel.  On a related note one should contemplate the
- * versioning and/or forward-compatibility of the session master ipc::transport::struc::Channel protocol
- * used internally by ipc::session.
  */
 namespace ipc::transport
 {
