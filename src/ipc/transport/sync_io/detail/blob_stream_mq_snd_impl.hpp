@@ -102,7 +102,7 @@ namespace ipc::transport::sync_io
  *       a future protocol wants to be backwards-compatible (support more than 2 protocol versions): we'll need
  *       to have received the opposing guy's preferred version, and thus determined which version to speak,
  *       before sending further (non-negotiation) messages.  Bottom line... the initial send shall occur as soon
- *       as we are operational (start_send_blob_ops()).
+ *       as we are operational (start_send_native_handle_ops()).
  *
  * After that, we just speak what we speak... which is the protocol's initial version -- as there is no other
  * version for us.  (The opposing-side peer is responsible for closing the MQs, if it is unable to speak version 1.)
