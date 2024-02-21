@@ -182,7 +182,7 @@ Native_socket_stream Native_socket_stream::Impl::release()
   assert((protocol_negotiator.negotiated_proto_ver() == Protocol_negotiator::S_VER_UNKNOWN)
          && "By contract must be in idle state (no receive-ops to have effected receipt of first message).");
   // As for the outgoing-direction state, we explicitly reset it (incoming-direction state part = no-op).
-  protocol_negotiator.reset();
+  m_protocol_negotiator.reset();
 
   // As-if-default-cted means this will be empty.
   m_conn_ev_wait_func.clear();
