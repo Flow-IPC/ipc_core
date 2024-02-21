@@ -296,6 +296,13 @@ public:
    */
   proto_ver_t local_max_proto_ver_for_sending();
 
+  /**
+   * Resets the negotiation state, meaning back to the state as-if just after ctor invoked.  Hence:
+   * negotiated_proto_ver() yields #S_VER_UNKNOWN, while
+   * local_max_proto_ver_for_sending() would yield not-`S_VER_UNKNOWN`.
+   */
+  void reset();
+
 private:
   // Data.
 

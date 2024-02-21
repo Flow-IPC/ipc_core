@@ -40,6 +40,12 @@ Protocol_negotiator::Protocol_negotiator(flow::log::Logger* logger_ptr, util::St
                 "[" << m_local_min_proto_ver << ", " << m_local_max_proto_ver << "].");
 }
 
+void Protocol_negotiator::reset()
+{
+  m_local_max_proto_ver_sent = false;
+  m_negotiated_proto_ver = S_VER_UNKNOWN;
+}
+
 Protocol_negotiator::proto_ver_t Protocol_negotiator::negotiated_proto_ver() const
 {
   return m_negotiated_proto_ver;
