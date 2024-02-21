@@ -338,7 +338,22 @@ public:
    * `send_*()`, `*end_sending()`, auto_ping(), or idle_timer_run() in the past.  (`start_*_ops()` and
    * replace_event_wait_handles() are fine.)  Please be careful.
    *
+   * Corner case (unlikely but possible): If `start_send_*_ops()` has been called, *and* its attempt to immediately
+   * send internal protocol-negotiation data failed, then the returned object shall be in NULL state, not PEER state.
+   * As of this writing one can check for this via `returned_guy.send_blob_max_size() == 0`.
+   *
    * @return See above.
+   *
+   * @todo sync_io::Native_socket_stream::release(), in the corner case where `*this` had internally failed to
+   * send protocol-negotiation data, should ideally return a PEER-state object (albeit hosed in the same way
+   * `*this` was hosed); as opposed to its current behavior of returning a NULL-state object.  That would be be
+   * more transparent behavior without an extra possibility for the user to handle.  (Truthfully: the existing semantics
+   * are that way, simply because internally this is quite a bit easier to code as of this writing.)
+   *
+   * @todo Comparing Blob_sender::send_blob_max_size() (and similar checks in that family of concepts) to test
+   * whether the object is in PEER state is easy enough, but perhaps we can have a utility that would more
+   * expressively describe this check: `in_peer_state()` free function or something?  It can still use the same
+   * technique internally.
    *
    * @internal
    * As it notes above, really I (ygoldfel) wrote this to be able to code `Async_io_obj::release()` in terms of

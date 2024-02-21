@@ -146,14 +146,14 @@ Native_socket_stream Native_socket_stream::Impl::release()
    * The timers haven't been used (by contract, no auto_ping() or idle_timer_run()); the `Task_engine`s
    * are dissociated/re-associated with their asio objects' FDs in civilized fashion via .release() + reassignment.
    *
-   * Update: There is now another semantic our contract allows, because now start_*_ops() tries to send
+   * Update: There is now another semantic our contract allows, because now start_send_*_ops() tries to send
    * protocol-negotiation message, and that can fail: m_snd_pending_err_code becomes truthy, m_peer_socket becomes
    * null, and *this becomes essentially useless.  Our contract is, in that case, to still make *this
    * as-if-default-cted, but return a Native_socket_stream::Impl in NULL state instead of PEER state.
    *
    * Moreover, in the much likelier case where everything is fine with m_peer_socket, while in fact
-   * start_*_ops() *was* called, there's one tweak we must apply to the returned object: To prevent its
-   * future .start_*_ops() from re-sending the protocol-negotiation, m_protocol_negotiator must be marked
+   * start_send_*_ops() *was* called, there's one tweak we must apply to the returned object: To prevent its
+   * future .start_send_*_ops() from re-sending the protocol-negotiation, m_protocol_negotiator must be marked
    * as having already done so. */
 
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: Releasing idle-state object to new socket-stream core object.");
@@ -177,7 +177,7 @@ Native_socket_stream Native_socket_stream::Impl::release()
    * state must be pre-any-negotiation).
    *
    * However, we do need to save it and apply to the returned guy; as explained above that is to prevent him from
-   * re-sending protocol-negotiation message in future .start_*_ops(). */
+   * re-sending protocol-negotiation message in future .start_send_*_ops(). */
   const auto protocol_negotiator = m_protocol_negotiator;
   assert((protocol_negotiator.negotiated_proto_ver() == Protocol_negotiator::S_VER_UNKNOWN)
          && "By contract must be in idle state (no receive-ops to have effected receipt of first message).");

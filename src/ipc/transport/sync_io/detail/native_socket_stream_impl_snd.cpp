@@ -68,6 +68,13 @@ bool Native_socket_stream::Impl::start_send_native_handle_ops(util::sync_io::Eve
      * P.S. There's only 1 protocol version as of this writing, so there's no ambiguity, and we can just get on with
      * sending stuff right away.  This could change in the future.  See m_protocol_negotiator doc header for more. */
   }
+  else
+  {
+    FLOW_LOG_TRACE("Socket stream [" << *this << "]: Wanted to send protocol-negotiation info; "
+                   "but we've marked it as already-sent, even though we are in start_*_ops() in PEER state.  "
+                   "Probably we come from a .release()d Native_socket_stream which has already done it; cool.");
+
+  }
   // else { Corner case... we come from a .release()d guy.  See Impl::release().  Already sent it. }
 
   return true;
