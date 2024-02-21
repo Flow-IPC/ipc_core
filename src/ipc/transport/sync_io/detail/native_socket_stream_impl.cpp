@@ -150,6 +150,9 @@ Native_socket_stream Native_socket_stream::Impl::release()
    * protocol-negotiation message, and that can fail: m_snd_pending_err_code becomes truthy, m_peer_socket becomes
    * null, and *this becomes essentially useless.  Our contract is, in that case, to still make *this
    * as-if-default-cted, but return a Native_socket_stream::Impl in NULL state instead of PEER state.
+   * (There's a @todo in our doc header to return one in PEER state with the hosed state -- null m_peer_socket, etc. --
+   * transferred from *this.  As it says there, that'd be nice, but implementing it is a real pain in here....
+   * The whole thing makes me wonder if this .release() mechanism is mis-designed somewhere.  By me, ygoldfel.)
    *
    * Moreover, in the much likelier case where everything is fine with m_peer_socket, while in fact
    * start_send_*_ops() *was* called, there's one tweak we must apply to the returned object: To prevent its
@@ -161,7 +164,9 @@ Native_socket_stream Native_socket_stream::Impl::release()
   const bool hosed = !m_peer_socket;
   assert((hosed == bool(m_snd_pending_err_code))
          && "By contract we must not be in hosed state, unless due to internal initial-negotiation-send failing.");
-  m_snd_pending_err_code.clear(); // If indeed hosed for that reason, clear it, since *this must be as-if-default-cted.
+  // If indeed hosed for that reason, clear it, since *this must be as-if-default-cted.  Otherwise it no-ops.
+  m_snd_pending_err_code.clear();
+  // We will take care of m_peer_socket below, don't worry.
 
   // These following ones mean we won't have to reset them to be as-if-default-cted.
   assert(m_snd_pending_payloads_q.empty()
@@ -170,7 +175,8 @@ Native_socket_stream Native_socket_stream::Impl::release()
   assert(m_snd_pending_on_last_send_done_func_or_empty.empty() && "By contract must be in idle state.");
   assert(m_snd_auto_ping_period == util::Fine_duration::zero());
   assert((!m_rcv_user_request) && "By contract must be in idle state.");
-  assert((!m_rcv_pending_err_code) && "By contract must not be in a hosed state.");
+  assert((!m_rcv_pending_err_code)
+         && "By contract must not be in a hosed state, except possibly from internal initial-negotiation-send.");
   assert(m_rcv_idle_timeout == util::Fine_duration::zero());
 
   /* As-if-default-cted means this will be in its reset state (still knows the protocol capabilities, but negotiation
@@ -221,7 +227,7 @@ Native_socket_stream Native_socket_stream::Impl::release()
   const auto logger_ptr = get_logger();
   *(static_cast<Log_context*>(this)) = Log_context(nullptr, Log_component::S_TRANSPORT);
   // This no longer matters for logging; might as well empty it here.  Obv save it for the new guy.
-  auto nickname_str = std::move(m_nickname);
+  const auto nickname_str = std::move(m_nickname);
   m_nickname.clear(); // Just in case move() didn't do it.
 
   /* The easy+important part is to finally make a fresh core like ex-*this (except if `hosed`, then create
@@ -230,10 +236,10 @@ Native_socket_stream Native_socket_stream::Impl::release()
   {
     return Native_socket_stream(logger_ptr, nickname_str);
   }
-  // else: normal case:
+  // else: normal case: Create returned-guy, with certain things we'd saved from *this.
 
   Native_socket_stream released(logger_ptr, nickname_str, Native_handle(peer_socket_raw_hndl));
-  released.impl()->m_protocol_negotiator = protocol_negotiator; // As explained above....
+  released.impl()->m_protocol_negotiator = protocol_negotiator;
 
   return released;
 } // Native_socket_stream::Impl::release()
