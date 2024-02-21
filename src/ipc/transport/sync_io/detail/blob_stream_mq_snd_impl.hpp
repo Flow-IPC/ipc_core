@@ -55,7 +55,7 @@ namespace ipc::transport::sync_io
  * Therefore we will only explain here the differences between that socket-stream out-pipe algorithms and `*this` impl.
  * Before going into it more consider these points:
  *   - Socket-stream has to worry about both directions *and* (some) interaction between the two (even though it
- *     is full-duplex).  We do not.  There are mutually concurrency issues to speak of in particular.
+ *     is full-duplex).  We do not.  There are no mutual concurrency issues to speak of in particular.
  *   - Socket-stream has to worry about going from NULL state to PEER state via CONNECTING (optionally) --
  *     `async_connect()`.  We do not: the `_impl` is always in PEER state (unless ctor failed, but that's not
  *     interesting).
