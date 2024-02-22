@@ -31,7 +31,7 @@ namespace ipc::transport
  * a range of protocol versions and reporting the highest such version to the other side.  By *comm pathway*
  * we mean a bidirectional communication channel of some sort with two mutually-opposing endpoints (it need
  * not be full-duplex).
- * 
+ *
  * It is trivially copyable and movable, so that containing object can be copyable and movable too.
  *
  * The algorithm followed is quite straightforward and is exposed completely in the contract of this simple API:
@@ -40,7 +40,7 @@ namespace ipc::transport
  * the same consistent rules.  So while it does some minimal work, its main value is in presenting a common
  * algorithm that (1) achieves protocol negotiation and (2) doesn't shoot ourselves in the foot in the face
  * of future protocol changes.
- * 
+ *
  * ### The algorithm ###
  * A Protocol_negotiator `*this` assumes it is used by a single open comm pathway's local endpoint, and that a
  * logically-equivalent Protocol_negotiator (or equivalent sofwatre) is used in symmetrical fashion by the opposide
@@ -98,7 +98,7 @@ namespace ipc::transport
  *     compute_negotiated_proto_ver() has been called yet or not.
  *   - local_max_proto_ver_for_sending() shall return H once; after that UNSUPPORTED.  This is to encourage/help
  *     the sending-out of our H exactly once, no more.
- * 
+ *
  * Couple notes:
  *   - If H = Hp, then everyone will agree on everything and just speak H.  This is perhaps most typical.
  *     Usually then L = Lp also, but it's conceivable they're not equal (e.g. one side has a backwards-compatibility
@@ -112,7 +112,7 @@ namespace ipc::transport
  *       protocol does not attempt to ever be backwards-compatible; so H = L and Hp = Lp always.)
  *       - In this case one side will try to proceed; but it won't get far, as the other (more advanced) side
  *         will close the comm pathway instead of either sending or receiving anything beyond its H or Hp.
- * 
+ *
  * We could have avoided the latter asymmetric situation by sending over both L and H (and they both Lp and
  * Hp); then both sides would do exactly the same computation.  However it seems an unnecessary complication
  * and payload.
@@ -135,7 +135,7 @@ namespace ipc::transport
  * to know it at that point, then there's no choice but to enter a would-block state of sorts, during which time
  * any out-messages would need to be internally queued or otherwise deferred, until you do know V (have received
  * the first in-message and called compute_negotiated_proto_ver()).  Protocol_negotiator offers no help as such.
- * 
+ *
  * However there are several common situations where this concern is entirely mitigated away.  If it applies to you,
  * then you will have no problem.
  *   - If `local_min_proto_ver == local_max_proto_ver` (to ctor, a/k/a L = H in the above algorithm sketch),
@@ -168,7 +168,7 @@ namespace ipc::transport
  *       so that if there is a version 2 later, the conventions in force will be unambiguous.  Only then it *might*
  *       be necessary to worry about the subtle situation above, where we want to send something out whose expression
  *       depends on V, but we haven't received the protocol-negotiating in-message yet and hence don't know V yet.
- * 
+ *
  * ### Safety, trust assumption ###
  * We emphasize that this is not authentication.  There is the implicit trust that the opposing side will be using
  * a very specific *protocol for determining the rest of the protocol* and trust us to do the same.  Furthermore
@@ -219,7 +219,7 @@ public:
    * Constructs a comm pathway's negotiator object in initial state wherein: (1) negotiated_proto_ver()
    * returns #S_VER_UNKNOWN (not yet negotiated with opposing Protocol_negotiator); and (2) we've not yet
    * sent `local_max_proto_ver` to opposing side via first being queried using local_max_proto_ver_for_sending().
-   * 
+   *
    * @param logger_ptr
    *        Logger to use for logging subsequently.
    * @param nickname
@@ -240,7 +240,7 @@ public:
   /**
    * Returns `S_VER_UNKNOWN` before compute_negotiated_proto_ver(); then either the positive version of the protocol
    * we shall speak subsequently, or `S_VER_UNSUPPORTED` if the two sides are incompatible.
-   * 
+   *
    * @return See above.
    */
   proto_ver_t negotiated_proto_ver() const;
@@ -253,11 +253,11 @@ public:
    *
    * If it is not a no-op, and the result is that the two sides lack a protocol version they can both speak,
    * a suggested truthy `Error_code` is emitted using standard Flow error-emission convention.
-   * 
+   *
    * Tip: It's a reasonable tactic to potentially call this for every in-message, if you only do so after ensuring
    * `negotiated_proto_ver() == S_VER_UNKNOWN`.  That will effectively ensure the negotiation occurs ASAP and at most
    * once.
-   * 
+   *
    * More formally:
    *   - If `negotiated_proto_ver() != S_VER_UNKNOWN`: does nothing except possibly logging; returns `false`.
    *     Informal tip: If you don't know whether that's the case, check for it via negotiated_proto_ver() and
@@ -287,7 +287,7 @@ public:
   /**
    * To be called at most once, this returns `local_max_proto_ver` from ctor the first time and
    * #S_VER_UNKNOWN subsequently.
-   * 
+   *
    * Tip: It's a reasonable tactic to call this when about to send any out-message; if it returns
    * #S_VER_UNKNOWN, then you've already sent it and don't need to do so now; otherwise encode this value
    * before/with the out-message and send it.
