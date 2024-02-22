@@ -462,7 +462,7 @@ void Native_socket_stream::Impl::rcv_on_head_payload(Error_code* sync_err_code, 
 
     if (m_rcv_pending_err_code)
     {
-      // Protocol negotiation failed.  Do what we'd do due to, say, graceful-close below.      
+      // Protocol negotiation failed.  Do what we'd do due to, say, graceful-close below.
       *sync_err_code = m_rcv_pending_err_code;
       *sync_sz = 0;
       return;
