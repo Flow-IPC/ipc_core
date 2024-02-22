@@ -115,8 +115,20 @@ protected:
    * If Blob_stream_mq_sender_impl sends an empty message, in NORMAL state Blob_stream_mq_receiver enters CONTROL
    * state and expects one of these values in the next message, to react as documented per `enum` value
    * (upon re-entering NORMAL state).
+   *
+   * ### Rationale: Why is the underlying type signed? ###
+   * There is a special type of CONTROL command used only at the beginning of the conversation: protocol negotiation;
+   * each side sends to the other the highest protocol version it can speak.  In that case instead of using one of
+   * the `enum` encodings it sends the encoding of the inverse of the version number which is always positive
+   * (so -1 means version 1, -2 means 2, etc.).  Using a signed type makes working with that eventuality a little
+   * easier and more expressive.  (No, we don't really expect the `enum` variants to anywhere close to all these
+   * bits anyway.)
+   *
+   * ### Rationale: Why 64 bits? ###
+   * No huge reason.  It felt prudent to leave a bit of reserved space, maybe for forward compatibility.
+   * CONTROL messages are rare, so it should not affect perf.
    */
-  enum class Control_cmd : uint64_t
+  enum class Control_cmd : int64_t
   {
     /// Indicates sender user invoked Blob_sender::end_sending() (graceful close).  Emit/queue graceful-close to user.
     S_END_SENDING,

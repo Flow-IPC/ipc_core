@@ -121,6 +121,18 @@ enum class Code
    */
   S_RECEIVER_IDLE_TIMEOUT,
 
+  /**
+   * In protocol negotiation, opposing side sent invalid version value (not positive, not a number, etc.);
+   * the comm pathway must close.
+   */
+  S_PROTOCOL_NEGOTIATION_OPPOSING_VER_INVALID,
+
+  /**
+   * In protocol negotiation, opposing side reported its newest protocol version is even older than the most
+   * backwards-compatible (oldest, smallest) version we speak; the comm pathway must close.
+   */
+  S_PROTOCOL_NEGOTIATION_OPPOSING_VER_TOO_OLD,
+
   /// User called an API with 1 or more arguments against the API spec.
   S_INVALID_ARGUMENT,
 

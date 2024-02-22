@@ -18,6 +18,7 @@
 /// @file
 #pragma once
 
+#include "ipc/transport/protocol_negotiator.hpp"
 #include "ipc/transport/detail/blob_stream_mq_impl.hpp"
 #include "ipc/util/sync_io/detail/timer_ev_emitter.hpp"
 #include "ipc/util/sync_io/sync_io_fwd.hpp"
@@ -40,11 +41,28 @@ namespace ipc::transport::sync_io
  *      back here.
  *
  * ### Impl design ###
- * See sync_io::Blob_stream_mq_receiver_impl.  The same notes apply.  That isn't to say our algorithm is the same
+ * See sync_io::Blob_stream_mq_sender_impl.  The same notes apply.  That isn't to say our algorithm is the same
  * at all: we are receiving; they are sending.  However, obviously, they speak the same protocol.  And beyond that
  * it is again about (1) understanding the `sync_io` pattern (util::sync_io doc header) and (2) jumping into the code.
  *
  * Again, for that last part, we recommend starting with the data member doc headers.
+ *
+ * ### Protocol negotiation ###
+ * Do see the same-named section in sync_io::Blob_stream_mq_sender_impl doc header.  Naturally again we're mirroring
+ * the same protocol; but we're receiving; they're sending.  Due to the latter difference, though, a couple additional
+ * notes:
+ *   - We are the guy receiving the preceding-all-messages message containing the opposing side's preferred (highest)
+ *     protocol version.  As of this writing we only speak v1, but they might speak a range -- including or
+ *     excluding it.  However our Protocol_negotiator takes care of all that; and we only need to add logic to
+ *     emit fatal error, if Protocol_negotiator reports that we're incompatible with opposing side.
+ *     - Having gotten past that without error, we simply then speak the only version we know how (v1).
+ *   - Since only protocol v1 exists as of this writing, there's no need yet for an API to signal a partner
+ *     MQ-sender object of the negotiated protocol version, once we have it.  As noted in
+ *     sync_io::Blob_stream_mq_sender_impl doc header, that may change in the future.
+ *
+ * @note We suggest that if version 2, etc., is/are added, then the above notes be kept more or less intact; then
+ *       add updates to show changes.  This will provide a good overview of how the protocol evolved; and our
+ *       backwards-compatibility story (even if we decide to have no backwards-compatibility).
  *
  * @tparam Persistent_mq_handle
  *         See Persistent_mq_handle concept doc header.
@@ -229,6 +247,15 @@ private:
 
   /// See nickname().
   const std::string m_nickname;
+
+  /**
+   * Handles the protocol negotiation at the start of the pipe and subsequently stores the result of that negotiation.
+   *
+   * @see Protocol_negotiator doc header for key background on the topic.
+   * @see Blob_stream_mq_sender_impl::m_protocol_negotiator doc header which contains notes relevant to possible future
+   *      development of the present class regarding speaking multiple protocol versions.
+   */
+  Protocol_negotiator m_protocol_negotiator;
 
   /// See absolute_name().
   const Shared_name m_absolute_name;
@@ -452,6 +479,8 @@ Blob_stream_mq_receiver_impl<Persistent_mq_handle>::Blob_stream_mq_receiver_impl
 
   flow::log::Log_context(logger_ptr, Log_component::S_TRANSPORT),
   m_nickname(nickname_str),
+  m_protocol_negotiator(get_logger(), nickname(),
+                        1, 1), // Initial protocol!  @todo Magic-number `const`(s), particularly if/when v2 exists.
   m_absolute_name(mq.absolute_name()),
   // m_mq null for now but is set up below.
   m_mq_max_msg_sz(mq.max_msg_size()), // Just grab this now though.
@@ -875,6 +904,7 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
   using util::Task;
   using util::Blob_mutable;
   using flow::util::Lock_guard;
+  using raw_ctl_cmd_enum_t = std::underlying_type_t<Control_cmd>;
 
   assert(!m_pending_err_code);
   assert(m_user_request);
@@ -936,6 +966,24 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
       if (rcvd_else_would_block_or_error)
       {
         // Not error, not would block: got low-level message.  Interpret it.
+
+        /* Let's discuss protocol negotiation, as it applies to us.  Simply, the first thing we must receive
+         * (though there's no requirement as to how soon it happens -- it just needs to precede anything else)
+         * is a CONTROL message, whose payload (the 2nd MQ-message) contains a negative number (unlike regular
+         * CONTROL messages, wherein it's a non-negative number encoding Control_cmd enum: 0, 1, ...), the
+         * negation of which is the opposing side's preferred (highest supported) protocol version to pass-to
+         * m_protocol_negotiator.compute_negotiated_proto_ver() -- which completes the negotiation.
+         *
+         * Since m_protocol_negotiator offers ability to track "first message" or "not first message," we don't
+         * need to keep our own m_ state about that.  Thus: */
+        bool proto_negotiating
+          = m_protocol_negotiator.negotiated_proto_ver() == Protocol_negotiator::S_VER_UNKNOWN;
+        /* If false, and we haven't errored-out of the loop, then negotiation is behind us.
+         * If true, then in a couple places below we'll need to zealously handle the negotiation.
+         * Generally speaking, the tactics we follow (when `true`) are consistent with Protocol_negotiator doc
+         * header convention which mandates that we interpret as little as we can, until proto_negotiating
+         * becomes true, or we error out due to negotiation fail. */
+
         if (m_control_state)
         {
           // Do not forget!
@@ -944,14 +992,31 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
           if (target_blob.size() == sizeof(Control_cmd))
           {
             const auto& cmd = *(reinterpret_cast<const Control_cmd*>(target_blob.data()));
-            if (uint64_t(cmd) >= uint64_t(Control_cmd::S_END_SENTINEL))
+            const auto raw_cmd = raw_ctl_cmd_enum_t(cmd);
+
+            if (proto_negotiating)
+            {
+              /* Protocol_negotiator handles everything (invalid value, incompatible range...); we just know
+               * the encoding is to be the negation of the version. */
+#ifndef NDEBUG
+              const bool ok =
+#endif
+              m_protocol_negotiator.compute_negotiated_proto_ver(-raw_cmd, &m_pending_err_code);
+              assert(ok && "Protocol_negotiator breaking contract?  Bug?");
+              proto_negotiating = false; // Just in case (maintainability).
+
+              /* Cool, so now either all is cool, and we should keep reading; or m_pending_err_code contains how
+               * negotiation failed, and loop will exit.  The general code before the } in `if (m_control) {}` will
+               * handle it either way. */
+            } // if (proto_negotiating)
+            else if (raw_cmd >= raw_ctl_cmd_enum_t(Control_cmd::S_END_SENTINEL)) // && !proto_negotiating
             {
               FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: In CONTROL state expecting encoding "
-                               "enum value < int[" << uint64_t(Control_cmd::S_END_SENTINEL) << "] but got "
-                               "[" << uint64_t(cmd) << "]; emitting protocol error (bug on sender side?).");
+                               "enum value < int[" << raw_ctl_cmd_enum_t(Control_cmd::S_END_SENTINEL) << "] but got "
+                               "[" << raw_cmd << "]; emitting protocol error (bug on sender side?).");
               m_pending_err_code = error::Code::S_BLOB_STREAM_MQ_RECEIVER_BAD_CTL_CMD;
             }
-            else // if (cmd is valid)
+            else // if ((!proto_negotiating) && (cmd is valid))
             {
               switch (cmd)
               {
@@ -969,7 +1034,7 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
               case Control_cmd::S_END_SENTINEL:
                 assert(false && "Should've been handled above already.");
               } // switch (cmd)
-            } // else if (cmd is valid)
+            } // else if ((!proto_negotiating) && (cmd is valid))
           } // if (target_blob.size() == sizeof(Control_cmd))
           else // if (target_blob.size() != sizeof(Control_cmd))
           {
@@ -991,14 +1056,42 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
             FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: In non-CONTROL state got escape message.  "
                            "Entering CONTROL state; reading again if possible.");
             m_control_state = true;
-          }
-          else
-          {
-            FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: In non-CONTROL state got regular "
-                           "user message.  Will emit to user (possibly via sync-args, namely if this is synchronously "
-                           "within async-receive API).  Also registering non-idle activity.");
-            not_idle();
 
+            /* if (proto_negotiating) { Good: In non-CONTROL state -- at start -- first message should do just this. }
+             * else { Neither good nor bad; just apparently it's a CONTROL message coming next.  Err, good. } */
+          }
+          else // if (target_blob.size() != 0)
+          {
+            if (proto_negotiating)
+            {
+              /* In non-CONTROL state -- at start -- before protocol has been negotiated, the first message *must*
+               * be a CONTROL message.  Formally speaking we'll never be able to parse the negotiated version, because
+               * it is not coming first according to the protocol.  So, per it API, we can just give
+               * Protocol_negotiator an invalid version, so it'll emit the proper error. */
+              FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: In non-CONTROL state got regular "
+                               "user message.  However this is the start of the comm-pathway, and by protocol "
+                               "the first thing must be a CONTROL message containing the protocol version; so "
+                               "we shall now emit error accordingly.");
+#ifndef NDEBUG
+              const bool ok =
+#endif
+              m_protocol_negotiator.compute_negotiated_proto_ver(Protocol_negotiator::S_VER_UNKNOWN,
+                                                                 &m_pending_err_code);
+              assert(ok && "Protocol_negotiator breaking contract?  Bug?");
+              assert(m_pending_err_code
+                     && "Protocol_negotiator should have emitted error given intentionally bad version.");
+              proto_negotiating = false; // Just in case (maintainability).
+            }
+            else // if (!proto_negotiating)
+            {
+              // Regular user message in regular operation, post any negotiation.
+              FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: In non-CONTROL state got regular "
+                             "user message.  Will emit to user (possibly via sync-args, namely if this is "
+                             "synchronously within async-receive API).  Also registering non-idle activity.");
+              not_idle();
+            }
+
+            // Emit message (much more likely); or emit error.  Either way:
             emit = true;
           }
         } // else if (!m_control_state)
@@ -1118,8 +1211,8 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
         *sync_sz = 0;
         return; // Async read chain started/continuing.  GTFO.
       } // else if (!rcvd_else_would_block_or_error) (and !m_pending_err_code, so in fact would-block)
-    } // if (!m_pending_err_code) (but it may have become truthy inside)
-    else // if (m_pending_err_code)
+    } // if (!m_pending_err_code) [from m_mq->try_receive()] (but it may have become truthy inside)
+    else // if (m_pending_err_code) [from m_mq->try_receive()]
     {
       assert(!emit);
       emit = true; // Error => emit to user, end loop.  The try_*() WARNING+TRACE-logged enough.

@@ -18,6 +18,7 @@
 /// @file
 #pragma once
 
+#include "ipc/transport/protocol_negotiator.hpp"
 #include "ipc/transport/detail/blob_stream_mq_impl.hpp"
 #include "ipc/util/sync_io/asio_waitable_native_hndl.hpp"
 #include "ipc/util/sync_io/detail/timer_ev_emitter.hpp"
@@ -54,7 +55,7 @@ namespace ipc::transport::sync_io
  * Therefore we will only explain here the differences between that socket-stream out-pipe algorithms and `*this` impl.
  * Before going into it more consider these points:
  *   - Socket-stream has to worry about both directions *and* (some) interaction between the two (even though it
- *     is full-duplex).  We do not.  There are mutually concurrency issues to speak of in particular.
+ *     is full-duplex).  We do not.  There are no mutual concurrency issues to speak of in particular.
  *   - Socket-stream has to worry about going from NULL state to PEER state via CONNECTING (optionally) --
  *     `async_connect()`.  We do not: the `_impl` is always in PEER state (unless ctor failed, but that's not
  *     interesting).
@@ -85,6 +86,33 @@ namespace ipc::transport::sync_io
  * then periodically as needed), we enter CONTROL state, sending an empty message, then `Control_cmd::S_PING` in
  * the next message, which enters steady state again.  Lastly, `*end_sending()` means we enter CONTROL state
  * similarly, then send `Control_cmd::S_END_SENDING` in the next message, which enters steady state again.
+ *
+ * ### Protocol negotiation ###
+ * This adds a bit of stuff onto the above protocol.  It is very simple; please see Protocol_negotiator doc header;
+ * we use that convention.  Moreover, since this is the init version (version 1) of the protocol, we need not worry
+ * about speaking more than one version.  So all we do is send the version ahead of the first payload that would
+ * otherwise be sent for any reason (user message from send_blob(), end-sending token from `*end_sending()`, or
+ * ping from auto_ping(), as of this writing), as a special CONTROL message that encodes the value `-1`, meaning
+ * version 1 (as the true `Control_cmd enum` values would be 0, 1, etc.).  Conversely Blob_stream_mq_receiver_impl
+ * expects the first message it does receive to be that CONTROL message encoding a version number; but that's not
+ * our concern here, as we are only the outgoing-direction class.
+ *
+ * @note It is very tempting to do that initial send in lazy fashion: meaning, about to send the first "real" payload?
+ *       OK, then pre-pend the negotiation message.  However this can create trouble in the future, if
+ *       a future protocol wants to be backwards-compatible (support more than 2 protocol versions): we'll need
+ *       to have received the opposing guy's preferred version, and thus determined which version to speak,
+ *       before sending further (non-negotiation) messages.  Bottom line... the initial send shall occur as soon
+ *       as we are operational (start_send_native_handle_ops()).
+ *
+ * After that, we just speak what we speak... which is the protocol's initial version -- as there is no other
+ * version for us.  (The opposing-side peer is responsible for closing the MQs, if it is unable to speak version 1.)
+ *
+ * If we do add protocol version 2, etc., in the future, then things *might* become somewhat more complex (but even
+ * then not necessarily so).  This is discussed in the `Protocol_negotiator m_protocol_negotiator` member doc header.
+ *
+ * @note We suggest that if version 2, etc., is/are added, then the above notes be kept more or less intact; then
+ *       add updates to show changes.  This will provide a good overview of how the protocol evolved; and our
+ *       backwards-compatibility story (even if we decide to have no backwards-compatibility).
  *
  * @tparam Persistent_mq_handle
  *         See Persistent_mq_handle concept doc header.
@@ -283,12 +311,10 @@ private:
    * or if an async-send is in progress queues it to be sent later; dropping-sans-queuing
    * allowed under certain circumstances in `avoided_qing` mode.  For details on the latter see below.
    *
-   * `*err_code` is set to the error to return, suitably for #m_pending_err_code; and if no such
-   * outgoing-pipe-hosing is synchronously encountered it is set to falsy.  In particular, if `!*err_code` upon return,
+   * #m_pending_err_code (pre-condition: it is falsy) is set to the error to ultimately return; and if no such
+   * outgoing-pipe-hosing is synchronously encountered it is left untouched.  In particular, if falsy upon return,
    * you may call this again to send the next low-level payload.  Otherwise #m_mq cannot be subsequently used
-   * (it is hosed).  Yet if `*err_code` is truthy upon return, caller must synchronously assign
-   * #m_pending_err_code accordingly, so as to maintain the invariant that #m_mq is null if and only if
-   * that guy is truthy.
+   * (it is hosed).  Thus we maintain the invariant that #m_mq is null if and only if that guy is truthy.
    *
    * ### `avoided_qing` mode for auto-ping ###
    * If `avoided_qing_or_null` is null, then see above.  If it points to a `bool`, though, then:
@@ -314,21 +340,19 @@ private:
    *
    * @param orig_blob
    *        Blob to send.  Empty blob is allowed.
-   * @param err_code
-   *        Success or failure is registered in `*err_code` per above.  If null behavior is undefined.
    * @param avoided_qing_or_null
    *        See above.
    * @return `false` if outgoing-direction pipe still has queued stuff in it that must be sent once transport
    *         becomes writable; `true` otherwise.  If `true` is returned, but `avoided_qing_or_null != nullptr`, then
    *         possibly `orig_blob` was not sent (at all); was dropped (check `*avoided_qing_or_null` to see if so).
    */
-  bool sync_write_or_q_payload(const util::Blob_const& orig_blob, Error_code* err_code, bool* avoided_qing_or_null);
+  bool sync_write_or_q_payload(const util::Blob_const& orig_blob, bool* avoided_qing_or_null);
 
   /**
    * Writes the 2 payloads corresponding to CONTROL command `cmd` to #m_mq; if unable to do so synchronously --
    * either because items are already queued in #m_pending_payloads_q, or MQ is full -- then enqueue 1-2 of the
    * payloads onto that queue.  In the case of Control_cmd::S_PING it may drop both payloads silently
-   * (see sync_write_or_q_payload() notes regarding `avoided_qing` mode.)
+   * (see sync_write_or_q_payload() notes regarding `avoided_qing` mode).
    *
    * Essentially this combines 1-2 sync_write_or_q_payload() for the specific task of sending out a CONTROL command.
    * If one desires to send a normal (user) message -- use sync_write_or_q_payload() directly (it shall deal
@@ -344,6 +368,20 @@ private:
   bool sync_write_or_q_ctl_cmd(Control_cmd cmd);
 
   /**
+   * Equivalent to sync_write_or_q_ctl_cmd() but takes the raw representation of the command to send;
+   * this allows both sending the `enum Control_cmd` value or the special protocol negotiation payload.
+   * We always send the latter as the first message, and never again; and the receiver side expects this;
+   * after that only regular `Control_cmd`-bearing CONTROL messages are sent and expected.
+   *
+   * @param raw_cmd
+   *        Either a non-negative value, which equals the cast of a `Control_cmd` to its underlying type;
+   *        or a negative value, which equals the arithmetic negation of our highest (preferred) protocol
+   *        version.  So in the latter case -1 means version 1, -2 means version 2, etc.
+   * @return See sync_write_or_q_ctl_cmd().
+   */
+  bool sync_write_or_q_ctl_cmd_impl(std::underlying_type_t<Control_cmd> raw_cmd);
+
+  /**
    * Initiates async-write over #m_mq of the low-level payload at the head of out-queue
    * #m_pending_payloads_q, with completion handler also inside this method.
    * The first step of this is an async-wait via `sync_io` pattern.
@@ -354,6 +392,48 @@ private:
 
   /// See nickname().
   const std::string m_nickname;
+
+  /**
+   * Handles the protocol negotiation at the start of the pipe.
+   *
+   * @see Protocol_negotiator doc header for key background on the topic.  In particular check out the discussion
+   *      "Key tip: Coding for version-1 versus one version versus multiple versions."
+   *
+   * ### Maintenace/future ###
+   * This version of the software talks only the initial version of the protocol: version 1 by Protocol_negotiator
+   * convention.  (Deities willing, we won't need to create more, but possibly we will.)  As expained in the
+   * above-mentioned doc header section, we have very little to worry about as the sender: Just send
+   * our version, 1, as the first message (in fact, a special CONTROL message; and we send it first-thing, ahead of the
+   * first payload that would be otherwise sent, whether it's a user payload, or the end-sending token, or
+   * an auto-ping).  Only version 1 exists, so we simply speak it.
+   *
+   * This *might* change in the future.  If there is a version 2 or later, *and* at some point we decide to maintain
+   * backwards-compatibility (not a no-brainer decision in either direction), meaning we pass a range of 2 versions
+   * or more to Protocol_negotiator ctor, then:
+   *   - We will need to know which version to speak when sending at least *some* of our messages.
+   *   - Normally we'd get this via a separate incoming pipe -- a paired Blob_stream_mq_receiver handling
+   *     a separate associated MQ.  So we'd need:
+   *     - some kind of internal logic to enter a would-block state of sorts (if we need to know the version
+   *       for a certain out-message, and we haven't been told it yet) during which stuff is queued-up and not
+   *       yet sent until signaled with the negotiated protocol version;
+   *     - some kind of API that would let the paired Blob_stream_mq_receiver signal us to tell us that version,
+   *       when it knows;
+   *     - possibly some kind of API that one could use in the absence of such a paired opposite-facing pipe,
+   *       so that our user can simply tell us what protocol version to speak in lieu of the paired
+   *       Blob_stream_mq_receiver.
+   *
+   * (Just to point a fine point on it: We are *one* direction of a *likely* bidirectional comm pathway.
+   * Protocol_negotiator by definition applies to a bidirectional pathway.  Yet we *can* exist in isolation, with
+   * no partner opposing MQ and therefore no partner local Blob_stream_mq_sender_impl.  If that is indeed the
+   * case, then it is meaningless for *us* to somehow find out what protocol the either side speaks, as the other
+   * side has no way of sending us *anything*!  Hence the dichotomy between those last 2 sub-bullets:
+   * If we exist in isolation and are unidirectional, then you'd best simply tell us what to speak... but
+   * if we're part of a bidirectional setup, then we can cooperate with the other direction more automagically.
+   *
+   * These are decisions and work for another day, though; it is not relevant until version 2 of this protocol
+   * at the earliest.  That might not even happen.
+   */
+  Protocol_negotiator m_protocol_negotiator;
 
   /// See absolute_name().
   const Shared_name m_absolute_name;
@@ -561,6 +641,8 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
 
   flow::log::Log_context(logger_ptr, Log_component::S_TRANSPORT),
   m_nickname(nickname_str),
+  m_protocol_negotiator(get_logger(), nickname(),
+                        1, 1), // Initial protocol!  @todo Magic-number `const`(s), particularly if/when v2 exists.
   m_absolute_name(mq.absolute_name()),
   // m_mq null for now but is set up below.
   m_mq_max_msg_sz(mq.max_msg_size()), // Just grab this now though.
@@ -751,8 +833,30 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::
   m_ev_wait_func = std::move(ev_wait_func);
 
   FLOW_LOG_INFO("Blob_stream_mq_sender [" << *this << "]: Start-ops requested.  Done.");
+
+  if (!m_pending_err_code)
+  {
+    const auto protocol_ver_to_send = m_protocol_negotiator.local_max_proto_ver_for_sending();
+    assert((protocol_ver_to_send != Protocol_negotiator::S_VER_UNKNOWN)
+           && "How'd we get to this line twice?  Or Protocol_negotiator bug?");
+    assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
+           && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
+
+    /* As discussed in m_protocol_negotiator doc header and class doc header "Protocol negotiation" section:
+     * send a special CONTROL message; opposing side expects it as the first in-message.
+     * By the way m_protocol_negotiator logged about the fact we're about to send it, so we can be pretty quiet. */
+    sync_write_or_q_ctl_cmd_impl(-protocol_ver_to_send);
+    /* m_pending_err_code may have become truthy; just means next send_blob()/whatever will emit that error.
+     *
+     * Otherwise: Either it inline-sent it (very likely), or it got queued.
+     *            Either way: no error; let's get on with queuing-or-sending real stuff like send_blob() payloads.
+     * P.S. There's only 1 protocol version as of this writing, so there's no ambiguity, and we can just get on with
+     * sending stuff right away.  This could change in the future.  See m_protocol_negotiator doc header for more. */
+  }
+  // else { Ctor must have failed without throwing exception (non-null err_code). }
+
   return true;
-}
+} // Blob_stream_mq_sender_impl::start_send_blob_ops()
 
 template<typename Persistent_mq_handle>
 bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::op_started(util::String_view context) const
@@ -839,9 +943,10 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
                      "Emitting error immediately; but pipe continues.  Note that if we don't do this, "
                      "then the low-level MQ will behave this way anyway.");
   }
-  else if (m_pending_err_code) // if (!m_finished) && (blob.size() OK)
+  else if (m_pending_err_code) // && (!m_finished) && (blob.size() OK)
   {
-    /* This --^ holds either the last inline-completed send_blob() call's emitted Error_code, or (~rarely) one
+    /* This --^ holds either the last inline-completed send_blob() (or protocol-negotiation-send in
+     * start_send_blob_ops()) call's emitted Error_code, or (~rarely) one
      * that was found while attempting to dequeue previously-would-blocked queued-up (due to incomplete s_blob())
      * payload(s).  This may seem odd, but that's part of the design of the send interface which we wanted to be
      * as close to looking like a series of synchronous always-inline-completed send_blob() calls as humanly possible,
@@ -861,17 +966,19 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
      * but there's a small chance either there's either stuff queued already (we've delegated waiting for would-block
      * to clear to user), or not but this can't be pushed (encountered would-block).  We don't care here per
      * se; I am just saying for context, to clarify what "send-or-queue" means. */
-    sync_write_or_q_payload(blob, err_code, nullptr);
+    sync_write_or_q_payload(blob, nullptr);
     /* That may have returned `true` indicating everything (up to and including our payload) was synchronously
      * given to kernel successfuly; or this will never occur, because outgoing-pipe-ending error was encountered.
      * Since this is send_blob(), we do not care: there is no on-done
      * callback to invoke, as m_finished is false, as *end_sending() has not been called yet. */
 
+    /* No new error: Emit to user that this op did not emit error (m_pending_err_code is still falsy).
+     * New error: Any subsequent attempt will emit this truthy value; do not forget to emit it now via *err_code. */
+    *err_code = m_pending_err_code;
+
     // Did it generate a new error?
     if (*err_code)
     {
-      assert(!m_pending_err_code); // *New* error.
-      m_pending_err_code = *err_code; // Ensure any subsequent attempt emits this too.
       FLOW_LOG_TRACE("Blob_stream_mq_sender [" << *this << "]: Wanted to send user message but detected error "
                      "synchronously.  "
                      "Error code details follow: [" << *err_code << "] [" << err_code->message() << "].  "
@@ -1224,8 +1331,8 @@ void Blob_stream_mq_sender_impl<Persistent_mq_handle>::on_ev_auto_ping_now_timer
 } // Blob_stream_mq_sender_impl::on_ev_auto_ping_now_timer_fired()
 
 template<typename Persistent_mq_handle>
-bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload
-       (const util::Blob_const& orig_blob, Error_code* err_code, bool* avoided_qing_or_null)
+bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(const util::Blob_const& orig_blob,
+                                                                               bool* avoided_qing_or_null)
 {
   using flow::util::Blob;
   using util::Blob_const;
@@ -1234,6 +1341,8 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload
    * This one is actually fairly different from sync_io::Native_socket_stream::Impl::snd_sync_write_or_q_payload(),
    * as we are dealing with a message boundary-preserving low-level transport among other differences. */
 
+  assert((!m_pending_err_code) && "After m_mq is hosed, no point in trying to do anything; pre-condition violated.");
+
   if (m_pending_payloads_q.empty())
   {
     FLOW_LOG_TRACE("Blob_stream_mq_sender [" << *this << "]: Want to send low-level payload: "
@@ -1241,15 +1350,11 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload
                    "located @ [" << orig_blob.data() << "]; no write is pending so proceeding immediately.  "
                    "Will drop if would-block? = [" << bool(avoided_qing_or_null) << "].");
 
-    const bool sent = m_mq->try_send(orig_blob, err_code);
-    if (*err_code) // It will *not* emit would-block (will just return false but no error).
+    const bool sent = m_mq->try_send(orig_blob, &m_pending_err_code);
+    if (m_pending_err_code) // It will *not* emit would-block (will just return false but no error).
     {
       m_mq.reset();
-      /* Return resources.  (->try_send() logged WARNING sufficiently.)
-       * We should really be setting m_pending_err_code here, as m_mq==null <=> m_pending_err_code-is-truthy
-       * invariant shall not be violated.  As of this writing we just advertise this in our contract, and indeed
-       * all callers either have err_code==&m_pending_err_code, or they assign the *latter to the *former
-       * on return from the present method. */
+      // Return resources.  (->try_send() logged WARNING sufficiently.)
 
       assert(!sent);
       avoided_qing_or_null && (*avoided_qing_or_null = false);
@@ -1336,29 +1441,36 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload
   }
   // else { Queue has even more stuff in it now.  Return false. }
 
-  err_code->clear();
   return false;
 } // Blob_stream_mq_sender_impl::sync_write_or_q_payload()
 
 template<typename Persistent_mq_handle>
 bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd(Control_cmd cmd)
 {
+  return sync_write_or_q_ctl_cmd_impl(static_cast<std::underlying_type_t<Control_cmd>>(cmd));
+}
+
+template<typename Persistent_mq_handle>
+bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd_impl
+       (std::underlying_type_t<Control_cmd> raw_cmd)
+{
   using util::Blob_const;
 
   /* Important: For PING avoided_qing != null; for reasons explained in its doc header.  Namely:
    * Consider S_PING.
    * If both payloads (empty msg, the enum) would-block, then there are already data that would
-   * signal-non-idleness sitting in the kernel buffer, so the auto-ping can be safely dropped in that case.
+   * signal non-idleness sitting in the kernel buffer, so the auto-ping can be safely dropped in that case.
    * If 1 was flushed, while 2 would normally be queued, then dropping the latter would make the
    * protocol stream malformed from the opposing side's point of view; so we can't just drop it. */
   bool avoided_qing = false;
-  bool* const avoided_qing_or_null = (cmd == Control_cmd::S_PING) ? &avoided_qing : nullptr;
+  bool* const avoided_qing_or_null = ((raw_cmd >= 0) && (Control_cmd(raw_cmd) == Control_cmd::S_PING))
+                                       ? &avoided_qing : nullptr;
 
   // Payload 1 first.
-  bool q_is_flushed = sync_write_or_q_payload(Blob_const(), &m_pending_err_code, avoided_qing_or_null);
+  bool q_is_flushed = sync_write_or_q_payload(Blob_const(), avoided_qing_or_null);
 
   /* Returned true => out-queue flushed fully or dropped PING-payload-1 (avoided_qing)
-                      or new error found (depending on m_pending_err_code).
+   *                  or new error found (depending on m_pending_err_code).
    * Returned false => out-queue has stuff in it and will until transport writable. */
   if (!m_pending_err_code)
   {
@@ -1368,7 +1480,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd(C
     {
       // No error, not avoided_quing => flushed fully (so flush or queue payload 2); or queued (so queue payload 2).
       q_is_flushed
-        = sync_write_or_q_payload(Blob_const(&cmd, sizeof(cmd)), &m_pending_err_code, nullptr);
+        = sync_write_or_q_payload(Blob_const(&raw_cmd, sizeof(raw_cmd)), nullptr);
       assert(!(m_pending_err_code && (!q_is_flushed)));
     }
     /* else if (avoided_qing)
@@ -1389,7 +1501,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd(C
    *     => depends on whether queue was (and thus remains) empty at the time payload 1 was tried. */
 
   return q_is_flushed;
-} // Blob_stream_mq_sender_impl::sync_write_or_q_ctl_cmd()
+} // Blob_stream_mq_sender_impl::sync_write_or_q_ctl_cmd_impl()
 
 template<typename Persistent_mq_handle>
 void Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_write_q_head_payload()

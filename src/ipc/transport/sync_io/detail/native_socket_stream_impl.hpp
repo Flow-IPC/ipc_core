@@ -18,6 +18,7 @@
 /// @file
 #pragma once
 
+#include "ipc/transport/protocol_negotiator.hpp"
 #include "ipc/transport/detail/transport_fwd.hpp"
 #include "ipc/transport/sync_io/native_socket_stream.hpp"
 #include "ipc/transport/asio_local_stream_socket_fwd.hpp"
@@ -239,20 +240,37 @@ namespace ipc::transport::sync_io
  * one that pipe is hosed, the appropriate one is set to truthy.  Now any user sending or receiving (whichever
  * is applicable to the pipe) immediately yields that error.
  *
- * @todo Native_socket_stream should have at least basic protocol negotiation at connection start, for forward
- * compatibility.  The protocol is simple and transmits arbitrary messages (leaving structured meaning to higher
- * levels).  So we don't intend to change it... but famous last words!  Protocol negotiation might work something
- * like this: Firstly each side sends some forever-constant magic value (receiver errors-out if wrong).
- * Next each sender says, compactly, "I can speak versions in strict range [M, N]" (so it just sends the M, N values).
- * After the exchange, each side has their range [M1, N1] and the peer range [M2, N2]; computes the intersection/overlap
- * [M', N']; and then speaks the highest protocol in the range: N'.  Both sides will compute the same N'; and if
- * there is no overlap, then both sides will error-out (though 1 is enough).  In the first version, it's [1, 1],
- * so in that case this whole header is basically a matter of sending that magic string including [1, 1] and ensuring
- * almost that same magic string is received back (except the N can be >= 1, not just 1).
- *
  * @todo Internal Native_socket_stream and Native_socket_stream_acceptor queue
  * algorithms and data structures should be checked for RAM use; perhaps
  * something should be periodically shrunk if applicable.  Look for `vector`s, `deque`s (including inside `queue`s).
+ *
+ * ### Protocol negotiation ###
+ * This adds a bit of stuff onto the above protocol.  It is very simple; please see Protocol_negotiator doc header;
+ * we use that convention.  Moreover, since this is the init version (version 1) of the protocol, we need not worry
+ * about speaking more than one version.  On the send side: All we do is send the version ahead of the first
+ * payload that would otherwise be sent for any reason (user message from `send_*()`, end-sending token from
+ * `*end_sending()`, or ping from auto_ping(), as of this writing), as a special message that is identical to
+ * a normal payload 1 (see above) whose contents are (instead of the usual length) the protocol version,
+ * namely the value `1`, meaning version 1.  Conversely on the receive side: we expect the first message received to be
+ * a native-handle-free paylod 1 with contents encoding a version number; then we let Protocol_negotiator
+ * do its thing in determining the protocol version spoken.
+ *
+ * @note It is very tempting to do that initial send in lazy fashion: meaning, about to send the first "real" payload?
+ *       OK, then pre-pend the negotiation message.  However this can create trouble in the future, if
+ *       a future protocol wants to be backwards-compatible (support more than 2 protocol versions): we'll need
+ *       to have received the opposing guy's preferred version, and thus determined which version to speak,
+ *       before sending further (non-negotiation) messages.  Bottom line... the initial send shall occur as soon
+ *       as we are operational (start_send_blob_ops()).
+ *
+ * After that, we just speak what we speak... which is the protocol's initial version -- as there is no other
+ * version for us.  (The opposing-side peer is responsible for closing the stream, if it is unable to speak version 1.)
+ *
+ * If we do add protocol version 2, etc., in the future, then things *might* become somewhat more complex (but even
+ * then not necessarily so).  This is discussed in the `Protocol_negotiator m_protocol_negotiator` member doc header.
+ *
+ * @note We suggest that if version 2, etc., is/are added, then the above notes be kept more or less intact; then
+ *       add updates to show changes.  This will provide a good overview of how the protocol evolved; and our
+ *       backwards-compatibility story (even if we decide to have no backwards-compatibility).
  */
 class Native_socket_stream::Impl :
   public flow::log::Log_context,
@@ -694,8 +712,8 @@ private:
    * of the payload is queued and async-sent via snd_async_write_q_head_payload(), with dropping-sans-queuing
    * allowed under certain circumstances in `avoid_qing` mode.  For details on the latter see below.
    *
-   * `*err_code` is set to the error to return, suitably for #m_snd_pending_err_code; and if no such
-   * outgoing-pipe-hosing is synchronously encountered it is set to falsy.  In particular, if `!*err_code` upon return,
+   * #m_snd_pending_err_code, which as a pre-condition must be falsy, is set to truthy if and only if an
+   * outgoing-pipe-hosing condition is synchronously encountered.  In particular, if it remains falsy upon return,
    * you may call this again to send the next low-level payload.  Otherwise #m_peer_socket cannot be subsequently used
    * in either direction (connection is hosed).
    *
@@ -717,8 +735,6 @@ private:
    * @param orig_blob
    *        Blob to send, with `hndl_or_null` associated with byte 1 of this.  It must have size 1 or greater,
    *        or behavior is undefined.
-   * @param err_code
-   *        Success or failure is registered in `*err_code` per above.  If null behavior is undefined.
    * @param avoid_qing
    *        See above.  `true` <=> will return success (act as-if all of `orig_blob` was sent)
    *        if no bytes of `orig_blob` could be immediately sent.
@@ -727,20 +743,17 @@ private:
    *         possibly `orig_blob` was not sent (at all); was dropped.
    */
   bool snd_sync_write_or_q_payload(Native_handle hndl_or_null,
-                                   const util::Blob_const& orig_blob, Error_code* err_code,
-                                   bool avoid_qing);
+                                   const util::Blob_const& orig_blob, bool avoid_qing);
 
   /**
    * Initiates async-write over #m_peer_socket of the low-level payload at the head of out-queue
    * #m_snd_pending_payloads_q, with completion handler snd_on_ev_peer_socket_writable_or_error().
    * The first step of this is an async-wait via `sync_io` pattern.
    *
-   * `*err_code` has the same semantics as snd_sync_write_or_q_payload().
-   *
-   * @param err_code
-   *        Same as snd_sync_write_or_q_payload().
+   * Behavior w/r/t #m_snd_pending_err_code is the same semantics as described for snd_sync_write_or_q_payload()
+   * (must be falsy as pre-condition, is set to truthy <=> outgoing-pipe-hosing condition is encountered).
    */
-  void snd_async_write_q_head_payload(Error_code* err_code);
+  void snd_async_write_q_head_payload();
 
   /**
    * Completion handler, from outside event loop via `sync_io` pattern, for the async-wait initiated by
@@ -768,7 +781,12 @@ private:
    * @param blob
    *        Same as snd_sync_write_or_q_payload().
    * @param err_code
-   *        Same as snd_sync_write_or_q_payload().  Also see above: would-block is not an error.
+   *        Same as snd_sync_write_or_q_payload() is w/r/t #m_snd_pending_err_code, essentially, with the small
+   *        difference that it does not require `*err_code` to be falsy as pre-condition, and will make it truthy
+   *        or falsy depending on success or failure.  (Minor possible to-do: just have it act on
+   *        `m_snd_pending_err_code` like snd_sync_write_or_q_payload() et al?  It is the way it is now arguably for
+   *        maintenability/reusability, and/or for minor historical reasons.)  Also see above: would-block is
+   *        not an error.
    * @return 0 meaning neither `hndl_or_null` (if any) nor any `blob` bytes were sent;
    *         [1, `blob.size()`] if `hndl_or_null` (if any) and that number of `blob` bytes were sent.
    *         `*err_code` shall be truthy only if (but not necessarily if) `< blob.size()` is returned.
@@ -1042,6 +1060,32 @@ private:
    * accessed by both directions' algorithms.)
    */
   State m_state;
+
+  /**
+   * Handles the protocol negotiation at the start of the pipe.
+   *
+   * @see Protocol_negotiator doc header for key background on the topic.  In particular check out the discussion
+   *      "Key tip: Coding for version-1 versus one version versus multiple versions."
+   *
+   * ### Maintenace/future ###
+   * See doc header for sync_io::Blob_stream_mq_sender_impl.  Similar logic applies here.  The only thing
+   * that does not apply, and is arguably simpler in our case, is that we *are* a bidirectional comm pathway;
+   * there is no such thing as being a sender end without a corresponding receiver end.  So the stuff about needing
+   * an API for telling us what protocol version to speak of multiple possibilities (in the hypothetical future
+   * in which we'd support such a thing).
+   *
+   * To restate: These are decisions and work for another day, though; it is not relevant until version 2 of this
+   * protocol at the earliest.  That might not even happen.
+   *
+   * ### Thread safety ###
+   * Firstly this it only touched in PEER state (and one cannot exit PEER state).  Once in PEER state:
+   * First take a look at "Thread safety" in sync_io::Native_socket_stream class public doc header.
+   * Long story short, it says that the only relevant concurrency we must allow is a receive-op being
+   * invoked concurrently with a send-op while in PEER state.  Happily, Protocol_negotiator doc header
+   * specifically allows the outgoing-direction APIs to be invoked concurrently with incoming-direction APIs.
+   * Therefore no locking is needed.
+   */
+  Protocol_negotiator m_protocol_negotiator;
 
   /**
    * The `Task_engine` for #m_peer_socket.  It is necessary to construct the `Peer_socket`, but we never
