@@ -24,7 +24,7 @@
 /* This little thing is *not* a unit-test; it is built to ensure the proper stuff links through our
  * build process.  We try to use a compiled thing or two; and a template (header-only) thing or two;
  * not so much for correctness testing but to see it build successfully and run without barfing. */
-int main()
+int main(int, char const * const * argv)
 {
   using ipc::util::Shared_name;
   using ipc::util::Blob_const;
@@ -61,7 +61,9 @@ int main()
   log_config.configure_default_verbosity(Sev::S_INFO, true);
   /* First arg: could use &std_logger to log-about-logging to console; but it's a bit heavy for such a console-dependent
    * little program.  Just just send it to /dev/null metaphorically speaking. */
-  Async_file_logger log_logger(nullptr, &log_config, LOG_FILE, false /* No rotation; we're no serious business. */);
+  Async_file_logger log_logger(nullptr, &log_config,
+                               (argc >= 2) ? string(argv[1]) : LOG_FILE,
+                               false /* No rotation; we're no serious business. */);
 
   try
   {
