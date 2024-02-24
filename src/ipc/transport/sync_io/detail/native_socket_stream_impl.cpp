@@ -183,6 +183,8 @@ void Native_socket_stream::Impl::reset_sync_io_setup()
    * Therefore just do this (possibly no-op): */
   m_snd_ev_wait_func.clear();
   m_rcv_ev_wait_func.clear();
+  // Shouldn't matter in PEER state, but as of this writing replace_event_wait_handles() doesn't worry about state.  So:
+  m_conn_ev_wait_func.clear();
 
   /* replace_event_wait_handles(), in PEER state =
    *   For the 3 watchable FDs in *this -- m_ev_wait_hndl_peer_socket, m_snd_ev_wait_hndl_auto_ping_timer_fired_peer,
