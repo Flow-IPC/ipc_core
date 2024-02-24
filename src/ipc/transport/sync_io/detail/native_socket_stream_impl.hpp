@@ -312,10 +312,26 @@ public:
   // Methods.
 
   /**
-   * See Native_socket_stream counterpart.
-   * @return See Native_socket_stream counterpart.
+   * Key helper of Native_socket_stream::release(), this operates on a `*this` suitable for
+   * `.release()` and makes it as-if no `start_*_ops()` or replace_event_wait_handles() have been called
+   * since reaching PEER state.  In other words, if `start_send/receive_*_ops()` and/or `replace_event_wait_handles()`
+   * have been called, they are undone.
+   *
+   * Reminder: a `*this` is suitable for `.release()` if all of the following hold:
+   *   - It is in PEER state.
+   *   - While in PEER state, none of the following have yet been called: `async_receive_*()`, `send_*()`,
+   *     `*end_sending()`, auto_ping(), idle_timer_run().
+   *
+   * In other words, it hasn't been used to transmit stuff in either direction.
+   *
+   * @note *Internally* in fact exactly one transmission may have occurred already: from `start_send_*_ops()` -- if
+   * indeed it was called at least once -- protocol-negotiation out-message would have been sent.  That send might
+   * even have *failed*.  This impl handles all that properly (e.g., `start_send_*_ops()` after it returns will not
+   * try to re-send protocol-negotiation out-message which would cause chaos).
+   *
+   * Behavior is undefined (assertion may trip) if requirements above have not been met.
    */
-  Native_socket_stream release();
+  void reset_sync_io_setup();
 
   /**
    * See Native_socket_stream counterpart.

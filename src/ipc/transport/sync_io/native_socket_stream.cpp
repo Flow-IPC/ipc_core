@@ -82,7 +82,9 @@ const std::string& Native_socket_stream::nickname() const
 
 Native_socket_stream Native_socket_stream::release()
 {
-  return impl()->release();
+  auto sock = std::move(*(impl()));
+  sock.impl()->reset_sync_io_setup();
+  return sock;
 }
 
 util::Process_credentials Native_socket_stream::remote_peer_process_credentials(Error_code* err_code) const

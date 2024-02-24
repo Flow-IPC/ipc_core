@@ -454,10 +454,6 @@ public:
    * Behavior is undefined if `*this` is not in PEER state, or if it is, but you've invoked `async_receive_*()`,
    * `send_*()`, `*end_sending()`, auto_ping(), or idle_timer_run() in the past.  Please be careful.
    *
-   * Corner case (unlikely but possible): If, upon entry to PEER state, `*this` failed in attempting to immediately
-   * send internal protocol-negotiation data, then the returned object shall be in NULL state, not PEER state.
-   * As of this writing one can check for this via `returned_guy.send_blob_max_size() == 0`.
-   *
    * @return See above.
    */
   Sync_io_obj release();
