@@ -24,7 +24,7 @@
 /* This little thing is *not* a unit-test; it is built to ensure the proper stuff links through our
  * build process.  We try to use a compiled thing or two; and a template (header-only) thing or two;
  * not so much for correctness testing but to see it build successfully and run without barfing. */
-int main(int, char const * const * argv)
+int main(int argc, char const * const * argv)
 {
   using ipc::util::Shared_name;
   using ipc::util::Blob_const;
