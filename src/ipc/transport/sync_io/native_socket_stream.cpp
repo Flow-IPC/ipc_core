@@ -82,7 +82,7 @@ const std::string& Native_socket_stream::nickname() const
 
 Native_socket_stream Native_socket_stream::release()
 {
-  auto sock = std::move(*(impl()));
+  auto sock = std::move(*this);
   sock.impl()->reset_sync_io_setup();
   return sock;
 }

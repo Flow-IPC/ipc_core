@@ -127,7 +127,7 @@ void Native_socket_stream::Impl::reset_sync_io_setup()
    *     the sync-op-pattern-init methods (start_*_ops() and/or replace_event_wait_handles()) doesn't lead to
    *     an incoherent *this.
    *     - It'd be nice to assert() on that wherever practical.
-   *     - HOWEVER!!!  A complicating factor is that, while no auto_ping()/send_*()/*end_sending() = helpful,
+   *     - HOWEVER!!!  A complicating factor is that, while no auto_ping() / send_*() / *end_sending() = helpful,
    *       nevertheless a send-op *will* have been invoked from start_send_*_ops().  As noted above, it would have
    *       sent the Protocol_negotiator out-message.  Thankfully, in actual fact, this can have caused one of
    *       exactly 2 state change sets, firstly m_protocol_negotiator.local_max_proto_ver_for_sending() now returns
