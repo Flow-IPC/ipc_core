@@ -56,7 +56,7 @@ int main(int argc, char const * const * argv)
   FLOW_LOG_SET_CONTEXT(&std_logger, Flow_log_component::S_UNCAT);
 
   // This is separate: the IPC/Flow logging will go into this file.
-  string log_file((argc >= 2) > string(argv[1]) : LOG_FILE);
+  string log_file((argc >= 2) ? string(argv[1]) : LOG_FILE);
   FLOW_LOG_INFO("Opening log file [" << log_file << "] for IPC/Flow logs only.");
   Config log_config = std_log_config;
   log_config.configure_default_verbosity(Sev::S_DATA, true); // High-verbosity.  Use S_INFO in production.
