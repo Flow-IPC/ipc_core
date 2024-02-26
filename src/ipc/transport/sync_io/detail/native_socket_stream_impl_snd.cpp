@@ -35,13 +35,13 @@ bool Native_socket_stream::Impl::start_send_native_handle_ops(util::sync_io::Eve
   }
   // else
 
-  assert((!m_snd_pending_err_code) && "We should be the first send-related code possible.");
-
   const auto protocol_ver_to_send_if_needed = m_protocol_negotiator.local_max_proto_ver_for_sending();
   if (protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_UNKNOWN)
   {
     assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
            && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
+
+    assert((!m_snd_pending_err_code) && "We should be the first send-related transmission code possible.");
 
     /* As discussed in m_protocol_negotiator doc header and class doc header "Protocol negotiation" section:
      * send a special as-if-send_blob()-user-message: no Native_handle; meta-blob = sized
@@ -75,7 +75,7 @@ bool Native_socket_stream::Impl::start_send_native_handle_ops(util::sync_io::Eve
                    "Probably we come from a .release()d Native_socket_stream which has already done it; cool.");
 
   }
-  // else { Corner case... we come from a .release()d guy.  See Impl::release().  Already sent it. }
+  // else { Corner case... we come from a .release()d guy.  See Impl::reset_sync_io_setup().  Already sent it. }
 
   return true;
 } // Native_socket_stream::Impl::start_send_native_handle_ops()

@@ -109,140 +109,101 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
   native_peer_socket_moved = Native_handle();
 } // Native_socket_stream::Impl::Impl()
 
-Native_socket_stream Native_socket_stream::Impl::release()
+void Native_socket_stream::Impl::reset_sync_io_setup()
 {
   using util::sync_io::Asio_waitable_native_handle;
-  using util::String_view;
-  using asio_local_stream_socket::Peer_socket;
-  using flow::log::Log_context;
 
-  // Keep in sync with NULL-state ctor!
+  /* Please see our doc header first.  That has important background.  Back here again?  Read on:
+   *   - We're supposed to undo start_receive_*_ops(), if it has been called.
+   *   - We're supposed to undo start_send_*_ops(), if it has been called.
+   *     - However, do *not* undo its send of protocol-negotiation out-message.  Well, that's impossible anyway.
+   *       More accurately: do *not* undo m_protocol_negotiator.local_max_proto_ver_for_sending() (i.e., do not
+   *       .reset()).  The effect of leaving that alone => start_send_*_ops() will skip attempt to send it (again).
+   *   - We're supposed to undo replace_event_wait_handles(), if it has been called.
+   *   - We must leave *this in a coherent state (so one can use it, as-if it had just been cted in PEER state).
+   *   - We can assume certain things that'll make the above (in aggregate) not hard.  Namely, none of these have
+   *     been called: async_receive_*(), send_*(), *end_sending(), auto_ping(), idle_timer_run().
+   *     That's very helpful, because it means no async-waits are currently in progress; which means undoing
+   *     the sync-op-pattern-init methods (start_*_ops() and/or replace_event_wait_handles()) doesn't lead to
+   *     an incoherent *this.
+   *     - It'd be nice to assert() on that wherever practical.
+   *     - HOWEVER!!!  A complicating factor is that, while no auto_ping() / send_*() / *end_sending() = helpful,
+   *       nevertheless a send-op *will* have been invoked from start_send_*_ops().  As noted above, it would have
+   *       sent the Protocol_negotiator out-message.  Thankfully, in actual fact, this can have caused one of
+   *       exactly 2 state change sets, firstly m_protocol_negotiator.local_max_proto_ver_for_sending() now returns
+   *       UNKNOWN plus secondly either
+   *       - (success -- likely) no other state change; or
+   *       - (failure -- unlikely) m_snd_pending_err_code is made truthy; m_peer_socket is nullified.
+   *       Undoing start_*_ops() and replace_event_wait_handles() does *not* conflict with any of these eventualities.
+   *       That is *this remains coherent.  To convince oneself of this, you only need to worry about the
+   *       "(failure -- unlikely)" case, but in doing so you may have to go through other *this code to achieve it.
+   *       Basically imagine *this after that scenario executes.
+   *       - At first it's before any start_*_ops() or replace_event_wait_handles(), at which point essentially only
+   *         those are callable.  Are they safe?  Yes:
+   *         - start_*_ops(F): It'll just memorize move(F); and start_send_*_ops() will detect that Protocol_negotiator
+   *           out-message was already sent and hence do nothing beyond memorizing move(F).
+   *         - replace_event_wait_handles(): It does not access m_peer_socket or m_snd_pending_err_code at all.
+   *       - Once they have been called: You can do other stuff, namely send_*(), async_receive_*(), and so on.
+   *         Are they safe?  Yes, of course: It's just the vanilla an-error-has-hosed-*this-in-PEER-state situation. */
 
-  Error_code sys_err_code;
-  const auto abort_on_fail = [&](String_view context) // Little helper.
-  {
-    if (sys_err_code)
-    {
-      FLOW_LOG_FATAL("Socket stream [" << *this << "]: "
-                     "Socket op [" << context << "] failed; this should never happen.  Details follow.  Look into it.");
-      FLOW_ERROR_SYS_ERROR_LOG_FATAL();
-      assert(false && "Socket op failed; this should never happen.  Look into it.");
-      std::abort();
-    }
-  };
+  // So first let's do our best to assert() the requirements.
 
-  /* Our mission is to (1) create a fresh guy like *this managing the same Native_handle; and (2) make us
-   * as-if we were just cted in NULL state (with null Logger and empty nickname).
-   *
-   * (1) is the easy (and important) part: we just need to invoke our ctor feeding it the raw Native_handle.
-   * (2) is the hard/brittle (and not super-important, but hey, we did promise to make it work a certain way) part:
-   * we need to act like the NULL-state ctor path on existing *this.
-   *
-   * It does help that by contract we have to be in nothing-has-happened-since-entering-PEER-state state.  So
-   * our expected state is pretty rigid; so it is reasonably easy to reason about it.
-   *
-   * Maybe it's self-evident but to be clear -- things like m_nb_task_engine, m_ev_hndl_task_engine_unused,
-   * m_snd_auto_ping_timer, m_rcv_idle_timer can simply be left alone; nothing wrong with them.
-   * The timers haven't been used (by contract, no auto_ping() or idle_timer_run()); the `Task_engine`s
-   * are dissociated/re-associated with their asio objects' FDs in civilized fashion via .release() + reassignment.
-   *
-   * Update: There is now another semantic our contract allows, because now start_send_*_ops() tries to send
-   * protocol-negotiation message, and that can fail: m_snd_pending_err_code becomes truthy, m_peer_socket becomes
-   * null, and *this becomes essentially useless.  Our contract is, in that case, to still make *this
-   * as-if-default-cted, but return a Native_socket_stream::Impl in NULL state instead of PEER state.
-   * (There's a @todo in our doc header to return one in PEER state with the hosed state -- null m_peer_socket, etc. --
-   * transferred from *this.  As it says there, that'd be nice, but implementing it is a real pain in here....
-   * The whole thing makes me wonder if this .release() mechanism is mis-designed somewhere.  By me, ygoldfel.)
-   *
-   * Moreover, in the much likelier case where everything is fine with m_peer_socket, while in fact
-   * start_send_*_ops() *was* called, there's one tweak we must apply to the returned object: To prevent its
-   * future .start_send_*_ops() from re-sending the protocol-negotiation, m_protocol_negotiator must be marked
-   * as having already done so. */
-
-  FLOW_LOG_TRACE("Socket stream [" << *this << "]: Releasing idle-state object to new socket-stream core object.");
+  assert((m_state == State::S_PEER) && "Must be in PEER state by contract.");
 
   const bool hosed = !m_peer_socket;
   assert((hosed == bool(m_snd_pending_err_code))
          && "By contract we must not be in hosed state, unless due to internal initial-negotiation-send failing.");
-  // If indeed hosed for that reason, clear it, since *this must be as-if-default-cted.  Otherwise it no-ops.
-  m_snd_pending_err_code.clear();
-  // We will take care of m_peer_socket below, don't worry.
 
-  // These following ones mean we won't have to reset them to be as-if-default-cted.
+  FLOW_LOG_TRACE("Socket stream [" << *this << "]: Releasing idle-state object to new socket-stream core object.  "
+                 "To finish this: Undoing sync_io-pattern init steps to released core.  "
+                 "Is it hosed due to protocol-negotiation out-message send having failed? = [" << hosed << "].");
+
+  /* m_snd_pending_payloads_q being non-empty would mean there's an active async-wait; that'd be tough for us.
+   * Slight subtlety: the Protocol_negotiator out-message send ostensibly could encounter would-block and hence
+   * make this out-queue non-empty.  Except, no, it can't: there's no way the send buffer gets filled up by 1 small
+   * message.  So if it's non-empty, they must have send_*()ed stuff against contract. */
   assert(m_snd_pending_payloads_q.empty()
-         && "By contract must be in idle state.  No way should initial-negotiation-send yield would-block.");
-  assert((!m_snd_finished) && "By contract must be in idle state.");
-  assert(m_snd_pending_on_last_send_done_func_or_empty.empty() && "By contract must be in idle state.");
-  assert(m_snd_auto_ping_period == util::Fine_duration::zero());
-  assert((!m_rcv_user_request) && "By contract must be in idle state.");
+         && "Did you send_*() against contract?  No way should initial-protocol-negotiation-send yield would-block.");
+
+  assert((!m_snd_finished) && "Did you *end_sending() against contract?");
+  assert(m_snd_pending_on_last_send_done_func_or_empty.empty() && "Did you *end_sending() against contract?");
+  assert((m_snd_auto_ping_period == util::Fine_duration::zero()) && "Did you auto_ping() against contract?");
+  assert((!m_rcv_user_request) && "Did you async_receive_*() against contract?");
   assert((!m_rcv_pending_err_code)
-         && "By contract must not be in a hosed state, except possibly from internal initial-negotiation-send.");
-  assert(m_rcv_idle_timeout == util::Fine_duration::zero());
+         && "Did you async_receive_*() or idle_timer_run() against contract?");
+  assert((m_rcv_idle_timeout == util::Fine_duration::zero()) && "Did you idle_timer_run() against contract?");
+  assert((m_protocol_negotiator.negotiated_proto_ver() == Protocol_negotiator::S_VER_UNKNOWN)
+         && "Did you async_receive_*() or idle_timer_run() against contract?");
 
-  /* As-if-default-cted means this will be in its reset state (still knows the protocol capabilities, but negotiation
-   * state must be pre-any-negotiation).
-   *
-   * However, we do need to save it and apply to the returned guy; as explained above that is to prevent him from
-   * re-sending protocol-negotiation message in future .start_send_*_ops(). */
-  const auto protocol_negotiator = m_protocol_negotiator;
-  assert((protocol_negotiator.negotiated_proto_ver() == Protocol_negotiator::S_VER_UNKNOWN)
-         && "By contract must be in idle state (no receive-ops to have effected receipt of first message).");
-  // As for the outgoing-direction state, we explicitly reset it (incoming-direction state part = no-op).
-  m_protocol_negotiator.reset();
+  // Time to undo stuff.
 
-  // As-if-default-cted means this will be empty.
-  m_conn_ev_wait_func.clear();
+  /* start_*_ops() (excluding the m_protocol_negotiator out-message thing), in PEER state =
+   *   - Memorize a user-supplied func into m_snd_ev_wait_func.
+   *   - Ditto m_rcv_ev_wait_func.
+   * Therefore just do this (possibly no-op): */
   m_snd_ev_wait_func.clear();
   m_rcv_ev_wait_func.clear();
+  // Shouldn't matter in PEER state, but as of this writing replace_event_wait_handles() doesn't worry about state.  So:
+  m_conn_ev_wait_func.clear();
 
-  // And this guy.
-  m_state = State::S_NULL;
+  /* replace_event_wait_handles(), in PEER state =
+   *   For the 3 watchable FDs in *this -- m_ev_wait_hndl_peer_socket, m_snd_ev_wait_hndl_auto_ping_timer_fired_peer,
+   *   and m_rcv_ev_wait_hndl_idle_timer_fired_peer -- do this (for each guy S of those):
+   *     - Starting point: S contains a particular raw FD, associated with Task_engine m_ev_hndl_task_engine_unused.
+   *     - Do: Replace associated Task_engine m_ev_hndl_task_engine_unused with <user-supplied one via functor thing>.
+   * So to undo it just do reverse it essentially (possibly no-op): */
+  Native_handle saved(m_ev_wait_hndl_peer_socket.release());
+  m_ev_wait_hndl_peer_socket = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused);
+  m_ev_wait_hndl_peer_socket.assign(saved);
 
-  Native_handle::handle_t peer_socket_raw_hndl = {}; // (Initialize to avoid warnings.)
+  saved.m_native_handle = m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release();
+  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused);
+  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.assign(saved);
 
-  /* Now we're ready to set up m_*peer_socket to as-if-default-cted state
-   * (and save anything needed for the returned-guy).
-   * Follow what ctor does.  Note that, indeed, we generate a new FD. */
-  if (hosed)
-  {
-    // That corner case: m_peer_socket is null; gotta construct it as opposed to ->open() it: same as NULL-state ctor.
-    m_peer_socket
-      = boost::movelib::make_unique<Peer_socket>
-          (m_nb_task_engine, asio_local_stream_socket::local_ns::stream_protocol());
-  }
-  else // Normal case:
-  {
-    // We'll need this key FD; get it out of m_peer_socket in civilized fashion; it becomes FD-less (!.is_open()).
-    peer_socket_raw_hndl = m_peer_socket->release(sys_err_code);
-    abort_on_fail("release");
-
-    assert((!m_peer_socket->is_open()) && "We ->release()d it above.");
-    m_peer_socket->open(asio_local_stream_socket::local_ns::stream_protocol(),
-                        sys_err_code);
-    abort_on_fail("open");
-  }
-  m_ev_wait_hndl_peer_socket.assign(Native_handle(m_peer_socket->native_handle()));
-
-  // Logging done; can blow up Log_context super-object to as-if-default-cted state.
-  const auto logger_ptr = get_logger();
-  *(static_cast<Log_context*>(this)) = Log_context(nullptr, Log_component::S_TRANSPORT);
-  // This no longer matters for logging; might as well empty it here.  Obv save it for the new guy.
-  const auto nickname_str = std::move(m_nickname);
-  m_nickname.clear(); // Just in case move() didn't do it.
-
-  /* The easy+important part is to finally make a fresh core like ex-*this (except if `hosed`, then create
-   * a NULL-state guy as discussed/promised). */
-  if (hosed)
-  {
-    return Native_socket_stream(logger_ptr, nickname_str);
-  }
-  // else: normal case: Create returned-guy, with certain things we'd saved from *this.
-
-  Native_socket_stream released(logger_ptr, nickname_str, Native_handle(peer_socket_raw_hndl));
-  released.impl()->m_protocol_negotiator = protocol_negotiator;
-
-  return released;
-} // Native_socket_stream::Impl::release()
+  saved.m_native_handle = m_rcv_ev_wait_hndl_idle_timer_fired_peer.release();
+  m_rcv_ev_wait_hndl_idle_timer_fired_peer = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused);
+  m_rcv_ev_wait_hndl_idle_timer_fired_peer.assign(saved);
+} // Native_socket_stream::Impl::reset_sync_io_setup()
 
 Native_socket_stream::Impl::~Impl()
 {

@@ -83,8 +83,9 @@
  *     - *ipc::session::shm* conventionally contains SHM-enabled session functionality.  The location of a
  *       given set of classes will mirror the ipc::shm facilities to which those SHM-enabled sessions provides access.
  *       For example ipc::session::shm::classic contains SHM-classic sessions which provide access to arenas
- *       supplied by ipc::shm::classic.  Similarly ipc::session::shm::arena_lend::jemalloc contains SHM-jemalloc sessions
- *       <=> core arena facilities in ipc::shm::arena_lend::jemalloc.  Note the 1-1 naming of namespaces in both cases.
+ *       supplied by ipc::shm::classic.  Similarly ipc::session::shm::arena_lend::jemalloc contains SHM-jemalloc
+ *       sessions <=> core arena facilities in ipc::shm::arena_lend::jemalloc.  Note the 1-1 naming of namespaces in
+ *       both cases.
  *   - *ipc::shm*:
  *     It provides explicit shared memory (SHM) functionality, including allocating in SHM -- vaguely
  *     analogously to using the regular heap.  ipc::shm and ipc::transport are co-designed to support transmitting

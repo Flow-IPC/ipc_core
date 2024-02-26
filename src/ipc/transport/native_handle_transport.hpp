@@ -149,6 +149,11 @@ namespace ipc::transport
  * also synchronous/non-blocking/never-would-blocking, and even its implementation at the stage of actually
  * sending binary data via Native_handle_sender/Blob_sender is quite straightforward.  In Flow-IPC a
  * `send*()` "just works."
+ *
+ * @todo Comparing Blob_sender::send_blob_max_size() (and similar checks in that family of concepts) to test
+ * whether the object is in PEER state is easy enough, but perhaps we can have a utility that would more
+ * expressively describe this check: `in_peer_state()` free function or something?  It can still use the same
+ * technique internally.
  */
 class Native_handle_sender
 {

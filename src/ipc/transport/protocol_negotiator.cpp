@@ -40,6 +40,25 @@ Protocol_negotiator::Protocol_negotiator(flow::log::Logger* logger_ptr, util::St
                 "[" << m_local_min_proto_ver << ", " << m_local_max_proto_ver << "].");
 }
 
+Protocol_negotiator::Protocol_negotiator(const Protocol_negotiator& src) = default;
+Protocol_negotiator& Protocol_negotiator::operator=(const Protocol_negotiator& src) = default;
+
+Protocol_negotiator::Protocol_negotiator(Protocol_negotiator&& src)
+{
+  operator=(std::move(src));
+}
+
+Protocol_negotiator& Protocol_negotiator::operator=(Protocol_negotiator&& src)
+{
+  if (this != &src)
+  {
+    operator=(static_cast<const Protocol_negotiator&>(src));
+    // This (which satisfies our contract, to make src as-if-just-cted) is the only reason we're not `= default`:
+    src.reset();
+  }
+  return *this;
+}
+
 void Protocol_negotiator::reset()
 {
   m_local_max_proto_ver_sent = false;

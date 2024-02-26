@@ -32,7 +32,8 @@ namespace ipc::transport
  * we mean a bidirectional communication channel of some sort with two mutually-opposing endpoints (it need
  * not be full-duplex).
  *
- * It is trivially copyable and movable, so that containing object can be copyable and movable too.
+ * It is copyable and movable, so that the containing object can be copyable and movable too.
+ * A moved-from `*this` becomes as-if it was just constructed.
  *
  * The algorithm followed is quite straightforward and is exposed completely in the contract of this simple API:
  * The impetus behind this class is not for it to be able to perform some complex `private` operations but rather
@@ -235,7 +236,42 @@ public:
   explicit Protocol_negotiator(flow::log::Logger* logger_ptr, util::String_view nickname,
                                proto_ver_t local_max_proto_ver, proto_ver_t local_min_proto_ver);
 
+  /**
+   * Copy-constructs `*this` to be equal to `src` object.
+   *
+   * @param src
+   *        Source object.
+   */
+  Protocol_negotiator(const Protocol_negotiator& src);
+
+  /**
+   * Move-constructs `*this` to be equal to `src`, while `src` becomes as-if defaulted-cted.
+   *
+   * @param src
+   *        Moved-from object that becomes as-if default-cted.
+   */
+  Protocol_negotiator(Protocol_negotiator&& src);
+
   // Methods.
+
+  /**
+   * Copy-assigns `*this` to be equal to `src`.
+   *
+   * @param src
+   *        Source object.
+   * @return `*this`.
+   */
+  Protocol_negotiator& operator=(const Protocol_negotiator& src);
+
+  /**
+   * Move-assigns `*this` to be equal to `src`, while `src` becomes as-if just constructed; or no-op
+   * if `&src == this`.
+   *
+   * @param src
+   *        Moved-from object that becomes as-if just-cted, unless it is `*this`.
+   * @return `*this`.
+   */
+  Protocol_negotiator& operator=(Protocol_negotiator&& src);
 
   /**
    * Returns `S_VER_UNKNOWN` before compute_negotiated_proto_ver(); then either the positive version of the protocol

@@ -24,8 +24,6 @@ message(CHECK_START "(Project [${PROJ}] root CMake script executing.)")
 list(APPEND CMAKE_MESSAGE_INDENT "- ")
 
 set(PROJ_CAMEL "IpcCore")
-# TODO: Get it from nearest `VERSION` file perhaps.
-set(PROJ_VERSION "1.0.0")
 set(PROJ_HUMAN "Flow-IPC (Core)")
 
 set(OS_SUPPORT_MSG "Only Linux is supported for now.  For ipc_core: macOS/BSD might require some coding; "
@@ -34,15 +32,13 @@ set(OS_SUPPORT_MSG "Only Linux is supported for now.  For ipc_core: macOS/BSD mi
 # so needs to be not compiled.  Otherwise we might be all-right; but requires looking-into and testing.
 # (That's after ensuring Flow is supported in the OS in question first.)
 
-project(${PROJ_CAMEL} VERSION ${PROJ_VERSION} LANGUAGES CXX)
-
-if(IPC_META_ROOT)
+if(FLOW_LIKE_META_ROOT)
   message(VERBOSE
-            "IPC_META_ROOT is set indicating we are a subdir of a meta-project.  Dependencies should be pre-loaded.")
-  set(FLOW_LIKE_TOOLS "${IPC_META_ROOT_flow}/tools/cmake")
+            "FLOW_LIKE_META_ROOT set indicating we are a subdir of a meta-project.  Dependencies should be pre-loaded.")
+  set(FLOW_LIKE_TOOLS "${FLOW_LIKE_META_ROOT_flow}/tools/cmake")
 else()
   message(VERBOSE
-            "IPC_META_ROOT not set; this indicates we are being distributed separately as opposed to "
+            "FLOW_LIKE_META_ROOT not set; this indicates we are being distributed separately as opposed to "
               "in the meta-project.  We will load dependencies via find_package() from an external install-dir.")
 
   find_package(Flow 1.0 CONFIG REQUIRED)
@@ -52,6 +48,8 @@ else()
   set(FLOW_LIKE_TOOLS "${Flow_DIR}/../../../share/flow/cmake")
 endif()
 
+include("${FLOW_LIKE_META_ROOT_flow}/tools/cmake/FlowLikeProject.cmake")
+project(${PROJ_CAMEL} VERSION ${PROJ_VERSION} DESCRIPTION ${PROJ_HUMAN} LANGUAGES CXX)
 include("${FLOW_LIKE_TOOLS}/FlowLikeCodeGenerate.cmake")
 
 # Tip: Most likely you are next interested in ./src/CMakeLists.txt and then perhaps ./test/{basic|suite}/CMakeLists.txt.
