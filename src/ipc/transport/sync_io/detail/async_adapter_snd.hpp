@@ -299,7 +299,7 @@ Async_adapter_sender<Core_t>::~Async_adapter_sender()
    * The decision to do it from a one-off thread is explained in transport::Native_socket_stream::Impl::~Impl()
    * and used in a few places; so see that.  Let's just do it.
    * @todo It would be cool, I guess, to do it all in one one-off thread instead of potentially starting, like,
-   * 3 for some of our customers.  Well, whatever.  At least we can avoid it if we know there are no handlers
+   * 2 for some of our customers.  Well, whatever.  At least we can avoid it if we know there are no handlers
    * to invoke; speaking of which there's just the one: */
 
   if (!m_end_sending_on_done_func_or_empty.empty())

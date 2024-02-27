@@ -123,7 +123,7 @@ namespace ipc::transport
  * That above list (in?)conspicuously omits the initialization API.  So how does one create this connection
  * and hence the two required `Native_socket_stream`s that are connected to each other (each in PEER state)?
  *
- * A Native_socket_stream object is always in one 3 states:
+ * A Native_socket_stream object is always in one of 2 states:
  *   - PEER.  Upon entering this state, the peer is connected (is an actual peer).  At this stage it exactly
  *     implements the concepts Native_handle_sender, Native_handle_receiver, Blob_sender, Blob_receiver.
  *     If the pipe is hosed (via an error or graceful-close), it remains in this PEER state (but cannot do anything
@@ -131,16 +131,15 @@ namespace ipc::transport
  *     - The only added behavior on top of the implemented concepts is remote_peer_process_credentials() (which is not
  *       a concept API but logically only makes sense when already connected, i.e., in PEER state).
  *   - NULL.  In this state, the object is doing nothing; neither connected nor connecting.
- *   - CONNECTING.  In this state the object is trying to enter PEER state.
  *
  * Therefore, to be useful, one must somehow get to PEER state in which it implements the aforementioned concepts.
  * How to do this?  Answer: There are 2* ways:
  *   - Use Native_socket_stream_acceptor on the side you've designated as the server for that connection or set of
  *     connections.  This allows to wait for a connection and eventually, on success, moves the target
  *     Native_socket_stream passed to Native_socket_stream_acceptor::async_accept() to PEER state.
- *     - On the other side, use a Native_socket_stream in NULL state and invoke async_connect() which will move
- *       to CONNECTING state immediately and, eventually on success, to PEER state (mission accomplished).
- *       If the connect fails it will go back to NULL state.
+ *     - On the other side, use a Native_socket_stream in NULL state and invoke sync_connect() which will move
+ *       synchronously and non-blockingly to PEER state (mission accomplished).
+ *       If the connect fails (also synchronously, non-blockingly), it will go back to NULL state.
  *   - Use a mechanism, as of this writing ipc::transport::Channel at least, that uses the following technique:
  *     -# A process-wide Native_socket_stream connection is established using via the client-server method in the
  *        above bullet point.
@@ -171,22 +170,7 @@ namespace ipc::transport
  * We add no more thread safety guarantees than those mandated by the main concepts.  To wit:
  *   - Concurrent access to 2 separate Native_socket_stream objects is safe.
  *   - After construction, concurrent access to the main transmission API methods (or
- *     remote_peer_process_credentials()) and the dtor is not safe.
- *
- * In addition: It is not safe to invoke any of the following methods --
- *   - send_blob_max_size(), send_meta_blob_max_size(), receive_blob_max_size(), receive_meta_blob_max_size(),
- *   - remote_peer_process_credentials(),
- *   - send_native_handle(), send_blob(), end_sending, async_end_sending(), auto_ping(),
- *   - async_receive_native_handle(), async_receive_blob(), idle_timer_run()
- *
- * ...in the following state:
- *   - You've called `async_connect(F)`; and also
- *   - `F()` has not yet begun executing (you're not *in* or *past* `F()`).
- *
- * Or, more concisely: While CONNECTING, don't do other stuff.  This should be common-sense, really (who wants
- * to try sending/receiving/related, before actually knowingly being connected?), but
- * the `*_max_size()` methods may "feel" safe.  They are not.  However feel free to use
- * sync_io::Native_socket_stream::S_MAX_META_BLOB_LENGTH instead.
+ *     remote_peer_process_credentials()) is not safe.
  *
  * @internal
  * ### Implementation design/rationale ###
@@ -195,7 +179,7 @@ namespace ipc::transport
  *   - The "true" Native_socket_stream is actually the self-contained, but not publicly exposed,
  *     Native_socket_stream::Impl class.
  *   - #m_impl is the `unique_ptr` to `*this` object's `Impl`.  This becomes null only when Native_socket_stream
- *     is moved-from; but if one attempts to call a method (such as async_connect()) on the moved-from `*this`
+ *     is moved-from; but if one attempts to call a method (such as sync_connect()) on the moved-from `*this`
  *     #m_impl is lazily re-initialized to a new default-cted (therefore NULL-state) Native_socket_stream::Impl.
  *   - Every public method of Native_socket_stream `*this` forwards to essentially the same-named method
  *     of `Impl` `*m_impl`.  `Impl` is an incomplete type inside the class declaration at all times;
@@ -234,7 +218,6 @@ namespace ipc::transport
  *     - Native_socket_stream_acceptor would need to impose shared-ownership/factory API in supplying the connected
  *       Native_socket_stream to the user asynchronously.  That could be fine -- but it'd be nice to have
  *       acceptor semantics that are like boost.asio's as opposed to our own design.
- *       - async_connect() is also more natural this way.
  *     - Nevertheless Native_socket_stream_acceptor API could still be designed in factory fashion, even if it's
  *       inconsistent with what boost.asio users might expect.  But: now consider the other guys implementing
  *       Blob_sender and Blob_receiver, namely the message queue-based (MQ-based) Blob_stream_mq_sender and
@@ -324,7 +307,7 @@ public:
    *     default-cted; Native_socket_stream_acceptor shall asynchronously move-assign a logger-apointed,
    *     nicely-nicknamed into that target `*this`.
    *
-   * Therefore it would be unusual (though allowed) to make direct calls such as async_connect() and send_blob()
+   * Therefore it would be unusual (though allowed) to make direct calls such as sync_connect() and send_blob()
    * on a default-cted Native_socket_stream without first moving a non-default-cted object into it.
    *
    * @see Native_handle_sender::Native_handle_sender(): implemented concept.
@@ -335,11 +318,11 @@ public:
   Native_socket_stream();
 
   /**
-   * Creates a Native_socket_stream in NULL (not connected, not connecting) state.
+   * Creates a Native_socket_stream in NULL (not connected) state.
    *
    * This ctor is informally intended for the following use:
    *   - You create a Native_socket_stream that is logger-appointed and nicely-nicknamed; then you call
-   *     async_connect() on it in order to move it to CONNECTING and, hopefully, PEER states.
+   *     sync_connect() on it in order to move it to, hopefully, PEER states.
    *     It will retain the logger and nickname throughout.
    *
    * Alternatively:
@@ -424,12 +407,6 @@ public:
    *     There can be 0 or more of these.
    *   - The handler passed to async_end_sending().
    *     Since it is not valid to call async_end_sending() more than once, there is at most 1 of these.
-   *   - [Not in the implemented concepts] Handler passed to async_connect().
-   *
-   * Note that -- ignoring any intermediate move-assignments/moves-from -- async_connect() is rejected immediately
-   * outside of NULL state; and `async_receive_*()` and `*end_sending()` are rejected immediately outside of PEER
-   * state.  Therefore, it is only possible the destructor will cause the invocation of async_connect() handler -- and
-   * only 1 such handler -- *or* of the other methods' handlers; but not both.
    *
    * @see Native_handle_sender::~Native_handle_sender(): implemented concept.
    * @see Native_handle_receiver::~Native_handle_receiver(): implemented concept.
@@ -439,24 +416,6 @@ public:
   ~Native_socket_stream();
 
   // Methods.
-
-  /**
-   * In PEER state only, with no prior send or receive ops, returns a sync_io::Native_socket_stream core
-   * (as-if just constructed) operating on `*this` underlying low-level transport `Native_handle`; while
-   * `*this` becomes as-if default-cted.
-   *
-   * This can be useful if one desires a `sync_io` core -- e.g., to bundle into a Channel to then feed to
-   * a struc::Channel ctor -- after a successful async-I/O-style async_connect() advanced `*this`
-   * from NULL to CONNECTING to PEER state.
-   *
-   * In a sense it's the reverse of `*this` `sync_io`-core-adopting ctor.
-   *
-   * Behavior is undefined if `*this` is not in PEER state, or if it is, but you've invoked `async_receive_*()`,
-   * `send_*()`, `*end_sending()`, auto_ping(), or idle_timer_run() in the past.  Please be careful.
-   *
-   * @return See above.
-   */
-  Sync_io_obj release();
 
   /**
    * Move-assigns from `src`; `*this` acts as if destructed; `src` becomes as-if default-cted (therefore in NULL state).
@@ -490,7 +449,7 @@ public:
 
   // Connect-ops API.
 
-  /**
+  /** XXX
    * To be invoked in NULL state only, it asynchronously attempts to connect to an opposing
    * Native_socket_stream_acceptor or sync_io::Native_socket_stream_acceptor
    * listening at the given absolute Shared_name; and on success invokes the given completion handler with
@@ -516,8 +475,7 @@ public:
    *        If interrupted by destructor the operation-aborted code is passed instead (see ~Native_socket_stream()
    *        doc header).
    */
-  template<typename Task_err>
-  bool async_connect(const Shared_name& absolute_name, Task_err&& on_done_func);
+  bool sync_connect(const Shared_name& absolute_name, Error_code* err_code);
 
   // Send-ops API.
 
@@ -803,7 +761,7 @@ private:
    * Why?  Answer: This is the usual question of what to do with null m_impl (e.g., it's mentioned in cppreference.com
    * pImpl page) which occurs when one moves-from a given object.  There are various possibilities; but in our case we
    * do want to enable regular use of a moved-from object; hence we promised that a moved-from object is simply in
-   * NULL (not-connecting, not-connected) state, as-if default-cted.  So we do that lazily (on-demand) on encountering
+   * NULL (not-connected) state, as-if default-cted.  So we do that lazily (on-demand) on encountering
    * null m_impl.  Of course we could do it directly inside move ctor/assignment (non-lazily), but in many cases such
    * objects are abandoned in practice, so it's best not to start threads, etc., unless really desired.  The
    * null check cost is minor.
@@ -852,17 +810,6 @@ private:
   bool async_receive_blob_fwd(const util::Blob_mutable& target_blob,
                               flow::async::Task_asio_err_sz&& on_done_func);
 
-  /**
-   * Template-free version of async_connect() as required by pImpl idiom.
-   *
-   * @param absolute_name
-   *        See async_connect().
-   * @param on_done_func
-   *        See async_connect().
-   * @return See async_connect().
-   */
-  bool async_connect_fwd(const Shared_name& absolute_name, flow::async::Task_asio_err&& on_done_func);
-
   // Data.
 
   /**
@@ -906,14 +853,6 @@ bool Native_socket_stream::async_receive_blob(const util::Blob_mutable& target_b
   using flow::async::Task_asio_err_sz;
 
   return async_receive_blob_fwd(target_blob, Task_asio_err_sz(std::move(on_done_func)));
-}
-
-template<typename Task_err>
-bool Native_socket_stream::async_connect(const Shared_name& absolute_name, Task_err&& on_done_func)
-{
-  using flow::async::Task_asio_err;
-
-  return async_connect_fwd(absolute_name, Task_asio_err(std::move(on_done_func)));
 }
 
 } // namespace ipc::transport

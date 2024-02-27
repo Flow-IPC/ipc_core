@@ -60,7 +60,7 @@ namespace ipc::transport::sync_io
  * Notes for transport::Native_socket_stream apply.  The differences (some of which are quite important) are as
  * follows.
  *
- * Before using async_connect(), one must set up the "connect" API according to the `sync_io` pattern.  Namely
+ * XXX Before using async_connect(), one must set up the "connect" API according to the `sync_io` pattern.  Namely
  * one must use start_connect_ops() successfully.  See its doc header; but generally it is another instance of
  * a `sync_io` pattern with which one must be familiar before using this class (and `sync_io::` senders and
  * receivers generally).
@@ -88,7 +88,7 @@ namespace ipc::transport::sync_io
  * event due to an earlier async-wait requested by `*this` -- is formally an operation on `*this`.  It can be
  * thought of as a member of its (non-`const`) API.  For the below discussion we shall pretend these methods
  * actually exist, to simplify discussion of these operations:
- *   - `connect_on_active_ev()` (`on_active_ev_func` originating from start_connect_ops()).
+ *   - XXX `connect_on_active_ev()` (`on_active_ev_func` originating from start_connect_ops()).
  *     - Recall this may synchronously trigger async_connect()-passed completion handler.
  *   - `send_on_active_ev()` (`on_active_ev_func` originating from `start_send_*_ops()`).
  *     - Recall this may synchronously trigger async_end_sending()-passed completion handler.
@@ -102,11 +102,11 @@ namespace ipc::transport::sync_io
  *
  * ### In PEER state ###
  * Firstly, let's assume `*this` is in PEER state, which is achieved either by using the PEER-state ctor form
- * (where a pre-connected `Native_handle` is subsumed), or else by successfully completing async_connect() -- that is,
+ * (where a pre-connected `Native_handle` is subsumed), or else by successfully completing XXX async_connect() -- that is,
  * once it has invoked `on_done_func()` (the completion handler specified by user).  Cool?  Cool.  We are in PEER
  * state.  Then:
  *
- * Boring ones first: async_connect() simply returns `false` and is always safe to call (it is meant for NULL state).
+ * Boring ones first: XXX async_connect() simply returns `false` and is always safe to call (it is meant for NULL state).
  * `*_max_size()` always return the same respective constant values and are always safe to call.
  *
  * Much more significantly, we now list two specific categories of operations:
@@ -138,7 +138,7 @@ namespace ipc::transport::sync_io
  *
  * ### In NULL state ###
  * Now let's assume `*this` is in NULL state; meaning it has been cted using the NULL-state ctor; and either
- * async_connect() has not been invoked at all, or it has but has indicated (via completion handler as explained
+ * XXX async_connect() has not been invoked at all, or it has but has indicated (via completion handler as explained
  * earlier) failure to connect.  Then:
  *
  * Boring ones first: All the send-ops and receive-ops listed above (with the exception of `*_on_active_ev()`,
@@ -151,7 +151,7 @@ namespace ipc::transport::sync_io
  * or themselves.  However, to restate: The "boring" ones in the previous paragraph can be called safely, period
  * (they'll just be useless, as they only make sense in PEER state).
  *
- * ### What about CONNECTING state? ###
+ * ### What about CONNECTING state? ### XXX
  * CONNECTING state refers to the no-man's-land between NULL and PEER: You've called `async_connect(F)`, `F()`
  * being the completion handler, and `F(err_code_or_success)` has not yet been invoked to indicate the result.
  *
@@ -163,7 +163,7 @@ namespace ipc::transport::sync_io
  * the completion handler: Do not do potentially concurrent stuff while an async_connect() is outstanding.
  * It is not safe.
  *
- * This rule should be easy to follow -- e.g., who would want to try a send_blob() until they're for-sure connected
+ * XXX This rule should be easy to follow -- e.g., who would want to try a send_blob() until they're for-sure connected
  * (a/k/a in PEER state)?  There is however one trip-up point which may not be quite obvious:
  * the otherwise-innocuous `*_max_size()` accessors.  Don't call them during an oustanding async_connect()
  * (by which, again, we mean one whose completion handler has not yet been invoked); or, if you possibly do,
@@ -250,7 +250,7 @@ public:
   Native_socket_stream();
 
   /**
-   * Creates a Native_socket_stream in NULL (not connected, not connecting) state.
+   * Creates a Native_socket_stream in NULL (not connected) state.
    * Notes for transport::Native_socket_stream apply.
    *
    * @param logger_ptr
@@ -324,6 +324,7 @@ public:
   /// Copy assignment is disallowed.
   Native_socket_stream& operator=(const Native_socket_stream&) = delete;
 
+#if 0 // XXX
   /**
    * In PEER state only, with no prior send or receive ops, returns an object of this same type
    * (as-if just constructed) operating on `*this` underlying low-level transport `Native_handle`; while
@@ -339,26 +340,9 @@ public:
    * replace_event_wait_handles() are fine.)  Please be careful.
    *
    * @return See above.
-   *
-   * @internal
-   * As it notes above, really I (ygoldfel) wrote this to be able to code `Async_io_obj::release()` in terms of
-   * it (#Async_io_obj is written around a `*this` core).  *That* `.release()` is actually quite useful in some
-   * situations (see its doc header).  That said, the following approach would have resulted
-   * in an equally writable `Async_io_obj::release()` -- actually perhaps fewer lines.
-   *   - Have the latter use `Sync_io_obj(Sync_io_obj&&)` (move) ctor to obtain the guy to-be-returned.
-   *     (Do note `"Sync_io_obj::Impl"` lacks a move ctor.  That is pretty much why `Impl` is separate: so that
-   *     a `unique_ptr<Impl>` wrapper provides movability for ~free, while `Impl` need not worry about it inside.)
-   *   - Before returning that, somehow cause its `"Sync_io_obj::Impl"` to undo its `replace_event_wait_handles()` and
-   *     `start_*_ops()` (since that stuff would have been moved-from `*this` intact).
-   *     That's only a couple statements for `Impl` -- `.clear()` the event-wait-funcs;
-   *     re-construct the watched-`Asio_waitable_native_handle`s from the dummy `Task_engine`.
-   *     - It's just that `*this` cannot access `Impl` internals (without some `friend` or facade business),
-   *       and adding, like, `Impl` undo-start-ops-etc methods just for this feels unnatural.
-   *     - So this "inner" `.release()` layer seemed like a decent approach.
-   *
-   * Decent approach, sure, but the impl of this release() is a little touchy.
    */
   Native_socket_stream release();
+#endif
 
   /**
    * Returns nickname, a brief string suitable for logging.  Notes for transport::Native_socket_stream apply.
@@ -377,9 +361,6 @@ public:
    * Implements Native_handle_sender *and* Native_handle_receiver APIs at the same time, per their concept contracts.
    * (Also implements Blob_sender *and* Blob_receiver APIs; they are identical.)
    *
-   * In addition (to the reasons documented for the concept(s)) it shall no-op/warn/return `false`, if
-   * start_connect_ops() has already been called.
-   *
    * @param create_ev_wait_hndl_func
    *        See above.
    * @return See above.
@@ -394,30 +375,7 @@ public:
 
   // Connect-ops API.
 
-  /**
-   * Sets up the `sync_io`-pattern interaction between `*this` and the user's event loop; required before
-   * async_connect() will work (as opposed to no-op/return `false`).  If in PEER state it is unnecessary and shall
-   * no-op and return `false`.
-   *
-   * `ev_wait_func()` -- with signature matching util::sync_io::Event_wait_func -- is a key function memorized
-   * by `*this`.  It shall be invoked by `*this` operations when some op cannot complete synchronously and requires
-   * a certain event (readable/writable) to be active on a certain native-handle.
-   *
-   * @see util::sync_io::Event_wait_func doc header for useful and complete instructions on how to write an
-   *      `ev_wait_func()` properly.  Doing so correctly is the crux of using the `sync_io` pattern.
-   *
-   * This is a standard `sync_io`-pattern API per util::sync_io doc header.
-   *
-   * @tparam Event_wait_func_t
-   *         Function type matching util::sync_io::Event_wait_func.
-   * @param ev_wait_func
-   *        See above.
-   * @return `false` if this has already been invoked; no-op logging aside.  `true` otherwise.
-   */
-  template<typename Event_wait_func_t>
-  bool start_connect_ops(Event_wait_func_t&& ev_wait_func);
-
-  /**
+  /** XXX
    * See #Async_io_obj counterpart for the essential semantics; however here according to `sync_io` pattern
    * the operation may complete synchronously thus emitting result immediately and ignoring `on_done_func`.
    *
@@ -444,8 +402,7 @@ public:
    * @return See above.
    *
    */
-  template<typename Task_err>
-  bool async_connect(const Shared_name& absolute_name, Error_code* sync_err_code, Task_err&& on_done_func);
+  bool sync_connect(const Shared_name& absolute_name, Error_code* err_code);
 
   // Send-ops API.
 
@@ -765,31 +722,6 @@ private:
          (const Function<util::sync_io::Asio_waitable_native_handle ()>& create_ev_wait_hndl_func);
 
   /**
-   * Template-free version of start_connect_ops() as required by pImpl idiom.
-   *
-   * @param ev_wait_func
-   *        See above.
-   * @return See above.
-   */
-  bool start_connect_ops_fwd(util::sync_io::Event_wait_func&& ev_wait_func);
-
-  /**
-   * Template-free version of async_connect() as required by pImpl idiom.
-   *
-   * @param absolute_name
-   *        See above.
-   * @param sync_err_code
-   *        See above.
-   *        Do realize error::Code::S_SYNC_IO_WOULD_BLOCK *is* still an error, so if this pointer is null, then
-   *        would-block *will* make this throw.
-   * @param on_done_func
-   *        See above.
-   * @return See above.
-   */
-  bool async_connect_fwd(const Shared_name& absolute_name, Error_code* sync_err_code,
-                         flow::async::Task_asio_err&& on_done_func);
-
-  /**
    * Template-free version of start_send_native_handle_ops() as required by pImpl idiom.
    *
    * @param ev_wait_func
@@ -898,23 +830,6 @@ bool Native_socket_stream::replace_event_wait_handles(const Create_ev_wait_hndl_
   using util::sync_io::Asio_waitable_native_handle;
 
   return replace_event_wait_handles_fwd(create_ev_wait_hndl_func);
-}
-
-template<typename Event_wait_func_t>
-bool Native_socket_stream::start_connect_ops(Event_wait_func_t&& ev_wait_func)
-{
-  using util::sync_io::Event_wait_func;
-
-  return start_connect_ops_fwd(Event_wait_func(std::move(ev_wait_func)));
-}
-
-template<typename Task_err>
-bool Native_socket_stream::async_connect(const Shared_name& absolute_name, Error_code* sync_err_code,
-                                         Task_err&& on_done_func)
-{
-  using flow::async::Task_asio_err;
-
-  return async_connect_fwd(absolute_name, sync_err_code, Task_asio_err(std::move(on_done_func)));
 }
 
 template<typename Event_wait_func_t>

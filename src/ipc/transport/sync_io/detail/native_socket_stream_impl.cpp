@@ -41,7 +41,7 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
   m_state(State::S_NULL),
   m_protocol_negotiator(get_logger(), nickname(),
                         1, 1), // Initial protocol!  @todo Magic-number `const`(s), particularly if/when v2 exists.
-  m_ev_wait_hndl_peer_socket(m_ev_hndl_task_engine_unused), // This needs to be .assign()ed still.
+  m_ev_wait_hndl_peer_socket(m_ev_hndl_task_engine_unused), // This needs to be .assign()ed still, at least.
   m_timer_worker(get_logger(), flow::util::ostream_op_string(*this)),
 
   m_snd_finished(false),
@@ -63,15 +63,15 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
     (m_ev_hndl_task_engine_unused,
      Native_handle(m_rcv_idle_timer_fired_peer->native_handle()))
 {
-  // Keep in sync with release()!
-
   // m_*peer_socket essentially uninitialized for now; delegating ctor sets them up.
 }
 
 Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str) :
-  Impl(logger_ptr, nickname_str, nullptr)
+  Impl(logger_ptr, nickname_str, nullptr),
+  // Create the 1-thread loop, but do not start it yet (see { below }).
+  m_conn_async_worker(std::in_place, get_logger(), std::string("conn-") + nickname())
 {
-  // Keep in sync with release()!
+  using util::sync_io::Asio_waitable_native_handle;
 
   FLOW_LOG_INFO("Socket stream [" << *this << "]: In NULL state: Started timer thread.  Otherwise inactive.");
 
@@ -80,8 +80,59 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
         (m_nb_task_engine, // See its doc header if you're wondering about `_unused`.
          // Needs to be is_open() (hold an FD) -- see our doc header.  This arg makes it happen (omit => no FD).
          asio_local_stream_socket::local_ns::stream_protocol());
-  // Lastly load up the same FD into the watchee mirror.  See also replace_event_wait_handles().
-  m_ev_wait_hndl_peer_socket.assign(Native_handle(m_peer_socket->native_handle()));
+
+  /* Last thing is, in NULL state, we need to prep the *connect() machinery.  As discussed in XXX class doc header,
+   * the public API exposed is sync_connect(), whereas the following are private (in chronological order of execution):
+   *   -1- connect-ops counterpart of what replace_event_wait_handles() does for send-ops and receive-ops;
+   *   -2- start_connect_ops();
+   *   -3- async_connect().
+   * -3- is invoked from sync_connect() itself which of course is called by user as needed.  So now we do
+   * the other two. */
+
+  /* -1- replace_event_wait_handles() counterpart: Associate with the m_conn_async_worker thread; load up
+   * m_peer_socket's same FD into the watchee mirror ("needs to be .assign()ed still"). */
+
+  m_ev_wait_hndl_peer_socket = Asio_waitable_native_handle(m_conn_async_worker->task_engine(),
+                                                           m_peer_socket->native_handle());
+  /* When/if we go CONNECTING->PEER on async_connect() success, we must put m_ev_hndl_task_engine_unused back into
+   * m_ev_wait_hndl_peer_socket, thus making it ready for replace_event_wait_handles() -- if they plan to
+   * .async_wait() on it, as opposed to poll()/epoll()/etc., in which case m_ev_hndl_task_engine_unused stays
+   * and is unused (as per its name). */
+
+  /* -2- start_connect_ops(): We'll give it our .async_wait() machinery associated with m_conn_async_worker thread.
+   * This is much like, e.g., Async_adapter_sender ctor does. */
+  start_connect_ops([this](Asio_waitable_native_handle* hndl_of_interest, bool ev_of_interest_snd_else_rcv,
+                           Task_ptr&& on_active_ev_func)
+  {
+    FLOW_LOG_TRACE("Socket stream [" << *this << "]: Sync-IO connect-ops event-wait request: "
+                   "descriptor [" << Native_handle(hndl_of_interest->native_handle()) << "], "
+                   "writable-else-readable [" << ev_of_interest_snd_else_rcv << "].");
+
+    // They want this async_wait().  Oblige.
+    assert(hndl_of_interest);
+    hndl_of_interest->async_wait(ev_of_interest_snd_else_rcv
+                                   ? Asio_waitable_native_handle::Base::wait_write
+                                   : Asio_waitable_native_handle::Base::wait_read,
+                                 [this, on_active_ev_func = std::move(on_active_ev_func)]
+                                   (const Error_code& err_code)
+    {
+      // We are in m_conn_async_worker thread.  Nothing is locked.
+
+      if (err_code == boost::asio::error::operation_aborted)
+      {
+        return; // Stuff is shutting down.  GTFO.
+      }
+      // else
+
+      // They want to know about completed async_wait().  Oblige.
+
+      /* Inform Impl *this of the event.  This can (indeed will for sure, in our case -- writable socket =>
+       * connect completed) synchronously invoke handler we have registered via our this->async_connect() call
+       * in sync_connect(). */
+
+      (*on_active_ev_func)();
+    }); // hndl_of_interest->async_wait()
+  }); // start_connect_ops()
 } // Native_socket_stream::Impl::Impl()
 
 Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str,
@@ -96,7 +147,9 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
 
   m_state = State::S_PEER;
 
-  // Same deal as above ctor, except subsume the pre-connected Native_handle instead of making a new one.
+  /* Same deal as when going CONNECTING->PEER, except subsume the pre-connected Native_handle, and
+   * m_ev_wait_hndl_peer_socket is already associated with m_ev_hndl_task_engine_unused, so
+   * we just .assign() ("this needs to be .assign()ed still"). */
 
   m_peer_socket
     = boost::movelib::make_unique<asio_local_stream_socket::Peer_socket>
@@ -109,102 +162,6 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
   native_peer_socket_moved = Native_handle();
 } // Native_socket_stream::Impl::Impl()
 
-void Native_socket_stream::Impl::reset_sync_io_setup()
-{
-  using util::sync_io::Asio_waitable_native_handle;
-
-  /* Please see our doc header first.  That has important background.  Back here again?  Read on:
-   *   - We're supposed to undo start_receive_*_ops(), if it has been called.
-   *   - We're supposed to undo start_send_*_ops(), if it has been called.
-   *     - However, do *not* undo its send of protocol-negotiation out-message.  Well, that's impossible anyway.
-   *       More accurately: do *not* undo m_protocol_negotiator.local_max_proto_ver_for_sending() (i.e., do not
-   *       .reset()).  The effect of leaving that alone => start_send_*_ops() will skip attempt to send it (again).
-   *   - We're supposed to undo replace_event_wait_handles(), if it has been called.
-   *   - We must leave *this in a coherent state (so one can use it, as-if it had just been cted in PEER state).
-   *   - We can assume certain things that'll make the above (in aggregate) not hard.  Namely, none of these have
-   *     been called: async_receive_*(), send_*(), *end_sending(), auto_ping(), idle_timer_run().
-   *     That's very helpful, because it means no async-waits are currently in progress; which means undoing
-   *     the sync-op-pattern-init methods (start_*_ops() and/or replace_event_wait_handles()) doesn't lead to
-   *     an incoherent *this.
-   *     - It'd be nice to assert() on that wherever practical.
-   *     - HOWEVER!!!  A complicating factor is that, while no auto_ping() / send_*() / *end_sending() = helpful,
-   *       nevertheless a send-op *will* have been invoked from start_send_*_ops().  As noted above, it would have
-   *       sent the Protocol_negotiator out-message.  Thankfully, in actual fact, this can have caused one of
-   *       exactly 2 state change sets, firstly m_protocol_negotiator.local_max_proto_ver_for_sending() now returns
-   *       UNKNOWN plus secondly either
-   *       - (success -- likely) no other state change; or
-   *       - (failure -- unlikely) m_snd_pending_err_code is made truthy; m_peer_socket is nullified.
-   *       Undoing start_*_ops() and replace_event_wait_handles() does *not* conflict with any of these eventualities.
-   *       That is *this remains coherent.  To convince oneself of this, you only need to worry about the
-   *       "(failure -- unlikely)" case, but in doing so you may have to go through other *this code to achieve it.
-   *       Basically imagine *this after that scenario executes.
-   *       - At first it's before any start_*_ops() or replace_event_wait_handles(), at which point essentially only
-   *         those are callable.  Are they safe?  Yes:
-   *         - start_*_ops(F): It'll just memorize move(F); and start_send_*_ops() will detect that Protocol_negotiator
-   *           out-message was already sent and hence do nothing beyond memorizing move(F).
-   *         - replace_event_wait_handles(): It does not access m_peer_socket or m_snd_pending_err_code at all.
-   *       - Once they have been called: You can do other stuff, namely send_*(), async_receive_*(), and so on.
-   *         Are they safe?  Yes, of course: It's just the vanilla an-error-has-hosed-*this-in-PEER-state situation. */
-
-  // So first let's do our best to assert() the requirements.
-
-  assert((m_state == State::S_PEER) && "Must be in PEER state by contract.");
-
-  const bool hosed = !m_peer_socket;
-  assert((hosed == bool(m_snd_pending_err_code))
-         && "By contract we must not be in hosed state, unless due to internal initial-negotiation-send failing.");
-
-  FLOW_LOG_TRACE("Socket stream [" << *this << "]: Releasing idle-state object to new socket-stream core object.  "
-                 "To finish this: Undoing sync_io-pattern init steps to released core.  "
-                 "Is it hosed due to protocol-negotiation out-message send having failed? = [" << hosed << "].");
-
-  /* m_snd_pending_payloads_q being non-empty would mean there's an active async-wait; that'd be tough for us.
-   * Slight subtlety: the Protocol_negotiator out-message send ostensibly could encounter would-block and hence
-   * make this out-queue non-empty.  Except, no, it can't: there's no way the send buffer gets filled up by 1 small
-   * message.  So if it's non-empty, they must have send_*()ed stuff against contract. */
-  assert(m_snd_pending_payloads_q.empty()
-         && "Did you send_*() against contract?  No way should initial-protocol-negotiation-send yield would-block.");
-
-  assert((!m_snd_finished) && "Did you *end_sending() against contract?");
-  assert(m_snd_pending_on_last_send_done_func_or_empty.empty() && "Did you *end_sending() against contract?");
-  assert((m_snd_auto_ping_period == util::Fine_duration::zero()) && "Did you auto_ping() against contract?");
-  assert((!m_rcv_user_request) && "Did you async_receive_*() against contract?");
-  assert((!m_rcv_pending_err_code)
-         && "Did you async_receive_*() or idle_timer_run() against contract?");
-  assert((m_rcv_idle_timeout == util::Fine_duration::zero()) && "Did you idle_timer_run() against contract?");
-  assert((m_protocol_negotiator.negotiated_proto_ver() == Protocol_negotiator::S_VER_UNKNOWN)
-         && "Did you async_receive_*() or idle_timer_run() against contract?");
-
-  // Time to undo stuff.
-
-  /* start_*_ops() (excluding the m_protocol_negotiator out-message thing), in PEER state =
-   *   - Memorize a user-supplied func into m_snd_ev_wait_func.
-   *   - Ditto m_rcv_ev_wait_func.
-   * Therefore just do this (possibly no-op): */
-  m_snd_ev_wait_func.clear();
-  m_rcv_ev_wait_func.clear();
-  // Shouldn't matter in PEER state, but as of this writing replace_event_wait_handles() doesn't worry about state.  So:
-  m_conn_ev_wait_func.clear();
-
-  /* replace_event_wait_handles(), in PEER state =
-   *   For the 3 watchable FDs in *this -- m_ev_wait_hndl_peer_socket, m_snd_ev_wait_hndl_auto_ping_timer_fired_peer,
-   *   and m_rcv_ev_wait_hndl_idle_timer_fired_peer -- do this (for each guy S of those):
-   *     - Starting point: S contains a particular raw FD, associated with Task_engine m_ev_hndl_task_engine_unused.
-   *     - Do: Replace associated Task_engine m_ev_hndl_task_engine_unused with <user-supplied one via functor thing>.
-   * So to undo it just do reverse it essentially (possibly no-op): */
-  Native_handle saved(m_ev_wait_hndl_peer_socket.release());
-  m_ev_wait_hndl_peer_socket = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused);
-  m_ev_wait_hndl_peer_socket.assign(saved);
-
-  saved.m_native_handle = m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release();
-  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused);
-  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.assign(saved);
-
-  saved.m_native_handle = m_rcv_ev_wait_hndl_idle_timer_fired_peer.release();
-  m_rcv_ev_wait_hndl_idle_timer_fired_peer = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused);
-  m_rcv_ev_wait_hndl_idle_timer_fired_peer.assign(saved);
-} // Native_socket_stream::Impl::reset_sync_io_setup()
-
 Native_socket_stream::Impl::~Impl()
 {
   FLOW_LOG_INFO("Socket stream [" << *this << "]: Shutting down.  Next peer socket will close if open; "
@@ -212,45 +169,103 @@ Native_socket_stream::Impl::~Impl()
                 "handed out.");
 }
 
-bool Native_socket_stream::Impl::replace_event_wait_handles
-       (const Function<util::sync_io::Asio_waitable_native_handle ()>& create_ev_wait_hndl_func)
-{
-  if ((!m_conn_ev_wait_func.empty()) || (!m_snd_ev_wait_func.empty()) || (!m_rcv_ev_wait_func.empty()))
-  {
-    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Cannot replace event-wait handles after "
-                     "a start-*-ops procedure has been executed.  Ignoring.");
-    return false;
-  }
-  // else
-
-  FLOW_LOG_INFO("Socket stream [" << *this << "]: Replacing event-wait handles (probably to replace underlying "
-                "execution context without outside event loop's boost.asio Task_engine or similar).");
-
-  assert(m_ev_wait_hndl_peer_socket.is_open());
-  assert(m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.is_open());
-  assert(m_rcv_ev_wait_hndl_idle_timer_fired_peer.is_open());
-
-  Native_handle saved(m_ev_wait_hndl_peer_socket.release());
-  m_ev_wait_hndl_peer_socket = create_ev_wait_hndl_func();
-  m_ev_wait_hndl_peer_socket.assign(saved);
-
-  saved.m_native_handle = m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release();
-  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer = create_ev_wait_hndl_func();
-  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.assign(saved);
-
-  saved.m_native_handle = m_rcv_ev_wait_hndl_idle_timer_fired_peer.release();
-  m_rcv_ev_wait_hndl_idle_timer_fired_peer = create_ev_wait_hndl_func();
-  m_rcv_ev_wait_hndl_idle_timer_fired_peer.assign(saved);
-
-  return true;
-} // Native_socket_stream::Impl::replace_event_wait_handles()
-
 bool Native_socket_stream::Impl::start_connect_ops(util::sync_io::Event_wait_func&& ev_wait_func)
 {
   return start_ops<Op::S_CONN>(std::move(ev_wait_func));
 } // Native_socket_stream::Impl::start_connect_ops()
 
-bool Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name, Error_code* sync_err_code_ptr,
+bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
+{
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Native_socket_stream::Impl::sync_connect,
+                                     flow::util::bind_ns::cref(absolute_name), _1);
+  // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
+
+  if (m_state != State::S_NULL)
+  {
+    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Wanted to connect to [" << absolute_name << "] "
+                     "but already not in NULL state.  Ignoring.");
+    return false;
+  }
+  // else
+  assert(op_started<Op::S_CONN>("sync_connect"));
+
+  /* We don't m_conn_async_worker.start() in ctor, so we do it here -- and we will also .stop() it at the end.
+   * Rationale: We'd like to keep ourselves as perf-light-weight as is reasonably possible; as in particular
+   * the NULL-state ctor might be being invoked from transport::[sync_io::]Native_socket_stream default ctor,
+   * as (and this is a common scenario) the target of Native_socket_stream_acceptor::async_accept(), which
+   * will destroy *this Impl by move-assigning onto it via our pImpl setup.  Having a thread start/join occur
+   * in an essentially blank-forever *this is unnecessarily heavy.  The trade-off is that sync_connect() is
+   * framed by a thread stop/start, which is very confidently doable in under 1 millisecond total; and we
+   * consider this a small price given the expected frequency of sync_connect()s in reality, plus the
+   * operations that will run in this thread (not that those are heavy either).  Basically thread start/join
+   * inside sync_connect() is unlikely to bother anyone, whereas a thread start/join in an object whose
+   * purpose is to merely be overwritten via move-assign = obnoxious.
+   *
+   * Furthermore: All of the above holds, yes, but it's even nicer than that: async_connect(), per sync_io pattern,
+   * can yield immediate, synchronous success or failure; then we do not even need any thread.  Not only that,
+   * but if you look inside you'll see we say this is by far likelier than the converse.  (@todo Maybe we shouldn't
+   * even create m_conn_async_worker at all, unless we know we need to start the thread?  The only trouble is we'd
+   * then need to re-create m_ev_wait_hndl_peer_socket in here instead of the ctor, which is kind of messy
+   * consistency-wise w/r/t the other ctors.  It's probably OK as-is; probably the thread start/join is the heaviest
+   * aspect of all this, and if we typically avoid that, we've done fine.  Revisit sometime though.) */
+
+  async_connect(absolute_name, err_code, [&](const Error_code& async_err_code)
+  {
+    /* async_connect() yielded SYNC_IO_WOULD_BLOCK after issuing m_ev_wait_hndl_peer_socket.async_wait();
+     * we detected that below and are now dutifully blocking (for a very short time) until the promise is fulfilled.
+     * So fulfill it: */
+    *err_code = async_err_code;
+    done_promise.set_value();
+  });
+
+  if (*err_code == error::Code::S_SYNC_IO_WOULD_BLOCK)
+  {
+    /* m_conn_ev_wait_func() has been invoked, meaning there's an .async_wait() pending on m_conn_async_worker.
+     * We have not yet started the actual thread though; this is 100% allowed by boost.asio and consequently
+     * (and formally by its contract) Single_thread_task_loop.  Now we do need to start it though. */
+    m_conn_async_worker->start();
+
+    // And now we wait (for a very short time, at least in Linux; see class doc header discussion of sync_connect()).
+    done_promise.get_future().wait();
+
+    assert((*err_code != error::Code::S_SYNC_IO_WOULD_BLOCK)
+           && "Handler to async_connect() should've set *err_code, and async_connect() must never issue would-block "
+                "except synchronously.");
+
+    if (*err_code)
+    {
+      m_conn_async_worker->stop(); // Join (and destroy) thread until next sync_connect() attempt if any.
+    }
+    // else { We're gonna join it anyway (and blow away loop object) via m_conn_async_worker.reset() below. }
+  }
+  /* else if (*err_code == SYNC_IO_WOULD_BLOCK)
+   * {
+   *   Delightful (and very likely): It either sync-failed or sync-succeeded.  The handler won't be called.  Done:
+   *   Fall-through.
+   * } */
+
+  if (*err_code)
+  {
+    assert((m_state == State::S_NULL)
+           && "[A]synchronously-failed async_connect() should've gone back to NULL state by its contract.");
+  }
+  else
+  {
+    assert((m_state == State::S_PEER)
+           && "[A]synchronously-successful async_connect() should've resulted in PEER state by its contract.");
+    m_conn_async_worker.reset(); // Might as well free some RAM, in addition to joining thread if any.
+    m_conn_ev_wait_func.clear(); // Might as well free some RAM (minor but why not).
+
+    // See NULL-state ctor: we must swap-in m_ev_hndl_task_engine_unused into m_ev_wait_hndl_peer_socket.
+    m_ev_wait_hndl_peer_socket
+      = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
+                                    m_ev_wait_hndl_peer_socket.release().m_native_handle);
+  } // else if (!*err_code)
+
+  return true;
+} // Native_socket_stream::Impl::sync_connect()
+
+void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name, Error_code* sync_err_code_ptr,
                                                flow::async::Task_asio_err&& on_done_func)
 {
   namespace bind_ns = flow::util::bind_ns;
@@ -261,18 +276,15 @@ bool Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
   using flow::async::Task_asio_err;
   using util::Task;
 
-  if (m_state != State::S_NULL)
-  {
-    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Wanted to connect to [" << absolute_name << "] "
-                     "but already not in NULL state.  Ignoring.");
-    return false;
-  }
-  // else
-  if (!op_started<Op::S_CONN>("async_connect"))
-  {
-    return false;
-  }
-  // else
+  /* Maintenance note: If async_connect() becomes public at some point (alongside sync_connect() in some form),
+   * it'll need to return bool and perform the m_state/NULL and op_started<CONN>() checks here, returning
+   * false as appropriate, or continuing as appropriate.
+   *
+   * Maintenance note: sync_err_code_ptr can't be null now, but standard Flow-style error reporting semantics
+   * will need to be implemented (throw exception on error, if it's indeed null). */
+
+  assert(sync_err_code_ptr);
+  auto& sync_err_code = *sync_err_code_ptr;
 
   m_state = State::S_CONNECTING;
 
@@ -376,17 +388,6 @@ bool Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
 
   // If got here, sync_err_code indicates immediate success or failure of async_connect().
   m_state = sync_err_code ? State::S_NULL : State::S_PEER;
-
-  // Standard error-reporting semantics.
-  if ((!sync_err_code_ptr) && sync_err_code)
-  {
-    throw flow::error::Runtime_error(sync_err_code, "Native_socket_stream::Impl::async_connect()");
-  }
-  // else
-  sync_err_code_ptr && (*sync_err_code_ptr = sync_err_code);
-  // And if (!sync_err_code_ptr) + no error => no throw.
-
-  return true;
 } // Native_socket_stream::Impl::async_connect()
 
 void Native_socket_stream::Impl::conn_on_ev_peer_socket_writable(flow::async::Task_asio_err&& on_done_func)
@@ -407,6 +408,39 @@ void Native_socket_stream::Impl::conn_on_ev_peer_socket_writable(flow::async::Ta
   on_done_func(Error_code());
   FLOW_LOG_TRACE("Handler completed.");
 } // Native_socket_stream::Impl::conn_on_ev_peer_socket_writable()
+
+bool Native_socket_stream::Impl::replace_event_wait_handles
+       (const Function<util::sync_io::Asio_waitable_native_handle ()>& create_ev_wait_hndl_func)
+{
+  if ((!m_snd_ev_wait_func.empty()) || (!m_rcv_ev_wait_func.empty()))
+  {
+    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Cannot replace event-wait handles after "
+                     "a start-*-ops procedure has been executed.  Ignoring.");
+    return false;
+  }
+  // else
+
+  FLOW_LOG_INFO("Socket stream [" << *this << "]: Replacing event-wait handles (probably to replace underlying "
+                "execution context without outside event loop's boost.asio Task_engine or similar).");
+
+  assert(m_ev_wait_hndl_peer_socket.is_open());
+  assert(m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.is_open());
+  assert(m_rcv_ev_wait_hndl_idle_timer_fired_peer.is_open());
+
+  Native_handle saved(m_ev_wait_hndl_peer_socket.release());
+  m_ev_wait_hndl_peer_socket = create_ev_wait_hndl_func();
+  m_ev_wait_hndl_peer_socket.assign(saved);
+
+  saved.m_native_handle = m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release();
+  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer = create_ev_wait_hndl_func();
+  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.assign(saved);
+
+  saved.m_native_handle = m_rcv_ev_wait_hndl_idle_timer_fired_peer.release();
+  m_rcv_ev_wait_hndl_idle_timer_fired_peer = create_ev_wait_hndl_func();
+  m_rcv_ev_wait_hndl_idle_timer_fired_peer.assign(saved);
+
+  return true;
+} // Native_socket_stream::Impl::replace_event_wait_handles()
 
 util::Process_credentials
   Native_socket_stream::Impl::remote_peer_process_credentials(Error_code* err_code) const
@@ -459,5 +493,101 @@ std::ostream& operator<<(std::ostream& os, const Native_socket_stream::Impl& val
 {
   return os << "SIO[" << val.nickname() << "]@" << static_cast<const void*>(&val);
 }
+
+#if 0
+void Native_socket_stream::Impl::reset_sync_io_setup()
+{
+  using util::sync_io::Asio_waitable_native_handle;
+
+  /* Please see our doc header first.  That has important background.  Back here again?  Read on:
+   *   - We're supposed to undo start_receive_*_ops(), if it has been called.
+   *   - We're supposed to undo start_send_*_ops(), if it has been called.
+   *     - However, do *not* undo its send of protocol-negotiation out-message.  Well, that's impossible anyway.
+   *       More accurately: do *not* undo m_protocol_negotiator.local_max_proto_ver_for_sending() (i.e., do not
+   *       .reset()).  The effect of leaving that alone => start_send_*_ops() will skip attempt to send it (again).
+   *   - We're supposed to undo replace_event_wait_handles(), if it has been called.
+   *   - We must leave *this in a coherent state (so one can use it, as-if it had just been cted in PEER state).
+   *   - We can assume certain things that'll make the above (in aggregate) not hard.  Namely, none of these have
+   *     been called: async_receive_*(), send_*(), *end_sending(), auto_ping(), idle_timer_run().
+   *     That's very helpful, because it means no async-waits are currently in progress; which means undoing
+   *     the sync-op-pattern-init methods (start_*_ops() and/or replace_event_wait_handles()) doesn't lead to
+   *     an incoherent *this.
+   *     - It'd be nice to assert() on that wherever practical.
+   *     - HOWEVER!!!  A complicating factor is that, while no auto_ping() / send_*() / *end_sending() = helpful,
+   *       nevertheless a send-op *will* have been invoked from start_send_*_ops().  As noted above, it would have
+   *       sent the Protocol_negotiator out-message.  Thankfully, in actual fact, this can have caused one of
+   *       exactly 2 state change sets, firstly m_protocol_negotiator.local_max_proto_ver_for_sending() now returns
+   *       UNKNOWN plus secondly either
+   *       - (success -- likely) no other state change; or
+   *       - (failure -- unlikely) m_snd_pending_err_code is made truthy; m_peer_socket is nullified.
+   *       Undoing start_*_ops() and replace_event_wait_handles() does *not* conflict with any of these eventualities.
+   *       That is *this remains coherent.  To convince oneself of this, you only need to worry about the
+   *       "(failure -- unlikely)" case, but in doing so you may have to go through other *this code to achieve it.
+   *       Basically imagine *this after that scenario executes.
+   *       - At first it's before any start_*_ops() or replace_event_wait_handles(), at which point essentially only
+   *         those are callable.  Are they safe?  Yes:
+   *         - start_*_ops(F): It'll just memorize move(F); and start_send_*_ops() will detect that Protocol_negotiator
+   *           out-message was already sent and hence do nothing beyond memorizing move(F).
+   *         - replace_event_wait_handles(): It does not access m_peer_socket or m_snd_pending_err_code at all.
+   *       - Once they have been called: You can do other stuff, namely send_*(), async_receive_*(), and so on.
+   *         Are they safe?  Yes, of course: It's just the vanilla an-error-has-hosed-*this-in-PEER-state situation. */
+
+  // So first let's do our best to assert() the requirements.
+
+  assert((m_state == State::S_PEER) && "Must be in PEER state by contract.");
+
+  const bool hosed = !m_peer_socket;
+  assert((hosed == bool(m_snd_pending_err_code))
+         && "By contract we must not be in hosed state, unless due to internal initial-negotiation-send failing.");
+
+  FLOW_LOG_TRACE("Socket stream [" << *this << "]: Releasing idle-state object to new socket-stream core object.  "
+                 "To finish this: Undoing sync_io-pattern init steps to released core.  "
+                 "Is it hosed due to protocol-negotiation out-message send having failed? = [" << hosed << "].");
+
+  /* m_snd_pending_payloads_q being non-empty would mean there's an active async-wait; that'd be tough for us.
+   * Slight subtlety: the Protocol_negotiator out-message send ostensibly could encounter would-block and hence
+   * make this out-queue non-empty.  Except, no, it can't: there's no way the send buffer gets filled up by 1 small
+   * message.  So if it's non-empty, they must have send_*()ed stuff against contract. */
+  assert(m_snd_pending_payloads_q.empty()
+         && "Did you send_*() against contract?  No way should initial-protocol-negotiation-send yield would-block.");
+
+  assert((!m_snd_finished) && "Did you *end_sending() against contract?");
+  assert(m_snd_pending_on_last_send_done_func_or_empty.empty() && "Did you *end_sending() against contract?");
+  assert((m_snd_auto_ping_period == util::Fine_duration::zero()) && "Did you auto_ping() against contract?");
+  assert((!m_rcv_user_request) && "Did you async_receive_*() against contract?");
+  assert((!m_rcv_pending_err_code)
+         && "Did you async_receive_*() or idle_timer_run() against contract?");
+  assert((m_rcv_idle_timeout == util::Fine_duration::zero()) && "Did you idle_timer_run() against contract?");
+  assert((m_protocol_negotiator.negotiated_proto_ver() == Protocol_negotiator::S_VER_UNKNOWN)
+         && "Did you async_receive_*() or idle_timer_run() against contract?");
+
+  // Time to undo stuff.
+
+  /* start_*_ops() (excluding the m_protocol_negotiator out-message thing), in PEER state =
+   *   - Memorize a user-supplied func into m_snd_ev_wait_func.
+   *   - Ditto m_rcv_ev_wait_func.
+   * Therefore just do this (possibly no-op): */
+  m_snd_ev_wait_func.clear();
+  m_rcv_ev_wait_func.clear();
+
+  /* replace_event_wait_handles(), in PEER state =
+   *   For the 3 watchable FDs in *this -- m_ev_wait_hndl_peer_socket, m_snd_ev_wait_hndl_auto_ping_timer_fired_peer,
+   *   and m_rcv_ev_wait_hndl_idle_timer_fired_peer -- do this (for each guy S of those):
+   *     - Starting point: S contains a particular raw FD, associated with Task_engine m_ev_hndl_task_engine_unused.
+   *     - Do: Replace associated Task_engine m_ev_hndl_task_engine_unused with <user-supplied one via functor thing>.
+   * So to undo it just do reverse it essentially (possibly no-op): */
+  m_ev_wait_hndl_peer_socket
+    = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
+                                  m_ev_wait_hndl_peer_socket.release().m_native_handle);
+
+  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer
+    = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
+                                  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release().m_native_handle);
+
+  m_rcv_ev_wait_hndl_idle_timer_fired_peer
+    = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
+                                  m_rcv_ev_wait_hndl_idle_timer_fired_peer.release().m_native_handle);
+} // Native_socket_stream::Impl::reset_sync_io_setup()
+#endif
 
 } // namespace ipc::transport::sync_io

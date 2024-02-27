@@ -121,19 +121,15 @@ namespace ipc::transport
  * However: the other 2 bullet points (first one and the sub-bullet under it) do operate on the same data
  * from threads U and W potentially concurrently.  (Note: usually it is not necessary to engage thread W,
  * except for receive-ops.  A receive-op may indeed commonly encounter would-block, simply because no data have
- * arrived yet. Otherwise: For connect-ops, a Unix-domain-socket connect is actually non-blocking and sync-completes.
- * For send-ops, `m_sync_io` will synchronously succeed in each send, including that of graceful-close
- * due to `*end_sending()`, unless the kernel buffer is full and gives would-block -- only if the opposing side
- * is not reading in timely fashion.  The sparing use of multi-threading, instead completing stuff synchronously
- * whenever humanly possible, is a good property of this design that uses a `sync_io` core.)
+ * arrived yet.  Otherwise: For send-ops, `m_sync_io` will synchronously succeed in each send, including that of
+ * graceful-close due to `*end_sending()`, unless the kernel buffer is full and gives would-block -- only if the
+ * opposing side is not reading in timely fashion.  The sparing use of multi-threading, instead completing stuff
+ * synchronously whenever humanly possible, is a good property of this design that uses a `sync_io` core.)
  *
  * That brings us to:
  *
  * ### Locking ###
- * All connect logic, other than invoking the completion handler (done separately via `post()`ing onto thread W)
- * is bracketed by an Impl::m_conn_mutex lock.
- *
- * All receive logic is similarly bracketed by a different lock, sync_io::Async_adapter_receiver::m_mutex.
+ * All receive logic is bracketed by a lock, sync_io::Async_adapter_receiver::m_mutex.
  * Lock contention occurs only if more `async_receive_*()` requests are made while one is in progress.
  * This is, we guess, relatively rare.
  *
@@ -148,24 +144,6 @@ namespace ipc::transport
  *
  * ### Incoming-direction impl design ###
  * @see sync_io::Async_adapter_receiver where all that is encapsulated.
- *
- * ### Connect impl design ###
- * If and only if we are constructed in NULL state, then the only allowed operation is async_connect().
- *
- * This is almost entirely subsumed by our `sync_io` core: Impl::m_sync_io, an instance of
- * sync_io::Native_socket_stream.  It has a connect op-type, so we invoke
- * its sync_io::Native_socket_stream::start_connect_ops() during our initialization.  After that:
- *
- * async_connect() takes a completion handler.  Simple enough -- we could just capture
- * this `on_done_func` (from the user arg) in a lambda, then when `m_sync_io` calls our internal handler
- * (synchronously), we `post(on_done_func)` onto thread W, and that's it.  They can then do sending/receiving,
- * as we are in PEER state (or if it failed, NULL state -- they can async_connect() again).
- *
- * However, that's not sufficient, as if they call our dtor before that can complete, then we are to
- * invoke `on_done_func(E)` where E = operation-aborted (by our contract).  So we save `on_done_func` into
- * `m_conn_on_done_func` instead of capturing it.
- *
- * That reads a lot like how async_end_sending() is handled in `Async_adapter_sender`: and it is.
  */
 class Native_socket_stream::Impl :
   public flow::log::Log_context,
@@ -218,11 +196,31 @@ public:
 
   // Methods.
 
+#if 0
+  /** XXX
+   * In PEER state only, with no prior send or receive ops, returns a sync_io::Native_socket_stream core
+   * (as-if just constructed) operating on `*this` underlying low-level transport `Native_handle`; while
+   * `*this` becomes as-if default-cted.
+   *
+   * This can be useful if one desires a `sync_io` core -- e.g., to bundle into a Channel to then feed to
+   * a struc::Channel ctor -- after a successful async-I/O-style async_connect() advanced `*this`
+   * from NULL to CONNECTING to PEER state.
+   *
+   * In a sense it's the reverse of `*this` `sync_io`-core-adopting ctor.
+   *
+   * Behavior is undefined if `*this` is not in PEER state, or if it is, but you've invoked `async_receive_*()`,
+   * `send_*()`, `*end_sending()`, auto_ping(), or idle_timer_run() in the past.  Please be careful.
+   *
+   * @return See above.
+   */
+  Sync_io_obj release();
+
   /**
    * See Native_socket_stream counterpart.
    * @return See Native_socket_stream counterpart.
    */
   sync_io::Native_socket_stream release();
+#endif
 
   /**
    * See Native_socket_stream counterpart.
@@ -230,7 +228,7 @@ public:
    */
   const std::string& nickname() const;
 
-  /**
+  /**XXX
    * See Native_socket_stream counterpart.
    *
    * @param absolute_name
@@ -239,7 +237,7 @@ public:
    *        See Native_socket_stream counterpart.
    * @return See Native_socket_stream counterpart.
    */
-  bool async_connect(const Shared_name& absolute_name, flow::async::Task_asio_err&& on_done_func);
+  bool sync_connect(const Shared_name& absolute_name, Error_code* err_code);
 
   /**
    * See Native_socket_stream counterpart.
@@ -360,11 +358,11 @@ private:
 
   /**
    * Core delegated-to ctor: does everything except `m_sync_io.start_*_ops()`.
-   * Delegating ctor shall `m_sync_io.start_connect_ops()` if starting in NULL state;
+   * Delegating ctor shall do nothing further if starting in NULL state;
    * else (starting directly in PEER state) it will delegate `m_sync_io.start_receive/send_*_ops()`
    * to #m_snd_sync_io_adapter and #m_rcv_sync_io_adapter which it will initialize.
    *
-   * Therefore if entering PEER state due to successful async_connect(), #m_snd_sync_io_adapter and
+   * Therefore if entering PEER state due to successful sync_connect(), #m_snd_sync_io_adapter and
    * #m_rcv_sync_io_adapter will be created at that time.
    *
    * `get_logger()` and nickname() values are obtained from `sync_io_core_moved`.
@@ -376,48 +374,6 @@ private:
    *        Ctor-selecting tag.
    */
   explicit Impl(sync_io::Native_socket_stream&& sync_io_core_moved, std::nullptr_t tag);
-
-  // Methods.
-
-  // Connect-ops.
-
-  /**
-   * Executes a connect-ops-related async-wait as requested by `m_sync_io` (the `sync_io` core).
-   * It is *synchronously* invoked by `m_sync_io` as needed, whenever it cannot proceed with something we've
-   * asked it to do without a native-handle being readable or writable (according to its needs).
-   *
-   * While formally it's a black box, in our case, in reality, sync_io::Native_socket_stream might merely
-   * ask us to wait on the owned `Peer_socket` being writable (which indicates it is connected, or at least hosed beyond
-   * repair).
-   *
-   * Per impl design in our class doc header, the async-wait-completed handler first locks
-   * #m_conn_mutex -- so as to protect against another async_connect() occurring during an oustanding
-   * async-connect.
-   *
-   * @param hndl_of_interest
-   *        See util::sync_io::Event_wait_func doc header.
-   * @param ev_of_interest_snd_else_rcv
-   *        See util::sync_io::Event_wait_func doc header.
-   * @param on_active_ev_func
-   *        See util::sync_io::Event_wait_func doc header.
-   *        In our case, when/if we do invoke this, we lock #m_conn_mutex; and in reality it will
-   *        then invoke conn_on_sync_io_connect().
-   */
-  void conn_sync_io_ev_wait(util::sync_io::Asio_waitable_native_handle* hndl_of_interest,
-                            bool ev_of_interest_snd_else_rcv, util::sync_io::Task_ptr&& on_active_ev_func);
-
-  /**
-   * Invoked via active-event API, or directly, handles the sync or async completion
-   * of `m_sync_io.async_connect()` operation.  Can be invoked from thread U or thread W, and #m_conn_mutex must be
-   * locked.  #m_conn_on_done_func must not be `.empty()`.  Post-condition: it has been made `.empty()`,
-   * and a `move()`d version of it has been posted onto thread W.
-   *
-   * @param absolute_name
-   *        See async_connect().
-   * @param err_code
-   *        Result to pass to user.
-   */
-  void conn_on_sync_io_connect(const Shared_name& absolute_name, const Error_code& err_code);
 
   // Data.
 
@@ -452,30 +408,6 @@ private:
    * creation, the fact that #m_sync_io is destroyed before #m_worker has no bad effect.
    */
   sync_io::Native_socket_stream m_sync_io;
-
-  // Connect-ops data.
-
-  /**
-   * The `on_done_func` argument to async_connect(); `.empty()` except while async_connect() is outstanding
-   * and has not executed it yet.  Note that if connection does not occur before dtor executes, dtor will
-   * invoke the handler with operation-aborted code.
-   *
-   * It would not need to be a member -- could just be captured in lambdas while async_connect() is outstanding --
-   * except for the need to still invoke it with operation-aborted from dtor in the aforementioned case.
-   *
-   * Protected by #m_conn_mutex.
-   */
-  flow::async::Task_asio_err m_conn_on_done_func;
-
-  /**
-   * Protects #m_conn_on_done_func and connect-ops data of #m_sync_io.
-   * Hence async_connect() engages sync_io::Native_socket_stream::async_connect() in thread U; while
-   * a util::sync_io::Event_wait_func `on_active_ev_func()` invocation (on active socket) as requested by
-   * sync_io::Native_socket_stream will invoke logic inside the latter, which may invoke our on-connect-result
-   * handler, which will invoke and clear #m_conn_on_done_func -- all in thread W.  These operations
-   * may touch the same data in threads U and W -- but not concurrently, due to this mutex.
-   */
-  mutable flow::util::Mutex_non_recursive m_conn_mutex;
 
   // Send-ops data.
 

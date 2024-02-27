@@ -80,12 +80,19 @@ const std::string& Native_socket_stream::nickname() const
   return impl()->nickname();
 }
 
+bool Native_socket_stream::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
+{
+  return impl()->sync_connect(absolute_name, err_code);
+}
+
+#if 0 // XXX
 Native_socket_stream Native_socket_stream::release()
 {
   auto sock = std::move(*this);
   sock.impl()->reset_sync_io_setup();
   return sock;
 }
+#endif
 
 util::Process_credentials Native_socket_stream::remote_peer_process_credentials(Error_code* err_code) const
 {
@@ -156,17 +163,6 @@ bool Native_socket_stream::replace_event_wait_handles_fwd
        (const Function<util::sync_io::Asio_waitable_native_handle ()>& create_ev_wait_hndl_func)
 {
   return impl()->replace_event_wait_handles(create_ev_wait_hndl_func);
-}
-
-bool Native_socket_stream::start_connect_ops_fwd(util::sync_io::Event_wait_func&& ev_wait_func)
-{
-  return impl()->start_connect_ops(std::move(ev_wait_func));
-}
-
-bool Native_socket_stream::async_connect_fwd(const Shared_name& absolute_name, Error_code* sync_err_code,
-                                             flow::async::Task_asio_err&& on_done_func)
-{
-  return impl()->async_connect(absolute_name, sync_err_code, std::move(on_done_func));
 }
 
 bool Native_socket_stream::start_send_native_handle_ops_fwd(util::sync_io::Event_wait_func&& ev_wait_func)
