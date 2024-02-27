@@ -183,6 +183,8 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
                                      flow::util::bind_ns::cref(absolute_name), _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
+  using boost::promise;
+
   if (m_state != State::S_NULL)
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: Wanted to connect to [" << absolute_name << "] "
@@ -212,6 +214,7 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
    * consistency-wise w/r/t the other ctors.  It's probably OK as-is; probably the thread start/join is the heaviest
    * aspect of all this, and if we typically avoid that, we've done fine.  Revisit sometime though.) */
 
+  promise<void> done_promise;
   async_connect(absolute_name, err_code, [&](const Error_code& async_err_code)
   {
     /* async_connect() yielded SYNC_IO_WOULD_BLOCK after issuing m_ev_wait_hndl_peer_socket.async_wait();
@@ -261,8 +264,7 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
 
     // See NULL-state ctor: we must swap-in m_ev_hndl_task_engine_unused into m_ev_wait_hndl_peer_socket.
     m_ev_wait_hndl_peer_socket
-      = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
-                                    m_ev_wait_hndl_peer_socket.release().m_native_handle);
+      = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused, m_ev_wait_hndl_peer_socket.release());
   } // else if (!*err_code)
 
   return true;
@@ -581,15 +583,15 @@ void Native_socket_stream::Impl::reset_sync_io_setup()
    * So to undo it just do reverse it essentially (possibly no-op): */
   m_ev_wait_hndl_peer_socket
     = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
-                                  m_ev_wait_hndl_peer_socket.release().m_native_handle);
+                                  m_ev_wait_hndl_peer_socket.release());
 
   m_snd_ev_wait_hndl_auto_ping_timer_fired_peer
     = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
-                                  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release().m_native_handle);
+                                  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release());
 
   m_rcv_ev_wait_hndl_idle_timer_fired_peer
     = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
-                                  m_rcv_ev_wait_hndl_idle_timer_fired_peer.release().m_native_handle);
+                                  m_rcv_ev_wait_hndl_idle_timer_fired_peer.release());
 } // Native_socket_stream::Impl::reset_sync_io_setup()
 #endif
 
