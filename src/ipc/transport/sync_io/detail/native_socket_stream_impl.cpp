@@ -222,6 +222,8 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
   promise<void> done_promise;
   async_connect(absolute_name, err_code, [&](const Error_code& async_err_code)
   {
+    // We are in m_conn_async_worker (short-lived) thread.
+
     /* async_connect() yielded SYNC_IO_WOULD_BLOCK after issuing m_ev_wait_hndl_peer_socket.async_wait();
      * we detected that below and are now dutifully blocking (for a very short time) until the promise is fulfilled.
      * So fulfill it: */
@@ -255,6 +257,9 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
    *   Fall-through.
    * } */
 
+  // As promised above, put this back to restore normal replace_event_wait_handles() capability to user.
+  m_ev_wait_hndl_peer_socket = std::move(saved_ev_wait_hndl_peer_socket);
+
   if (*err_code)
   {
     assert((m_state == State::S_NULL)
@@ -268,9 +273,6 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
     m_conn_async_worker.reset(); // Might as well free some RAM, in addition to joining thread if any.
     m_conn_ev_wait_func.clear(); // Might as well free some RAM (minor but why not).
   } // else if (!*err_code)
-
-  // As promised above, put this back to restore normal replace_event_wait_handles() capability to user.
-  m_ev_wait_hndl_peer_socket = std::move(saved_ev_wait_hndl_peer_socket);
 
   return true;
 } // Native_socket_stream::Impl::sync_connect()
