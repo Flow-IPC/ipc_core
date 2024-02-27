@@ -366,8 +366,10 @@ void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
         }));
 
         sync_err_code = error::Code::S_SYNC_IO_WOULD_BLOCK;
+        return;
       }
-      else if (sync_err_code)
+      // else
+      if (sync_err_code)
       {
         FLOW_LOG_WARNING("Socket stream [" << *this << "]: boost::asio::connect() (non-blocking) completed "
                          "immediately but with error [" << sync_err_code << "] [" << sync_err_code.message() << "].  "
