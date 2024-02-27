@@ -475,7 +475,7 @@ public:
    *        If interrupted by destructor the operation-aborted code is passed instead (see ~Native_socket_stream()
    *        doc header).
    */
-  bool sync_connect(const Shared_name& absolute_name, Error_code* err_code);
+  bool sync_connect(const Shared_name& absolute_name, Error_code* err_code = 0);
 
   // Send-ops API.
 

@@ -179,12 +179,12 @@ bool Native_socket_stream::Impl::start_connect_ops(util::sync_io::Event_wait_fun
 
 bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
 {
+  using util::sync_io::Asio_waitable_native_handle;
+  using boost::promise;
+
   FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Native_socket_stream::Impl::sync_connect,
                                      flow::util::bind_ns::cref(absolute_name), _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
-
-  using util::sync_io::Asio_waitable_native_handle;
-  using boost::promise;
 
   if (m_state != State::S_NULL)
   {
@@ -241,9 +241,9 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
 
     if (*err_code)
     {
-      m_conn_async_worker->stop(); // Join (and destroy) thread until next sync_connect() attempt if any.
+      m_conn_async_worker->stop(); // Stop/join thread until next sync_connect() attempt if any.
     }
-    // else { We're gonna join it anyway (and blow away loop object) via m_conn_async_worker.reset() below. }
+    // else if (!*err_code) { PEER state: thread will be stopped/joined when we blow away *m_conn_async_worker below. }
   }
   /* else if (*err_code == SYNC_IO_WOULD_BLOCK)
    * {
@@ -260,12 +260,13 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
   {
     assert((m_state == State::S_PEER)
            && "[A]synchronously-successful async_connect() should've resulted in PEER state by its contract.");
-    m_conn_async_worker.reset(); // Might as well free some RAM, in addition to joining thread if any.
-    m_conn_ev_wait_func.clear(); // Might as well free some RAM (minor but why not).
 
     // See NULL-state ctor: we must swap-in m_ev_hndl_task_engine_unused into m_ev_wait_hndl_peer_socket.
     m_ev_wait_hndl_peer_socket
       = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused, m_ev_wait_hndl_peer_socket.release());
+
+    m_conn_async_worker.reset(); // Might as well free some RAM, in addition to joining thread if any.
+    m_conn_ev_wait_func.clear(); // Might as well free some RAM (minor but why not).
   } // else if (!*err_code)
 
   return true;

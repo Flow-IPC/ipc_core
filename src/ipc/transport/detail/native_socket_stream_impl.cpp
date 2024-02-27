@@ -181,11 +181,11 @@ Native_socket_stream::Impl::~Impl()
 
 bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
 {
+  using flow::util::ostream_op_string;
+
   FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Native_socket_stream::Impl::sync_connect,
                                      flow::util::bind_ns::cref(absolute_name), _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
-
-  using flow::util::ostream_op_string;
 
   if (!m_sync_io.sync_connect(absolute_name, err_code))
   {

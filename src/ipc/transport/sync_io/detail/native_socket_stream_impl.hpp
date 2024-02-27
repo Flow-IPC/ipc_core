@@ -1137,6 +1137,9 @@ private:
    */
   flow::util::Task_engine m_ev_hndl_task_engine_unused;
 
+  // XXX
+  std::optional<flow::async::Single_thread_task_loop> m_conn_async_worker;
+
   /**
    * The peer stream-type Unix domain socket; or null pointer if we've detected the connection has become hosed
    * and hence closed+destroyed the boost.asio `Peer_socket`.  Note that (1) it starts non-null, and is in
@@ -1273,9 +1276,6 @@ private:
    * doc header for a refresher on this mechanic.
    */
   util::sync_io::Event_wait_func m_conn_ev_wait_func;
-
-  // XXX
-  std::optional<flow::async::Single_thread_task_loop> m_conn_async_worker;
 
   // Outgoing-direction data.
 
