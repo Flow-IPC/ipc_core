@@ -350,7 +350,8 @@ void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
     if (!sync_err_code)
     {
       m_peer_socket->connect(remote_endpoint, sync_err_code);
-      sync_err_code = boost::asio::error::would_block; // XXX no!
+      /* Debug/test note: can force rare async code path here: `sync_err_code = boost::asio::error::would_block;`
+       * Don't commit that obviously.  @todo Unit test. */
       if (sync_err_code == boost::asio::error::would_block)
       {
         FLOW_LOG_INFO("Socket stream [" << *this << "]: boost::asio::connect() (non-blocking) got would-block; "
