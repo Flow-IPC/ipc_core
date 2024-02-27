@@ -70,6 +70,7 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
   Impl(logger_ptr, nickname_str, nullptr)
 {
   using util::sync_io::Asio_waitable_native_handle;
+  using util::sync_io::Task_ptr;
   using std::string;
 
   FLOW_LOG_INFO("Socket stream [" << *this << "]: In NULL state: Started timer thread.  Otherwise inactive.");
@@ -90,6 +91,9 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
 
   /* -1- replace_event_wait_handles() counterpart: Associate with the m_conn_async_worker thread; load up
    * m_peer_socket's same FD into the watchee mirror ("needs to be .assign()ed still"). */
+
+  // Create the single-thread loop object, but do not .start() thread yet (see sync_connect() as to why not).
+  m_conn_async_worker.emplace(get_logger(), string("conn-") + nickname());
 
   m_ev_wait_hndl_peer_socket = Asio_waitable_native_handle(*(m_conn_async_worker->task_engine()),
                                                            m_peer_socket->native_handle());
@@ -112,7 +116,7 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
     hndl_of_interest->async_wait(ev_of_interest_snd_else_rcv
                                    ? Asio_waitable_native_handle::Base::wait_write
                                    : Asio_waitable_native_handle::Base::wait_read,
-                                 [this, on_active_ev_func = std::move(on_active_ev_func)]
+                                 [on_active_ev_func = std::move(on_active_ev_func)]
                                    (const Error_code& err_code)
     {
       // We are in m_conn_async_worker thread.  Nothing is locked.
@@ -132,9 +136,6 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
       (*on_active_ev_func)();
     }); // hndl_of_interest->async_wait()
   }); // start_connect_ops()
-
-  // Create the single-thread loop object, but do not .start() thread yet (see sync_connect() as to why not).
-  m_conn_async_worker.emplace(get_logger(), string("conn-") + nickname())
 } // Native_socket_stream::Impl::Impl()
 
 Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str,
