@@ -67,11 +67,10 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
 }
 
 Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str) :
-  Impl(logger_ptr, nickname_str, nullptr),
-  // Create the 1-thread loop, but do not start it yet (see { below }).
-  m_conn_async_worker(std::in_place, get_logger(), std::string("conn-") + nickname())
+  Impl(logger_ptr, nickname_str, nullptr)
 {
   using util::sync_io::Asio_waitable_native_handle;
+  using std::string;
 
   FLOW_LOG_INFO("Socket stream [" << *this << "]: In NULL state: Started timer thread.  Otherwise inactive.");
 
@@ -92,7 +91,7 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
   /* -1- replace_event_wait_handles() counterpart: Associate with the m_conn_async_worker thread; load up
    * m_peer_socket's same FD into the watchee mirror ("needs to be .assign()ed still"). */
 
-  m_ev_wait_hndl_peer_socket = Asio_waitable_native_handle(m_conn_async_worker->task_engine(),
+  m_ev_wait_hndl_peer_socket = Asio_waitable_native_handle(*(m_conn_async_worker->task_engine()),
                                                            m_peer_socket->native_handle());
   /* When/if we go CONNECTING->PEER on async_connect() success, we must put m_ev_hndl_task_engine_unused back into
    * m_ev_wait_hndl_peer_socket, thus making it ready for replace_event_wait_handles() -- if they plan to
@@ -133,6 +132,9 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
       (*on_active_ev_func)();
     }); // hndl_of_interest->async_wait()
   }); // start_connect_ops()
+
+  // Create the single-thread loop object, but do not .start() thread yet (see sync_connect() as to why not).
+  m_conn_async_worker.emplace(get_logger(), string("conn-") + nickname())
 } // Native_socket_stream::Impl::Impl()
 
 Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str,

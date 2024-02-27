@@ -18,6 +18,7 @@
 /// @file
 #include "ipc/transport/detail/native_socket_stream_impl.hpp"
 #include "ipc/transport/error.hpp"
+#include "flow/error/error.hpp"
 #include <boost/move/make_unique.hpp>
 #include <cstddef>
 

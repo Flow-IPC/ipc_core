@@ -1521,7 +1521,7 @@ bool Native_socket_stream::Impl::start_ops(util::sync_io::Event_wait_func&& ev_w
       FLOW_LOG_WARNING("Socket stream [" << *this << "]: Start-connect-ops requested, but we are already (and "
                        "irreversibly) in PEER state.  Ignoring... though this must be an internal bug; "
                        "assertion-trip imminent.");
-      assert(false && "Start-connect-ops requested, but we are already (and irreversibly) in PEER state.  Bug?")
+      assert(false && "Start-connect-ops requested, but we are already (and irreversibly) in PEER state.  Bug?");
       return false;
     }
     // else
