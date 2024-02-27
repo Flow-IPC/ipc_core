@@ -57,7 +57,7 @@ namespace ipc::transport::sync_io
  *   - Socket-stream has to worry about both directions *and* (some) interaction between the two (even though it
  *     is full-duplex).  We do not.  There are no mutual concurrency issues to speak of in particular.
  *   - Socket-stream has to worry about going from NULL state to PEER state via CONNECTING (optionally) --
- *     `async_connect()`.  We do not: the `_impl` is always in PEER state (unless ctor failed, but that's not
+ *     XXX`async_connect()`.  We do not: the `_impl` is always in PEER state (unless ctor failed, but that's not
  *     interesting).
  *   - Socket-stream must be able to transmit `Native_handle`s, and when applicable they correspond in a tricky way
  *     to byte 1 of the containing send/receive call.  We do not transmit them -- just blobs.

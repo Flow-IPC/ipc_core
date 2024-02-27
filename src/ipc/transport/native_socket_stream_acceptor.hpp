@@ -45,7 +45,7 @@ namespace ipc::transport
  *       async-I/O-pattern Channel via: `auto async_c = sync_c.async_io_obj()`.
  *
  * @see Native_socket_stream doc header.
- * @see Native_socket_stream::async_connect() doc header.
+ * @see Native_socket_stream::async_connect() doc header.XXX
  *
  * This object is straightforward to use, and really the only difficulty comes from (1) choosing a Shared_name and
  * (2) the other side knowing that name.  Before deciding to use it and how to use it, it is essential to read
@@ -65,7 +65,7 @@ namespace ipc::transport
  * given ipc::session `Channel`-opening capabilities -- the the user must come up with their own naming scheme
  * that avoids name clashes; we could supply an ipc::session-facilitated system for providing this service instead.
  * I.e., ipc::session could either expose a facilities for generating the `Shared_name absolute_name` arg to
- * the Native_socket_stream_acceptor ctor (and opposing Native_socket_stream::async_connect() call).  Alternatively
+ * the Native_socket_stream_acceptor ctor (and opposing Native_socket_stream::async_connect()XXX call).  Alternatively
  * it could provide some kind of Native_socket_stream_acceptor factory and corresponding opposing facility.
  * Long story short, within the ipc::session way of life literally only one acceptor exists, and it is set up
  * (and named) internally to ipc::session.  We could provide a way to facilitate the creation of more
@@ -127,7 +127,7 @@ public:
    * The operation may fail; see `err_code` arg for how to detect this (either exception or via code return;
    * your choice).  An error will be logged on failure.
    *
-   * On success, opposing processes can attempt Native_socket_stream::async_connect() (or
+   * On success, opposing processes can attempt Native_socket_stream::async_connect()XXX (or
    * sync_io::Native_socket_stream::async_connect()) which will quickly succeed
    * yielding an opposing #Peer which will be connected.  On this side, async_accept() is used to grab
    * local peer #Peer.  The connection need not have an async_accept() pending to complete connection

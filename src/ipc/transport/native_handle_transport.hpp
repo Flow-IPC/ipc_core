@@ -187,7 +187,7 @@ public:
    * ### Informal corollary -- NULL-state ctors with 1+ args ###
    * Other, 1+ arg, ctors that similarly create a NULL-state peer object are allowed/encouraged
    * where relevant.  In particular one taking a `Logger*` and a `nickname` string -- so as to subsequently enter a
-   * CONNECTING state via an `async_connect()` method, on the way to PEER state -- is reasonable.
+   * XXX CONNECTING state via an `async_connect()` method, on the way to PEER state -- is reasonable.
    * However this is not a formal part of this concept and is arguably not a general behavior.
    * Such a ctor is informally intended for the following use at least:
    *   - One creates a Native_handle_sender that is `Logger`-appointed and nicely-`nickname`d; then one calls

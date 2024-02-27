@@ -54,7 +54,7 @@
  *       one can always convert the latter to the former by calling `x.async_io_obj()`.
  *
  * @note In cases where performance is not a real concern, such as for the assumed-rare
- *       ipc::session::Client_session::async_connect() operations, internally `sync_io::X` may actually be written
+ *       ipc::session::Client_session::async_connect()XXXsearch operations, internally `sync_io::X` may actually be written
  *       in terms of `X` instead... but we digress.  Either way it is a black box.
  *
  * Some examples of `X`es that have `sync_io::X` counterparts:
@@ -499,7 +499,7 @@
  * `x.start_send_blob_ops()` for setup.
  *
  * What if an object can do multiple things though?  `Native_socket_stream` (operating as a `Blob_sender` and
- * `Blob_receiver`) can do 3: it can
+ * `Blob_receiver`) can do 3 XXXohboy: it can
  *   - connect (`.async_connect()`),
  *   - send (`.send_blob()`, `.end_sending()`, `.async_end_sending()`, `.auto_ping()`),
  *   - and receive (`.async_receive_blob()`, `.idle_timer_run()`).
