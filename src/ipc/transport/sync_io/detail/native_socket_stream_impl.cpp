@@ -183,6 +183,7 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
                                      flow::util::bind_ns::cref(absolute_name), _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
+  using util::sync_io::Asio_waitable_native_handle;
   using boost::promise;
 
   if (m_state != State::S_NULL)
@@ -295,7 +296,6 @@ void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
 
   FLOW_LOG_INFO("Socket stream [" << *this << "]: Will attempt connect to [" << absolute_name << "].");
 
-  Error_code sync_err_code;
   const auto remote_endpoint = endpoint_at_shared_name(get_logger(), absolute_name, &sync_err_code);
   assert((remote_endpoint == Endpoint()) == bool(sync_err_code)); // (By the way it WARNs on error.)
 
