@@ -75,35 +75,32 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
 
   FLOW_LOG_INFO("Socket stream [" << *this << "]: In NULL state: Started timer thread.  Otherwise inactive.");
 
+  // Create the single-thread loop object, but do not .start() thread yet (see sync_connect() as to why not).
+  m_conn_async_worker.emplace(get_logger(), string("conn-") + nickname());
+
   m_peer_socket
     = boost::movelib::make_unique<asio_local_stream_socket::Peer_socket>
         (m_nb_task_engine, // See its doc header if you're wondering about `_unused`.
          // Needs to be is_open() (hold an FD) -- see our doc header.  This arg makes it happen (omit => no FD).
          asio_local_stream_socket::local_ns::stream_protocol());
+  // This "needs to be .assign()ed still."
+  m_ev_wait_hndl_peer_socket.assign(m_peer_socket->native_handle());
 
   /* Last thing is, in NULL state, we need to prep the *connect() machinery.  As discussed in XXX class doc header,
-   * the public API exposed is sync_connect(), whereas the following are private (in chronological order of execution):
-   *   -1- connect-ops counterpart of what replace_event_wait_handles() does for send-ops and receive-ops;
+   * the public API exposed is sync_connect(), whereas the following are private:
+   *   -1- connect-ops counterpart of what replace_event_wait_handles() does for send-ops and receive-ops,
+   *       without conflicting with user call to replace_event_wait_handles() which can happen anytime before
+   *       start_send/receive_ops();
    *   -2- start_connect_ops();
    *   -3- async_connect().
-   * -3- is invoked from sync_connect() itself which of course is called by user as needed.  So now we do
-   * the other two. */
-
-  /* -1- replace_event_wait_handles() counterpart: Associate with the m_conn_async_worker thread; load up
-   * m_peer_socket's same FD into the watchee mirror ("needs to be .assign()ed still"). */
-
-  // Create the single-thread loop object, but do not .start() thread yet (see sync_connect() as to why not).
-  m_conn_async_worker.emplace(get_logger(), string("conn-") + nickname());
-
-  m_ev_wait_hndl_peer_socket = Asio_waitable_native_handle(*(m_conn_async_worker->task_engine()),
-                                                           m_peer_socket->native_handle());
-  /* When/if we go CONNECTING->PEER on async_connect() success, we must put m_ev_hndl_task_engine_unused back into
-   * m_ev_wait_hndl_peer_socket, thus making it ready for replace_event_wait_handles() -- if they plan to
-   * .async_wait() on it, as opposed to poll()/epoll()/etc., in which case m_ev_hndl_task_engine_unused stays
-   * and is unused (as per its name). */
+   *
+   * -1- and -2- can occur in any order really.  -3- of course happens last.
+   *
+   * We do -2- below.  -1- and -3- happen inside sync_connect(), as needed, so in the meantime we set
+   * up m_ev_wait_hndl_peer_socket the same way as in the PEER-state ctor (see just above).  */
 
   /* -2- start_connect_ops(): We'll give it our .async_wait() machinery associated with m_conn_async_worker thread.
-   * This is much like, e.g., Async_adapter_sender ctor does. */
+   * This is much like, e.g., Async_adapter_sender ctor does for send-ops. */
   start_connect_ops([this](Asio_waitable_native_handle* hndl_of_interest, bool ev_of_interest_snd_else_rcv,
                            Task_ptr&& on_active_ev_func)
   {
@@ -150,7 +147,7 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
 
   m_state = State::S_PEER;
 
-  /* Same deal as when going CONNECTING->PEER, except subsume the pre-connected Native_handle, and
+  /* Same deal as in NULL-state ctor above, except subsume the pre-connected Native_handle, and
    * m_ev_wait_hndl_peer_socket is already associated with m_ev_hndl_task_engine_unused, so
    * we just .assign() ("this needs to be .assign()ed still"). */
 
@@ -195,6 +192,14 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
   // else
   assert(op_started<Op::S_CONN>("sync_connect"));
 
+  /* As noted in NULL-state ctor, we take care of replace_event_wait_handles()-equivalent for our internal
+   * async_connect() purposes -- for the duration of the sync_connect() only; then we put it back to how it was,
+   * to avoid conflicting with replace_event_wait_handles(), even if it was already called before us
+   * (for example async-I/O-pattern transport::Native_socket_stream::Impl does this in its NULL-state ctor). */
+  auto saved_ev_wait_hndl_peer_socket = std::move(m_ev_wait_hndl_peer_socket);
+  m_ev_wait_hndl_peer_socket = Asio_waitable_native_handle(*(m_conn_async_worker->task_engine()),
+                                                           saved_ev_wait_hndl_peer_socket.native_handle());
+
   /* We don't m_conn_async_worker.start() in ctor, so we do it here -- and we will also .stop() it at the end.
    * Rationale: We'd like to keep ourselves as perf-light-weight as is reasonably possible; as in particular
    * the NULL-state ctor might be being invoked from transport::[sync_io::]Native_socket_stream default ctor,
@@ -210,10 +215,9 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
    * Furthermore: All of the above holds, yes, but it's even nicer than that: async_connect(), per sync_io pattern,
    * can yield immediate, synchronous success or failure; then we do not even need any thread.  Not only that,
    * but if you look inside you'll see we say this is by far likelier than the converse.  (@todo Maybe we shouldn't
-   * even create m_conn_async_worker at all, unless we know we need to start the thread?  The only trouble is we'd
-   * then need to re-create m_ev_wait_hndl_peer_socket in here instead of the ctor, which is kind of messy
-   * consistency-wise w/r/t the other ctors.  It's probably OK as-is; probably the thread start/join is the heaviest
-   * aspect of all this, and if we typically avoid that, we've done fine.  Revisit sometime though.) */
+   * even create m_conn_async_worker at all, unless we know we need to start the thread?  It's probably OK as-is;
+   * probably the thread start/join is the heaviest aspect of all this, and if we typically avoid that, we've done
+   * fine.  Revisit sometime though.) */
 
   promise<void> done_promise;
   async_connect(absolute_name, err_code, [&](const Error_code& async_err_code)
@@ -261,13 +265,12 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
     assert((m_state == State::S_PEER)
            && "[A]synchronously-successful async_connect() should've resulted in PEER state by its contract.");
 
-    // See NULL-state ctor: we must swap-in m_ev_hndl_task_engine_unused into m_ev_wait_hndl_peer_socket.
-    m_ev_wait_hndl_peer_socket
-      = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused, m_ev_wait_hndl_peer_socket.release());
-
     m_conn_async_worker.reset(); // Might as well free some RAM, in addition to joining thread if any.
     m_conn_ev_wait_func.clear(); // Might as well free some RAM (minor but why not).
   } // else if (!*err_code)
+
+  // As promised above, put this back to restore normal replace_event_wait_handles() capability to user.
+  m_ev_wait_hndl_peer_socket = std::move(saved_ev_wait_hndl_peer_socket);
 
   return true;
 } // Native_socket_stream::Impl::sync_connect()
