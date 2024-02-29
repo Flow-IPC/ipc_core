@@ -85,7 +85,7 @@ bool Native_socket_stream::sync_connect(const Shared_name& absolute_name, Error_
   return impl()->sync_connect(absolute_name, err_code);
 }
 
-#if 0 // XXX
+#if 0 // See the declaration in class { body }; explains why `if 0` yet still here.
 Native_socket_stream Native_socket_stream::release()
 {
   auto sock = std::move(*this);

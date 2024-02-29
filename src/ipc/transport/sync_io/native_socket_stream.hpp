@@ -60,12 +60,7 @@ namespace ipc::transport::sync_io
  * Notes for transport::Native_socket_stream apply.  The differences (some of which are quite important) are as
  * follows.
  *
- * XXX Before using async_connect(), one must set up the "connect" API according to the `sync_io` pattern.  Namely
- * one must use start_connect_ops() successfully.  See its doc header; but generally it is another instance of
- * a `sync_io` pattern with which one must be familiar before using this class (and `sync_io::` senders and
- * receivers generally).
- *
- * Similarly -- as described by the concepts being implemented -- one must use `start_send_*_ops()` before
+ * As described by the concepts being implemented -- one must use `start_send_*_ops()` before
  * the send API (`send_*()`, `*end_sending()`, auto_ping()) and/or `start_receive_*_ops()` before
  * the receive API (`async_receive_*()`, idle_timer_run()).
  *
@@ -88,8 +83,6 @@ namespace ipc::transport::sync_io
  * event due to an earlier async-wait requested by `*this` -- is formally an operation on `*this`.  It can be
  * thought of as a member of its (non-`const`) API.  For the below discussion we shall pretend these methods
  * actually exist, to simplify discussion of these operations:
- *   - XXX `connect_on_active_ev()` (`on_active_ev_func` originating from start_connect_ops()).
- *     - Recall this may synchronously trigger async_connect()-passed completion handler.
  *   - `send_on_active_ev()` (`on_active_ev_func` originating from `start_send_*_ops()`).
  *     - Recall this may synchronously trigger async_end_sending()-passed completion handler.
  *   - `receive_on_active_ev()` (`on_active_ev_func` originating from `start_receive_*_ops()`).
@@ -102,11 +95,10 @@ namespace ipc::transport::sync_io
  *
  * ### In PEER state ###
  * Firstly, let's assume `*this` is in PEER state, which is achieved either by using the PEER-state ctor form
- * (where a pre-connected `Native_handle` is subsumed), or else by successfully completing XXX async_connect() -- that is,
- * once it has invoked `on_done_func()` (the completion handler specified by user).  Cool?  Cool.  We are in PEER
- * state.  Then:
+ * (where a pre-connected `Native_handle` is subsumed), or else by successfully completing `*_connect()`.
+ * Cool?  Cool.  We are in PEER state.  Then:
  *
- * Boring ones first: XXX async_connect() simply returns `false` and is always safe to call (it is meant for NULL state).
+ * Boring ones first: sync_connect() simply returns `false` and is always safe to call (it is meant for NULL state).
  * `*_max_size()` always return the same respective constant values and are always safe to call.
  *
  * Much more significantly, we now list two specific categories of operations:
@@ -137,40 +129,7 @@ namespace ipc::transport::sync_io
  * sending and/or receipt.)
  *
  * ### In NULL state ###
- * Now let's assume `*this` is in NULL state; meaning it has been cted using the NULL-state ctor; and either
- * XXX async_connect() has not been invoked at all, or it has but has indicated (via completion handler as explained
- * earlier) failure to connect.  Then:
- *
- * Boring ones first: All the send-ops and receive-ops listed above (with the exception of `*_on_active_ev()`,
- * which cannot be called at all until PEER state -- you'll have no such function to call) simply return `false`
- * and are always safe to call (they are meant for PEER state).  `*_max_size()` similarly will all return zero
- * and are always safe to call.
- *
- * That leaves only async_connect() and `connect_on_active_ev()` (again, not a real method/see definition above).
- * Formally we don't need to say this, but to be clear: the two may not be called concurrently to each other
- * or themselves.  However, to restate: The "boring" ones in the previous paragraph can be called safely, period
- * (they'll just be useless, as they only make sense in PEER state).
- *
- * ### What about CONNECTING state? ### XXX
- * CONNECTING state refers to the no-man's-land between NULL and PEER: You've called `async_connect(F)`, `F()`
- * being the completion handler, and `F(err_code_or_success)` has not yet been invoked to indicate the result.
- *
- * Formally we need not say anything additional to the text above that outlines the thread-safety rules.
- * For convenience/clarity though: It is not safe to invoke operations (other than nickname() and
- * `ostream` output) concurrently during CONNECTING state, if one of them is
- * non-`const`.  Moreover, since the only way to know for sure you're not in
- * CONNECTING state at a given moment is to never have called async_connect(), or for it to have triggered
- * the completion handler: Do not do potentially concurrent stuff while an async_connect() is outstanding.
- * It is not safe.
- *
- * XXX This rule should be easy to follow -- e.g., who would want to try a send_blob() until they're for-sure connected
- * (a/k/a in PEER state)?  There is however one trip-up point which may not be quite obvious:
- * the otherwise-innocuous `*_max_size()` accessors.  Don't call them during an oustanding async_connect()
- * (by which, again, we mean one whose completion handler has not yet been invoked); or, if you possibly do,
- * then ensure non-concurrency against async_connect() and `connect_on_active_ev()`, when state would switch
- * between NULL=>CONNECTING=>NULL/PEER.  They'll return 0 in NULL and CONNECTING states versus non-zero real
- * values in PEER state; but during a transition behavior is undefined.
- * While it is possible to use a mutex to guard against this, it may not be worth the trouble.
+ * Nothing interesting here.
  *
  * @internal
  * ### Implementation design/rationale ###
@@ -324,26 +283,6 @@ public:
   /// Copy assignment is disallowed.
   Native_socket_stream& operator=(const Native_socket_stream&) = delete;
 
-#if 0 // XXX
-  /**
-   * In PEER state only, with no prior send or receive ops, returns an object of this same type
-   * (as-if just constructed) operating on `*this` underlying low-level transport `Native_handle`; while
-   * `*this` becomes as-if default-cted.  It is similar to returning `Native_socket_stream(std::move(*this))`,
-   * except that any replace_event_wait_handles() and `start_*_ops()` -- generally irreversible publicly
-   * otherwise -- are as-if undone on the returned object.
-   *
-   * Rationale: To be perfectly honest this was originally written in order to allow for
-   * async-I/O-pattern transport::Native_socket_stream::release() to be writable.
-   *
-   * Behavior is undefined if `*this` is not in PEER state, or if it is, but you've invoked `async_receive_*()`,
-   * `send_*()`, `*end_sending()`, auto_ping(), or idle_timer_run() in the past.  (`start_*_ops()` and
-   * replace_event_wait_handles() are fine.)  Please be careful.
-   *
-   * @return See above.
-   */
-  Native_socket_stream release();
-#endif
-
   /**
    * Returns nickname, a brief string suitable for logging.  Notes for transport::Native_socket_stream apply.
    *
@@ -375,32 +314,14 @@ public:
 
   // Connect-ops API.
 
-  /** XXX
-   * See #Async_io_obj counterpart for the essential semantics; however here according to `sync_io` pattern
-   * the operation may complete synchronously thus emitting result immediately and ignoring `on_done_func`.
-   *
-   * Per `sync_io` pattern: if internally more work is required asynchronously pending 1+ native handles being
-   * in 1+ active-event (readable, writable) state, this method shall later invoke the `Event_wait_func`
-   * registered via start_connect_ops() by the user of `*this`; and the error code
-   * error::Code::S_SYNC_IO_WOULD_BLOCK shall be emitted here synchronously (via `*sync_err_code` if not null,
-   * exception if null -- per standard `flow::Error_code`-doc-header semantics).  Meanwhile the completion handler
-   * `on_done_func()` shall execute once the required async-waits have been satisfied
-   * by the `*this` user, synchronously from inside the `(*on_active_ev_func)()` call that achieves this state.
-   *
-   * If, by contrast, no more work is required -- the operation completed synchronously within this method -- then:
-   * success or error *other than* error::code::S_SYNC_IO_WOULD_BLOB shall be emitted (again per standard
-   * semantics) synchronously; and `on_done_func()` shall not be
-   * saved nor ever executed by `*this`.  Thus the result of the operation shall be either output directly
-   * synchronously -- if op completed synchronously -- or later via `on_done_func()` completion handler.
+  /**
+   * Identical to #Async_io_obj counterpart.
    *
    * @param absolute_name
    *        See above.
-   * @param sync_err_code
-   *        See above.
-   * @param on_done_func
+   * @param err_code
    *        See above.
    * @return See above.
-   *
    */
   bool sync_connect(const Shared_name& absolute_name, Error_code* err_code = 0);
 
@@ -808,6 +729,28 @@ private:
    */
   bool async_receive_blob_fwd(const util::Blob_mutable& target_blob, Error_code* sync_err_code, size_t* sync_sz,
                               flow::async::Task_asio_err_sz&& on_done_func);
+
+  
+  // Please see transport::Native_socket_stream::Impl similar doc header; explains why this is dead code but remains.
+#if 0
+  /**
+   * In PEER state only, with no prior send or receive ops, returns an object of this same type
+   * (as-if just constructed) operating on `*this` underlying low-level transport `Native_handle`; while
+   * `*this` becomes as-if default-cted.  It is similar to returning `Native_socket_stream(std::move(*this))`,
+   * except that any replace_event_wait_handles() and `start_*_ops()` -- generally irreversible publicly
+   * otherwise -- are as-if undone on the returned object.
+   *
+   * Rationale: To be perfectly honest this was originally written in order to allow for
+   * async-I/O-pattern transport::Native_socket_stream::release() to be writable.
+   *
+   * Behavior is undefined if `*this` is not in PEER state, or if it is, but you've invoked `async_receive_*()`,
+   * `send_*()`, `*end_sending()`, auto_ping(), or idle_timer_run() in the past.  (`start_*_ops()` and
+   * replace_event_wait_handles() are fine.)  Please be careful.
+   *
+   * @return See above.
+   */
+  Native_socket_stream release();
+#endif
 
   // Data.
 

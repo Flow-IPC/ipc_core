@@ -159,8 +159,6 @@ public:
    * @note There is no mode of async_accept() wherein `*target_peer` is synchronously (immediately) available.
    *       Completion shall always be reported via `on_done_func()` after a mandatory async-wait.
    *       This is in contrast to perf-critical operations such as, say, Native_socket_stream::async_receive_blob().
-   *       (Native_socket_stream::async_connect()XXX also behaves in that dual manner, for consistency with the
-   *       other APIs of that type, even though async-connect is not usually thought of as perf-critical.)
    *
    * @tparam Task_err
    *         See #Async_io_obj API.

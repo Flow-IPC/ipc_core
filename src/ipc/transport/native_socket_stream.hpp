@@ -146,7 +146,7 @@ namespace ipc::transport
  *     -# A socket-pair-generating OS call generates 2 pre-connected native stream-oriented Unix domain socket handles.
  *        -# E.g., use boost.asio `asio_local_stream_socket::connect_pair()`.
  *     -# 1 of the 2 handles is passed to the other side using the process-wide connection from step 1.
- *     -# On each side, construct Native_socket_stream() using the #Native_handle-taking ctor thus entering PEER
+ *     -# On each side, construct Native_socket_stream using the #Native_handle-taking ctor thus entering PEER
  *        state directly at construction (on each side).
  *
  * Way 2 is better, because it requires no `Shared_name`s whatsoever, hence there are no thorny naming issues.
@@ -165,6 +165,16 @@ namespace ipc::transport
  * guy into the `sync_io`-core-adopting ctor.  The result is exactly the same.  (Internally, whether one uses way 1
  * or way 2, `*this` will create a sync_io::Native_socket_stream core itself.  I tell you this, in case you are
  * curious.)
+ *
+ * ### Why no async-connect method, only sync-connect? ###
+ * Without networking, the other side (Native_stream_socket_acceptor) either exists/is listening; or no.
+ * Connecting is a synchronous, non-blocking operation; so an `async_connect()` API in this context only makes
+ * life harder for the user.  (However, there are some serious plans to add a networking-capable counterpart
+ * (probably via TCP at least) to Native_socket_stream; that one will almost certainly have an `async_connect()`,
+ * while its `sync_connect()` will probably become potentially blocking.)
+ *
+ * If you are worried about attempting to connect to a Native_stream_socket_acceptor whose internal backlog limit has
+ * been reached: please don't.  It won't happen; we have contemplated the details.
  *
  * ### Thread safety ###
  * We add no more thread safety guarantees than those mandated by the main concepts.  To wit:
@@ -449,31 +459,30 @@ public:
 
   // Connect-ops API.
 
-  /** XXX
-   * To be invoked in NULL state only, it asynchronously attempts to connect to an opposing
+  /**
+   * To be invoked in NULL state only, it synchronously and non-blockingly attempts to connect to an opposing
    * Native_socket_stream_acceptor or sync_io::Native_socket_stream_acceptor
-   * listening at the given absolute Shared_name; and on success invokes the given completion handler with
-   * a falsy value indicating `*this` has entered PEER state.  On failure invokes completion handler with
-   * a truthy values indicating `*this` has returned to NULL state.  In the meantime `*this` is in CONNECTING state.
+   * listening at the given absolute Shared_name; and synchronously reports failure or success, the latter
+   * showing `*this` has entered PEER state.  Failure means `*this` remains in NULL state.
    *
    * If invoked outside of NULL state this returns `false` and otherwise does nothing.
    *
-   * In particular: Do not invoke async_connect() while one is already outstanding: `*this` must be in NULL state, not
-   * CONNECTING.  Also note that `*this` (modulo moves) that has entered PEER state can never change state subsequently
+   * Note that `*this` (modulo moves) that has entered PEER state can never change state subsequently
    * (even on transmission error); once a PEER, always a PEER.
    *
    * #Error_code generated and passed to `on_done_func()`:
    * system codes most likely from `boost::asio::error` or `boost::system::errc` (but never would-block).
    *
-   * @return `false` if and only if invoked outside of PEER state.
+   * @see Class doc header, section "Why no async-connect method, only sync-connect?" for potentially interesting
+   *      context.
+   *
+   * @return `false` if and only if invoked outside of NULL state (that is: in PEER state).
    *
    * @param absolute_name
    *        Absolute name at which the `Native_socket_stream_acceptor` is expected to be listening.
-   * @param on_done_func
-   *        `on_done_func(Error_code err_code)` is invoked from some unspecified thread, not the caller thread,
-   *        indicating entrance from CONNECTING state to either NULL or PEER state.
-   *        If interrupted by destructor the operation-aborted code is passed instead (see ~Native_socket_stream()
-   *        doc header).
+   * @param err_code
+   *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
+   *        system codes most likely from `boost::asio::error` or `boost::system::errc` (but never would-block).
    */
   bool sync_connect(const Shared_name& absolute_name, Error_code* err_code = 0);
 

@@ -196,8 +196,23 @@ public:
 
   // Methods.
 
+  /* The following dead code is intentionally left-in; in fact this doc header (or close to it) could live
+   * in transport::Native_socket_stream and an identical signature in this Impl would implement it.  Why is it around?
+   * Answer: There is currently no public async_connect(), only private; the public-facing reason for this
+   * is briefly given in the Native_socket_stream class doc header (TL;DR: there's no point, as locally it's always
+   * a quick operation); the internal reason that async_connect() does exist, but not publicly, is given at length
+   * in the sync_io::Native_socket_stream::Impl doc header.  release() would be quite helpful, if async_connect()
+   * were public: As then one could construct an async-I/O-pattern transport::Native_socket_stream; .async_connect()
+   * it; then .release() the sync_io-pattern core; and various things elsewhere require sync_io-pattern cores
+   * rather than the heavier-weight, thread-assisted async-I/O wrappers like a *this.  So one could .release() a core
+   * and then feed it to whatever needs it.  Thing is, as noted elsewhere, there are serious plans to extend
+   * the Unix-domain-socket locally-focused Native_socket_stream to a TCP-networked version whose code would mostly
+   * be reusing us (a stream socket is a stream socket, in many ways, whether local or TCP).  At that point
+   * we'd like this release() to be immediately visible to the developer.  So that's why this is around.  Naturally,
+   * its code might diverge over time, but at least as of this writing we suspect it's useful to keep this around,
+   * it doesn't get in the way too much.  (Historically, it has not always been dead code and worked nicely.) */
 #if 0
-  /** XXX
+  /**
    * In PEER state only, with no prior send or receive ops, returns a sync_io::Native_socket_stream core
    * (as-if just constructed) operating on `*this` underlying low-level transport `Native_handle`; while
    * `*this` becomes as-if default-cted.
@@ -213,12 +228,6 @@ public:
    *
    * @return See above.
    */
-  Sync_io_obj release();
-
-  /**
-   * See Native_socket_stream counterpart.
-   * @return See Native_socket_stream counterpart.
-   */
   sync_io::Native_socket_stream release();
 #endif
 
@@ -228,12 +237,12 @@ public:
    */
   const std::string& nickname() const;
 
-  /**XXX
+  /**
    * See Native_socket_stream counterpart.
    *
    * @param absolute_name
    *        See Native_socket_stream counterpart.
-   * @param on_done_func
+   * @param err_code
    *        See Native_socket_stream counterpart.
    * @return See Native_socket_stream counterpart.
    */
@@ -362,7 +371,7 @@ private:
    * else (starting directly in PEER state) it will delegate `m_sync_io.start_receive/send_*_ops()`
    * to #m_snd_sync_io_adapter and #m_rcv_sync_io_adapter which it will initialize.
    *
-   * Therefore if entering PEER state due to successful sync_connect(), #m_snd_sync_io_adapter and
+   * Therefore if entering PEER state due to successful `*_connect()`, #m_snd_sync_io_adapter and
    * #m_rcv_sync_io_adapter will be created at that time.
    *
    * `get_logger()` and nickname() values are obtained from `sync_io_core_moved`.

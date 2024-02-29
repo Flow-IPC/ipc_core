@@ -83,27 +83,33 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
   // This "needs to be .assign()ed still."
   m_ev_wait_hndl_peer_socket.assign(m_peer_socket->native_handle());
 
-  /* Last thing is, in NULL state, we need to prep the *connect() machinery.  As discussed in XXX class doc header,
-   * the public API exposed is sync_connect(), whereas the following are private:
+  /* Last thing is, in NULL state, we need to prep the *connect() machinery.  As discussed in our class doc header,
+   * the public API exposed is sync_connect(), whereas the following are private and used by sync_connect() internally:
    *   -1- connect-ops counterpart of what replace_event_wait_handles() does for send-ops and receive-ops,
-   *       without conflicting with user call to replace_event_wait_handles() which can happen anytime before
-   *       start_send/receive_ops();
+   *       without conflicting with user call to replace_event_wait_handles() which can happen anytime independently;
    *   -2- start_connect_ops();
    *   -3- async_connect().
    *
-   * -1- and -2- can occur in any order really.  -3- of course happens last.
-   *
    * We do -1- and -2- below.  -3- happens inside sync_connect() as needed.  */
 
-  // Create the single-thread loop object, but do not .start() thread yet (see sync_connect() as to why not).
+  // Create the single-thread loop object, but do not ->start() thread yet (see sync_connect() as to why not).
   m_conn_async_worker.emplace(get_logger(), string("conn-") + nickname());
 
   // -1- replace_event_wait_handles() counterpart.  To avoid conflict, use separate guy from m_ev_wait_hndl_peer_socket.
   m_conn_ev_wait_hndl_peer_socket.emplace(*(m_conn_async_worker->task_engine()),
                                           m_peer_socket->native_handle());
 
-  /* -2- start_connect_ops(): We'll give it our .async_wait() machinery associated with m_conn_async_worker thread.
-   * This is much like, e.g., Async_adapter_sender ctor does for send-ops. */
+  /* -2- start_connect_ops(): We'll give it our ->async_wait() machinery associated with m_conn_async_worker thread.
+   * (Note it is fine if the thread is not ->start()ed now or even during the async-wait: the async-wait will
+   * execute as soon as the thread does start.)
+   *
+   * This is much like, e.g., Async_adapter_sender ctor does for send-ops.
+   *
+   * (If you're wondering why we set it up like this with a formal sync_io-pattern flow, as opposed to just
+   * having async_connect() do m_conn_ev_wait_hndl_peer_socket->async_wait() directly, and so on:
+   * Class doc header "Connect-ops impl design" section explains it the rationale.  TL;DR: It is for an easier
+   * transition for when some form of `*this` is network-enabled, and hence async_connect() would become potentially
+   * not-instant and made public, along with start_connect_ops().) */
   start_connect_ops([this](Asio_waitable_native_handle* hndl_of_interest, bool ev_of_interest_snd_else_rcv,
                            Task_ptr&& on_active_ev_func)
   {
@@ -129,7 +135,7 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
 
       // They want to know about completed async_wait().  Oblige.
 
-      /* Inform Impl *this of the event.  This can (indeed will for sure, in our case -- writable socket =>
+      /* Inform Impl *this of the event.  This can (indeed will for sure, in our case, since: writable socket =>
        * connect completed) synchronously invoke handler we have registered via our this->async_connect() call
        * in sync_connect(). */
 
@@ -175,7 +181,7 @@ Native_socket_stream::Impl::~Impl()
 bool Native_socket_stream::Impl::start_connect_ops(util::sync_io::Event_wait_func&& ev_wait_func)
 {
   return start_ops<Op::S_CONN>(std::move(ev_wait_func));
-} // Native_socket_stream::Impl::start_connect_ops()
+}
 
 bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
 {
@@ -186,6 +192,12 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
                                      flow::util::bind_ns::cref(absolute_name), _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
+  /* Please see "Connect-ops impl design" in class doc header for background.  Long story short, though:
+   * we do async_connect() which will usually complete synchronously; if not then we start a very short-lived
+   * thread for the duration of the still-quick-but-asynchronous async_connect(), and we stop it once done
+   * (use a promise-future pair to signal back to the user's calling thread).
+   * Either way we will have a synchronous result in *err_code shortly. */
+
   if (m_state != State::S_NULL)
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: Wanted to connect to [" << absolute_name << "] "
@@ -194,25 +206,6 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
   }
   // else
   assert(op_started<Op::S_CONN>("sync_connect"));
-
-  /* We don't m_conn_async_worker->start() in ctor, so we do it here -- and we will also .stop() it at the end.
-   * Rationale: We'd like to keep ourselves as perf-light-weight as is reasonably possible; as in particular
-   * the NULL-state ctor might be being invoked from transport::[sync_io::]Native_socket_stream default ctor,
-   * as (and this is a common scenario) the target of Native_socket_stream_acceptor::async_accept(), which
-   * will destroy *this Impl by move-assigning onto it via our pImpl setup.  Having a thread start/join occur
-   * in an essentially blank-forever *this is unnecessarily heavy.  The trade-off is that sync_connect() is
-   * framed by a thread stop/start, which is very confidently doable in under 1 millisecond total; and we
-   * consider this a small price given the expected frequency of sync_connect()s in reality, plus the
-   * operations that will run in this thread (not that those are heavy either).  Basically thread start/join
-   * inside sync_connect() is unlikely to bother anyone, whereas a thread start/join in an object whose
-   * purpose is to merely be overwritten via move-assign = obnoxious.
-   *
-   * Furthermore: All of the above holds, yes, but it's even nicer than that: async_connect(), per sync_io pattern,
-   * can yield immediate, synchronous success or failure; then we do not even need any thread.  Not only that,
-   * but if you look inside you'll see we say this is by far likelier than the converse.  (@todo Maybe we shouldn't
-   * even create m_conn_async_worker at all, unless we know we need to start the thread?  It's probably OK as-is;
-   * probably the thread start/join is the heaviest aspect of all this, and if we typically avoid that, we've done
-   * fine.  Revisit sometime though.  It'd just make m_conn_ev_wait_hndl_peer_socket life-cycle more complicated.) */
 
   promise<void> done_promise;
   async_connect(absolute_name, err_code, [&](const Error_code& async_err_code)
@@ -230,10 +223,29 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
   {
     /* m_conn_ev_wait_func() has been invoked, meaning there's an .async_wait() pending on m_conn_async_worker.
      * We have not yet started the actual thread though; this is 100% allowed by boost.asio and consequently
-     * (and formally by its contract) Single_thread_task_loop.  Now we do need to start it though. */
+     * (and formally by its contract) Single_thread_task_loop.  Now we do need to start it though.
+     *
+     * We don't m_conn_async_worker->start() in ctor, so we do it here -- and we will also .stop() it at the end.
+     * Rationale: We'd like to keep ourselves as perf-light-weight as is reasonably possible; as in particular
+     * the NULL-state ctor might be being invoked from transport::[sync_io::]Native_socket_stream default ctor,
+     * as (and this is a common scenario) the target of Native_socket_stream_acceptor::async_accept(), which
+     * will destroy *this Impl by move-assigning onto it via our pImpl setup.  Having a thread start+stop/join occur
+     * in an essentially blank-forever *this is unnecessarily heavy.  The trade-off is that sync_connect() is
+     * framed by a thread stop/start.  However this is very confidently doable in under 1 millisecond total; and we
+     * consider this a small price given the expected frequency of sync_connect()s in reality, plus the
+     * operations that will run in this thread (not that those are heavy either).  Basically thread start+stop/join
+     * inside sync_connect() is unlikely to bother anyone, whereas a thread start+stop/join in an object whose
+     * purpose is to merely be overwritten via move-assign = obnoxious.
+     *
+     * Furthermore!!!  All of the above holds, yes, but it's even nicer than that: async_connect(), per sync_io pattern,
+     * can yield immediate, synchronous success or failure; then we do not even need any thread.  Not only that,
+     * but if you look inside you'll see we say this is by far likelier than the converse.  (@todo Maybe we shouldn't
+     * even create m_conn_async_worker at all, unless we know we need to start the thread?  It's probably OK as-is;
+     * probably the thread start/join is the heaviest aspect of all this, and if we typically avoid that, we've done
+     * fine.  Revisit sometime though.  It'd just make m_conn_ev_wait_hndl_peer_socket life-cycle more complicated.) */
     m_conn_async_worker->start();
 
-    // And now we wait (for a very short time, at least in Linux; see class doc header discussion of sync_connect()).
+    // And now we wait (for a very short time).
     done_promise.get_future().wait();
 
     assert((*err_code != error::Code::S_SYNC_IO_WOULD_BLOCK)
@@ -259,6 +271,8 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
            && "[A]synchronously-successful async_connect() should've resulted in PEER state by its contract.");
 
     m_conn_ev_wait_func.clear(); // Might as well free some RAM (minor but why not).
+    m_conn_ev_wait_hndl_peer_socket.reset(); // Ditto.
+    m_conn_async_worker.reset(); // Ditto.
   } // else if (!*err_code)
 
   return true;
@@ -275,7 +289,9 @@ void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
   using flow::async::Task_asio_err;
   using util::Task;
 
-  /* Maintenance note: If async_connect() becomes public at some point (alongside sync_connect() in some form),
+  /* Please see "Connect-ops impl design" in class doc header for background.
+   *
+   * Maintenance note: If async_connect() becomes public at some point (alongside sync_connect() in some form),
    * it'll need to return bool and perform the m_state/NULL and op_started<CONN>() checks here, returning
    * false as appropriate, or continuing as appropriate.
    *
@@ -295,6 +311,10 @@ void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
   if (!sync_err_code)
   {
     // Endpoint was fine; do the actual async connect attempt.
+
+#ifndef FLOW_OS_LINUX
+#  error "Some below code, at least comments, has been verified with Linux only.  Revisit before extending to other OS."
+#endif
 
     /* Normally we'd do m_peer_socket->async_connect(F), but in the sync_io pattern we have to break it down into
      * some non-blocking operation(s) with an async-wait delegated to the user via m_conn_ev_wait_func().
@@ -335,7 +355,7 @@ void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
      * hilariously yields ENOTCONN.  So all is well that ends... poorly?  Point is, that's what happens; at least
      * it doesn't just sit around blocking inside ->connect() despite non_blocking(true).  Is it okay behavior
      * given the situation (backlog full)?  Firsly backlog really shouldn't be full given a properly
-     * operating opposing acceptor (by the way it default to like 4096).  But if it is, I'd say this behavior is
+     * operating opposing acceptor (by the way it defaults to like 4096).  But if it is, I'd say this behavior is
      * fine, and my standard is this: Even using a nice, civilized, normal m_peer_socket->async_connect(), the
      * resulting behavior is *exactly* the same: The ->async_connect() quickly "succeeds"; then
      * ->async_write() immediately ENOTCONNs.  If we do equally well as a properly operated ->async_connect(),
@@ -343,7 +363,11 @@ void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
      *
      * That said, again, out of a preponderance of caution and future-proofness (?) we don't rely on the above
      * always happening; and in fact have a clause for getting would_block from ->connect() in which case
-     * we do the whole m_conn_ev_wait_func() thing.  For now it won't be exercised is all. */
+     * we do the whole m_conn_ev_wait_func() thing.  For now it won't be exercised is all.
+     *
+     * Update: As noted in "Connect-ops impl design" section of class doc header, when/if some form of `*this`
+     * becomes networked, then async_connect() will probably be public, and this code-path will come into
+     * play (and sync_connect() perhaps would become potentially-blocking in that setting). */
 
     assert((!m_peer_socket->non_blocking()) && "New NULL-state socket should start as not non-blocking.");
     m_peer_socket->non_blocking(true, sync_err_code);
@@ -496,7 +520,7 @@ std::ostream& operator<<(std::ostream& os, const Native_socket_stream::Impl& val
   return os << "SIO[" << val.nickname() << "]@" << static_cast<const void*>(&val);
 }
 
-#if 0
+#if 0 // See the declaration in class { body }; explains why `if 0` yet still here.
 void Native_socket_stream::Impl::reset_sync_io_setup()
 {
   using util::sync_io::Asio_waitable_native_handle;

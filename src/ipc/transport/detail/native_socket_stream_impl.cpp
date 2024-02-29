@@ -307,7 +307,7 @@ size_t Native_socket_stream::Impl::receive_blob_max_size() const
   return m_sync_io.receive_blob_max_size();
 }
 
-#if 0 // XXX
+#if 0 // See the declaration in class { body }; explains why `if 0` yet still here.
 sync_io::Native_socket_stream Native_socket_stream::Impl::release()
 {
   using util::sync_io::Asio_waitable_native_handle;
@@ -360,7 +360,6 @@ sync_io::Native_socket_stream Native_socket_stream::Impl::release()
 
   return core;
 } // Native_socket_stream::Impl::release()
-
 #endif
 
 } // namespace ipc::transport

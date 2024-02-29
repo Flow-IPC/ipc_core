@@ -371,9 +371,7 @@ bool Async_adapter_sender<Core_t>::async_end_sending(flow::async::Task_asio_err&
   // We are in thread U (or thread W in a completion handler, but not concurrently).
 
   /* While the same comments about locking m_mutex apply, in addition to that:
-   * This is somewhat more complex than the other send-ops, as there is a completion handler.
-   * (However the pattern is quite similar to transport::Native_socket_stream::Impl::async_connect() which also needs
-   * to save into a m_*_on_done_func for the same reason(s).) XXX */
+   * This is somewhat more complex than the other send-ops, as there is a completion handler. */
 
   Lock_guard<decltype(m_mutex)> lock(m_mutex);
 
