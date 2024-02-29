@@ -41,7 +41,7 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
   m_state(State::S_NULL),
   m_protocol_negotiator(get_logger(), nickname(),
                         1, 1), // Initial protocol!  @todo Magic-number `const`(s), particularly if/when v2 exists.
-  m_ev_wait_hndl_peer_socket(m_ev_hndl_task_engine_unused), // This needs to be .assign()ed still.
+  m_ev_wait_hndl_peer_socket(m_ev_hndl_task_engine_unused), // This needs to be .assign()ed still, at least.
   m_timer_worker(get_logger(), flow::util::ostream_op_string(*this)),
 
   m_snd_finished(false),
@@ -63,15 +63,15 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
     (m_ev_hndl_task_engine_unused,
      Native_handle(m_rcv_idle_timer_fired_peer->native_handle()))
 {
-  // Keep in sync with release()!
-
   // m_*peer_socket essentially uninitialized for now; delegating ctor sets them up.
 }
 
 Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str) :
   Impl(logger_ptr, nickname_str, nullptr)
 {
-  // Keep in sync with release()!
+  using util::sync_io::Asio_waitable_native_handle;
+  using util::sync_io::Task_ptr;
+  using std::string;
 
   FLOW_LOG_INFO("Socket stream [" << *this << "]: In NULL state: Started timer thread.  Otherwise inactive.");
 
@@ -80,8 +80,68 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
         (m_nb_task_engine, // See its doc header if you're wondering about `_unused`.
          // Needs to be is_open() (hold an FD) -- see our doc header.  This arg makes it happen (omit => no FD).
          asio_local_stream_socket::local_ns::stream_protocol());
-  // Lastly load up the same FD into the watchee mirror.  See also replace_event_wait_handles().
-  m_ev_wait_hndl_peer_socket.assign(Native_handle(m_peer_socket->native_handle()));
+  // This "needs to be .assign()ed still."
+  m_ev_wait_hndl_peer_socket.assign(m_peer_socket->native_handle());
+
+  /* Last thing is, in NULL state, we need to prep the *connect() machinery.  As discussed in our class doc header,
+   * the public API exposed is sync_connect(), whereas the following are private and used by sync_connect() internally:
+   *   -1- connect-ops counterpart of what replace_event_wait_handles() does for send-ops and receive-ops,
+   *       without conflicting with user call to replace_event_wait_handles() which can happen anytime independently;
+   *   -2- start_connect_ops();
+   *   -3- async_connect().
+   *
+   * We do -1- and -2- below.  -3- happens inside sync_connect() as needed.  */
+
+  // Create the single-thread loop object, but do not ->start() thread yet (see sync_connect() as to why not).
+  m_conn_async_worker.emplace(get_logger(), string("conn-") + nickname());
+
+  // -1- replace_event_wait_handles() counterpart.  To avoid conflict, use separate guy from m_ev_wait_hndl_peer_socket.
+  m_conn_ev_wait_hndl_peer_socket.emplace(*(m_conn_async_worker->task_engine()),
+                                          m_peer_socket->native_handle());
+
+  /* -2- start_connect_ops(): We'll give it our ->async_wait() machinery associated with m_conn_async_worker thread.
+   * (Note it is fine if the thread is not ->start()ed now or even during the async-wait: the async-wait will
+   * execute as soon as the thread does start.)
+   *
+   * This is much like, e.g., Async_adapter_sender ctor does for send-ops.
+   *
+   * (If you're wondering why we set it up like this with a formal sync_io-pattern flow, as opposed to just
+   * having async_connect() do m_conn_ev_wait_hndl_peer_socket->async_wait() directly, and so on:
+   * Class doc header "Connect-ops impl design" section explains it the rationale.  TL;DR: It is for an easier
+   * transition for when some form of `*this` is network-enabled, and hence async_connect() would become potentially
+   * not-instant and made public, along with start_connect_ops().) */
+  start_connect_ops([this](Asio_waitable_native_handle* hndl_of_interest, bool ev_of_interest_snd_else_rcv,
+                           Task_ptr&& on_active_ev_func)
+  {
+    FLOW_LOG_TRACE("Socket stream [" << *this << "]: Sync-IO connect-ops event-wait request: "
+                   "descriptor [" << Native_handle(hndl_of_interest->native_handle()) << "], "
+                   "writable-else-readable [" << ev_of_interest_snd_else_rcv << "].");
+
+    // They want this async_wait().  Oblige.
+    assert(hndl_of_interest);
+    hndl_of_interest->async_wait(ev_of_interest_snd_else_rcv
+                                   ? Asio_waitable_native_handle::Base::wait_write
+                                   : Asio_waitable_native_handle::Base::wait_read,
+                                 [on_active_ev_func = std::move(on_active_ev_func)]
+                                   (const Error_code& err_code)
+    {
+      // We are in m_conn_async_worker thread.  Nothing is locked.
+
+      if (err_code == boost::asio::error::operation_aborted)
+      {
+        return; // Stuff is shutting down.  GTFO.
+      }
+      // else
+
+      // They want to know about completed async_wait().  Oblige.
+
+      /* Inform Impl *this of the event.  This can (indeed will for sure, in our case, since: writable socket =>
+       * connect completed) synchronously invoke handler we have registered via our this->async_connect() call
+       * in sync_connect(). */
+
+      (*on_active_ev_func)();
+    }); // hndl_of_interest->async_wait()
+  }); // start_connect_ops()
 } // Native_socket_stream::Impl::Impl()
 
 Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str,
@@ -96,7 +156,9 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
 
   m_state = State::S_PEER;
 
-  // Same deal as above ctor, except subsume the pre-connected Native_handle instead of making a new one.
+  /* Same deal as in NULL-state ctor above, except subsume the pre-connected Native_handle, and
+   * m_ev_wait_hndl_peer_socket is already associated with m_ev_hndl_task_engine_unused, so
+   * we just .assign() ("this needs to be .assign()ed still"). */
 
   m_peer_socket
     = boost::movelib::make_unique<asio_local_stream_socket::Peer_socket>
@@ -109,6 +171,356 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
   native_peer_socket_moved = Native_handle();
 } // Native_socket_stream::Impl::Impl()
 
+Native_socket_stream::Impl::~Impl()
+{
+  FLOW_LOG_INFO("Socket stream [" << *this << "]: Shutting down.  Next peer socket will close if open; "
+                "and that is it.  They simply cannot advance our state machine via on_active_ev_func()s we "
+                "handed out.");
+}
+
+bool Native_socket_stream::Impl::start_connect_ops(util::sync_io::Event_wait_func&& ev_wait_func)
+{
+  return start_ops<Op::S_CONN>(std::move(ev_wait_func));
+}
+
+bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
+{
+  using util::sync_io::Asio_waitable_native_handle;
+  using boost::promise;
+
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Native_socket_stream::Impl::sync_connect,
+                                     flow::util::bind_ns::cref(absolute_name), _1);
+  // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
+
+  /* Please see "Connect-ops impl design" in class doc header for background.  Long story short, though:
+   * we do async_connect() which will usually complete synchronously; if not then we start a very short-lived
+   * thread for the duration of the still-quick-but-asynchronous async_connect(), and we stop it once done
+   * (use a promise-future pair to signal back to the user's calling thread).
+   * Either way we will have a synchronous result in *err_code shortly. */
+
+  if (m_state != State::S_NULL)
+  {
+    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Wanted to connect to [" << absolute_name << "] "
+                     "but already not in NULL state.  Ignoring.");
+    return false;
+  }
+  // else
+  assert(op_started<Op::S_CONN>("sync_connect"));
+
+  promise<void> done_promise;
+  async_connect(absolute_name, err_code, [&](const Error_code& async_err_code)
+  {
+    // We are in m_conn_async_worker (short-lived) thread.
+
+    /* async_connect() yielded SYNC_IO_WOULD_BLOCK after issuing m_conn_ev_wait_hndl_peer_socket->async_wait();
+     * we detected that below and are now dutifully blocking (for a very short time) until the promise is fulfilled.
+     * So fulfill it: */
+    *err_code = async_err_code;
+    done_promise.set_value();
+  });
+
+  if (*err_code == error::Code::S_SYNC_IO_WOULD_BLOCK)
+  {
+    /* m_conn_ev_wait_func() has been invoked, meaning there's an .async_wait() pending on m_conn_async_worker.
+     * We have not yet started the actual thread though; this is 100% allowed by boost.asio and consequently
+     * (and formally by its contract) Single_thread_task_loop.  Now we do need to start it though.
+     *
+     * We don't m_conn_async_worker->start() in ctor, so we do it here -- and we will also .stop() it at the end.
+     * Rationale: We'd like to keep ourselves as perf-light-weight as is reasonably possible; as in particular
+     * the NULL-state ctor might be being invoked from transport::[sync_io::]Native_socket_stream default ctor,
+     * as (and this is a common scenario) the target of Native_socket_stream_acceptor::async_accept(), which
+     * will destroy *this Impl by move-assigning onto it via our pImpl setup.  Having a thread start+stop/join occur
+     * in an essentially blank-forever *this is unnecessarily heavy.  The trade-off is that sync_connect() is
+     * framed by a thread stop/start.  However this is very confidently doable in under 1 millisecond total; and we
+     * consider this a small price given the expected frequency of sync_connect()s in reality, plus the
+     * operations that will run in this thread (not that those are heavy either).  Basically thread start+stop/join
+     * inside sync_connect() is unlikely to bother anyone, whereas a thread start+stop/join in an object whose
+     * purpose is to merely be overwritten via move-assign = obnoxious.
+     *
+     * Furthermore!!!  All of the above holds, yes, but it's even nicer than that: async_connect(), per sync_io pattern,
+     * can yield immediate, synchronous success or failure; then we do not even need any thread.  Not only that,
+     * but if you look inside you'll see we say this is by far likelier than the converse.  (@todo Maybe we shouldn't
+     * even create m_conn_async_worker at all, unless we know we need to start the thread?  It's probably OK as-is;
+     * probably the thread start/join is the heaviest aspect of all this, and if we typically avoid that, we've done
+     * fine.  Revisit sometime though.  It'd just make m_conn_ev_wait_hndl_peer_socket life-cycle more complicated.) */
+    m_conn_async_worker->start();
+
+    // And now we wait (for a very short time).
+    done_promise.get_future().wait();
+
+    assert((*err_code != error::Code::S_SYNC_IO_WOULD_BLOCK)
+           && "Handler to async_connect() should've set *err_code, and async_connect() must never issue would-block "
+                "except synchronously.");
+
+    m_conn_async_worker->stop(); // Stop/join thread until next sync_connect() attempt if any (PEER state? then never).
+  }
+  /* else if (*err_code == SYNC_IO_WOULD_BLOCK)
+   * {
+   *   Delightful (and very likely): It either sync-failed or sync-succeeded.  The handler won't be called.  Done:
+   *   Fall-through.
+   * } */
+
+  if (*err_code)
+  {
+    assert((m_state == State::S_NULL)
+           && "[A]synchronously-failed async_connect() should've gone back to NULL state by its contract.");
+  }
+  else
+  {
+    assert((m_state == State::S_PEER)
+           && "[A]synchronously-successful async_connect() should've resulted in PEER state by its contract.");
+
+    m_conn_ev_wait_func.clear(); // Might as well free some RAM (minor but why not).
+    m_conn_ev_wait_hndl_peer_socket.reset(); // Ditto.
+    m_conn_async_worker.reset(); // Ditto.
+  } // else if (!*err_code)
+
+  return true;
+} // Native_socket_stream::Impl::sync_connect()
+
+void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name, Error_code* sync_err_code_ptr,
+                                               flow::async::Task_asio_err&& on_done_func)
+{
+  namespace bind_ns = flow::util::bind_ns;
+  using asio_local_stream_socket::Endpoint;
+  using asio_local_stream_socket::Peer_socket;
+  using asio_local_stream_socket::endpoint_at_shared_name;
+  using flow::util::ostream_op_string;
+  using flow::async::Task_asio_err;
+  using util::Task;
+
+  /* Please see "Connect-ops impl design" in class doc header for background.
+   *
+   * Maintenance note: If async_connect() becomes public at some point (alongside sync_connect() in some form),
+   * it'll need to return bool and perform the m_state/NULL and op_started<CONN>() checks here, returning
+   * false as appropriate, or continuing as appropriate.
+   *
+   * Maintenance note: sync_err_code_ptr can't be null now, but standard Flow-style error reporting semantics
+   * will need to be implemented (throw exception on error, if it's indeed null). */
+
+  assert(sync_err_code_ptr);
+  auto& sync_err_code = *sync_err_code_ptr;
+
+  m_state = State::S_CONNECTING;
+
+  FLOW_LOG_INFO("Socket stream [" << *this << "]: Will attempt connect to [" << absolute_name << "].");
+
+  const auto remote_endpoint = endpoint_at_shared_name(get_logger(), absolute_name, &sync_err_code);
+  assert((remote_endpoint == Endpoint()) == bool(sync_err_code)); // (By the way it WARNs on error.)
+
+  if (!sync_err_code)
+  {
+    // Endpoint was fine; do the actual async connect attempt.
+
+#ifndef FLOW_OS_LINUX
+#  error "Some below code, at least comments, has been verified with Linux only.  Revisit before extending to other OS."
+#endif
+
+    /* Normally we'd do m_peer_socket->async_connect(F), but in the sync_io pattern we have to break it down into
+     * some non-blocking operation(s) with an async-wait delegated to the user via m_conn_ev_wait_func().
+     * (Internally that's what ->async_connect() does, but the wait is done by boost.asio.)
+     * Namely that's:
+     *   -# Set socket to non-blocking mode: ->non_blocking(true).
+     *   -# Synchronous ->connect().
+     *      -# This might succeed -- or fail -- immediately, as it's a local socket.  Done.  Otherwise:
+     *   -# It will yield would-block indicating connection in-progress.
+     *   -# Wait for writability of socket.
+     *   -# Once that's ready, done.  (If it really failed, it'll be "writable" -- but as soon as they try using it,
+     *      the true error shall be revealed.)
+     *
+     * We will do just that, for maximum resiliency in the face of who-knows-what.  In reality (as tested in Linux)
+     * the situation is simultaneously simpler -- in practice -- and more complicated (the reasons for why it works
+     * that way).  I explain... it's pretty messy.  This is with boost.asio from Boost 1.81.
+     *
+     * The trickiness is in ->connect().  If the opposing acceptor is listen()ing, and there is sufficient backlog
+     * space, then it just immediately succeeds.  If it is not listen()ing, then it just immediately fails.
+     * Now suppose it is listen()ing, but it ran out of backlog space.  Then: Whether ->non_blocking(true) or not
+     * (but, like, yes, it's true for us), it internally does the following.
+     *   -# ::connect().  If returns error.
+     *   -# If that error is would-block (EWOULDBLOCK or EAGAIN or EINPROGRESS; but really-really EAGAIN is what happens
+     *      in Linux with Unix domain sockets):
+     *   -# ::poll(), awaiting (with infinite timeout) writability of socket.
+     *      - Yes, it does this totally ignoring ->non_blocking().  That reads like a bug, and no comments explain
+     *        it, but in practice it apparently is not a bug; at least it's not for Unix domain sockets in my
+     *        (ygoldfel) testing.
+     *   -# The ::poll() immediately returns 1 active FD, meaning it's writable.
+     *      - I have no idea why, exactly.  In point of fact in blocking mode the ::connect() will actually sit there
+     *        and wait for the backlog to clear.  It does make sense non-blocking ::connect() immediately yields
+     *        EAGAIN.  But then ::poll() reports immediate writability?  That is rather strange.  Why wouldn't
+     *        the connect() just return an error then?
+     *   -# The code then tries to get SO_ERROR through a ::getsockopt().  This might be a TCP-stack thing more;
+     *      in any case it yields no error in practice with Unix domain socket.  (I really traced through the code to
+     *      confirm this; socket_ops.ipp is the file.)
+     * So, ostensibly the ->connect() succeeds in this situation.  However, ->write_some() at that point just
+     * hilariously yields ENOTCONN.  So all is well that ends... poorly?  Point is, that's what happens; at least
+     * it doesn't just sit around blocking inside ->connect() despite non_blocking(true).  Is it okay behavior
+     * given the situation (backlog full)?  Firsly backlog really shouldn't be full given a properly
+     * operating opposing acceptor (by the way it defaults to like 4096).  But if it is, I'd say this behavior is
+     * fine, and my standard is this: Even using a nice, civilized, normal m_peer_socket->async_connect(), the
+     * resulting behavior is *exactly* the same: The ->async_connect() quickly "succeeds"; then
+     * ->async_write() immediately ENOTCONNs.  If we do equally well as a properly operated ->async_connect(),
+     * then what else can they ask for really?
+     *
+     * That said, again, out of a preponderance of caution and future-proofness (?) we don't rely on the above
+     * always happening; and in fact have a clause for getting would_block from ->connect() in which case
+     * we do the whole m_conn_ev_wait_func() thing.  For now it won't be exercised is all.
+     *
+     * Update: As noted in "Connect-ops impl design" section of class doc header, when/if some form of `*this`
+     * becomes networked, then async_connect() will probably be public, and this code-path will come into
+     * play (and sync_connect() perhaps would become potentially-blocking in that setting). */
+
+    assert((!m_peer_socket->non_blocking()) && "New NULL-state socket should start as not non-blocking.");
+    m_peer_socket->non_blocking(true, sync_err_code);
+    if (!sync_err_code)
+    {
+      m_peer_socket->connect(remote_endpoint, sync_err_code);
+      /* Debug/test note: can force rare async code path here: `sync_err_code = boost::asio::error::would_block;`
+       * Don't commit that obviously.  @todo Unit test. */
+      if (sync_err_code == boost::asio::error::would_block)
+      {
+        FLOW_LOG_INFO("Socket stream [" << *this << "]: boost::asio::connect() (non-blocking) got would-block; "
+                      "while documented as possible this is actually rather surprising based on our testing "
+                      "and understanding of internal boost.asio code.  Proceeding to wait for writability.");
+        m_conn_ev_wait_func(&(m_conn_ev_wait_hndl_peer_socket.value()),
+                            true, // Wait for write.
+                            // Once writable do this.
+                            boost::make_shared<Task>
+                              ([this, on_done_func = std::move(on_done_func)]() mutable
+        {
+          conn_on_ev_peer_socket_writable(std::move(on_done_func));
+        }));
+
+        sync_err_code = error::Code::S_SYNC_IO_WOULD_BLOCK;
+        return;
+      }
+      // else
+      if (sync_err_code)
+      {
+        FLOW_LOG_WARNING("Socket stream [" << *this << "]: boost::asio::connect() (non-blocking) completed "
+                         "immediately but with error [" << sync_err_code << "] [" << sync_err_code.message() << "].  "
+                         "Connect request failing.  Will emit error via sync-args.");
+      }
+      // else { Success.  Reminder: this and fatal error are both much likelier than would-block. }
+    } // if (!err_code) [m_peer_socket->non_blocking(true)] (but it may have become truthy inside)
+    else // if (err_code) [m_peer_socket->non_blocking(true)]
+    {
+      FLOW_LOG_WARNING("Socket stream [" << *this << "]: Trying to set non-blocking mode yielded error, "
+                       "which is pretty crazy; details: [" << sync_err_code << "] "
+                       "[" << sync_err_code.message() << "].  Connect request failing.  "
+                       "Will emit error via sync-args.");
+    }
+  } // if (!sync_err_code) [endpoint construction] (but it may have become truthy inside)
+  // else if (sync_err_code) [endpoint construction] { It logged. }
+
+  // If got here, sync_err_code indicates immediate success or failure of async_connect().
+  m_state = sync_err_code ? State::S_NULL : State::S_PEER;
+} // Native_socket_stream::Impl::async_connect()
+
+void Native_socket_stream::Impl::conn_on_ev_peer_socket_writable(flow::async::Task_asio_err&& on_done_func)
+{
+  assert((m_state == State::S_CONNECTING) && "Only we can get out of CONNECTING state in the first place.");
+
+  /* The wait indicates it's writable... or "writable," meaning in error state.  While we could try some
+   * trick like ::getsockopt(SO_ERROR), it's all academic anyway: in Linux at least, as noted in long
+   * comment in async_connect(), ->connect() will either succeed or fail right away; and in the one
+   * case where one can force a connectable-but-not-immediately situation -- hitting a backlog-full acceptor --
+   * it'll still just succeed.  Anyway, if it weren't academic, then even if we falsely assume PEER state here,
+   * when really m_peer_socket is hosed underneath, it'll just get exposed the moment we try to read or write.
+   * So just relax. */
+
+  FLOW_LOG_INFO("Socket stream [" << *this << "]: Writable-wait upon would-blocked connect attempt: done.  "
+                "Entering PEER state.  Will emit to completion handler.");
+  m_state = State::S_PEER;
+  on_done_func(Error_code());
+  FLOW_LOG_TRACE("Handler completed.");
+} // Native_socket_stream::Impl::conn_on_ev_peer_socket_writable()
+
+bool Native_socket_stream::Impl::replace_event_wait_handles
+       (const Function<util::sync_io::Asio_waitable_native_handle ()>& create_ev_wait_hndl_func)
+{
+  if ((!m_snd_ev_wait_func.empty()) || (!m_rcv_ev_wait_func.empty()))
+  {
+    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Cannot replace event-wait handles after "
+                     "a start-*-ops procedure has been executed.  Ignoring.");
+    return false;
+  }
+  // else
+
+  FLOW_LOG_INFO("Socket stream [" << *this << "]: Replacing event-wait handles (probably to replace underlying "
+                "execution context without outside event loop's boost.asio Task_engine or similar).");
+
+  assert(m_ev_wait_hndl_peer_socket.is_open());
+  assert(m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.is_open());
+  assert(m_rcv_ev_wait_hndl_idle_timer_fired_peer.is_open());
+
+  Native_handle saved(m_ev_wait_hndl_peer_socket.release());
+  m_ev_wait_hndl_peer_socket = create_ev_wait_hndl_func();
+  m_ev_wait_hndl_peer_socket.assign(saved);
+
+  saved.m_native_handle = m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release();
+  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer = create_ev_wait_hndl_func();
+  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.assign(saved);
+
+  saved.m_native_handle = m_rcv_ev_wait_hndl_idle_timer_fired_peer.release();
+  m_rcv_ev_wait_hndl_idle_timer_fired_peer = create_ev_wait_hndl_func();
+  m_rcv_ev_wait_hndl_idle_timer_fired_peer.assign(saved);
+
+  return true;
+} // Native_socket_stream::Impl::replace_event_wait_handles()
+
+util::Process_credentials
+  Native_socket_stream::Impl::remote_peer_process_credentials(Error_code* err_code) const
+{
+  using asio_local_stream_socket::Opt_peer_process_credentials;
+  using util::Process_credentials;
+
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(Process_credentials, Native_socket_stream::Impl::remote_peer_process_credentials,
+                                     _1);
+  // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
+
+  if (!state_peer("remote_peer_process_credentials()"))
+  {
+    err_code->clear(); // As promised.
+    return Process_credentials();
+  }
+  // else
+
+  if (!m_peer_socket)
+  {
+    *err_code = error::Code::S_LOW_LVL_TRANSPORT_HOSED;
+    return Process_credentials();
+  }
+  // else
+
+  Opt_peer_process_credentials sock_opt; // Contains default-cted Process_credentials.
+  m_peer_socket->get_option(sock_opt, *err_code);
+
+  return sock_opt;
+} // Native_socket_stream::Impl::remote_peer_process_credentials()
+
+const std::string& Native_socket_stream::Impl::nickname() const
+{
+  return m_nickname;
+}
+
+bool Native_socket_stream::Impl::state_peer(util::String_view context) const
+{
+  if (m_state != State::S_PEER)
+  {
+    FLOW_LOG_WARNING("Socket stream [" << *this << "]: In context [" << context << "] we must be in PEER state, "
+                     "but we are not.  Probably a user bug, but it is not for us to judge.");
+    return false;
+  }
+  // else
+  return true;
+}
+
+std::ostream& operator<<(std::ostream& os, const Native_socket_stream::Impl& val)
+{
+  return os << "SIO[" << val.nickname() << "]@" << static_cast<const void*>(&val);
+}
+
+#if 0 // See the declaration in class { body }; explains why `if 0` yet still here.
 void Native_socket_stream::Impl::reset_sync_io_setup()
 {
   using util::sync_io::Asio_waitable_native_handle;
@@ -183,8 +595,6 @@ void Native_socket_stream::Impl::reset_sync_io_setup()
    * Therefore just do this (possibly no-op): */
   m_snd_ev_wait_func.clear();
   m_rcv_ev_wait_func.clear();
-  // Shouldn't matter in PEER state, but as of this writing replace_event_wait_handles() doesn't worry about state.  So:
-  m_conn_ev_wait_func.clear();
 
   /* replace_event_wait_handles(), in PEER state =
    *   For the 3 watchable FDs in *this -- m_ev_wait_hndl_peer_socket, m_snd_ev_wait_hndl_auto_ping_timer_fired_peer,
@@ -192,272 +602,18 @@ void Native_socket_stream::Impl::reset_sync_io_setup()
    *     - Starting point: S contains a particular raw FD, associated with Task_engine m_ev_hndl_task_engine_unused.
    *     - Do: Replace associated Task_engine m_ev_hndl_task_engine_unused with <user-supplied one via functor thing>.
    * So to undo it just do reverse it essentially (possibly no-op): */
-  Native_handle saved(m_ev_wait_hndl_peer_socket.release());
-  m_ev_wait_hndl_peer_socket = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused);
-  m_ev_wait_hndl_peer_socket.assign(saved);
+  m_ev_wait_hndl_peer_socket
+    = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
+                                  m_ev_wait_hndl_peer_socket.release());
 
-  saved.m_native_handle = m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release();
-  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused);
-  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.assign(saved);
+  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer
+    = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
+                                  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release());
 
-  saved.m_native_handle = m_rcv_ev_wait_hndl_idle_timer_fired_peer.release();
-  m_rcv_ev_wait_hndl_idle_timer_fired_peer = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused);
-  m_rcv_ev_wait_hndl_idle_timer_fired_peer.assign(saved);
+  m_rcv_ev_wait_hndl_idle_timer_fired_peer
+    = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
+                                  m_rcv_ev_wait_hndl_idle_timer_fired_peer.release());
 } // Native_socket_stream::Impl::reset_sync_io_setup()
-
-Native_socket_stream::Impl::~Impl()
-{
-  FLOW_LOG_INFO("Socket stream [" << *this << "]: Shutting down.  Next peer socket will close if open; "
-                "and that is it.  They simply cannot advance our state machine via on_active_ev_func()s we "
-                "handed out.");
-}
-
-bool Native_socket_stream::Impl::replace_event_wait_handles
-       (const Function<util::sync_io::Asio_waitable_native_handle ()>& create_ev_wait_hndl_func)
-{
-  if ((!m_conn_ev_wait_func.empty()) || (!m_snd_ev_wait_func.empty()) || (!m_rcv_ev_wait_func.empty()))
-  {
-    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Cannot replace event-wait handles after "
-                     "a start-*-ops procedure has been executed.  Ignoring.");
-    return false;
-  }
-  // else
-
-  FLOW_LOG_INFO("Socket stream [" << *this << "]: Replacing event-wait handles (probably to replace underlying "
-                "execution context without outside event loop's boost.asio Task_engine or similar).");
-
-  assert(m_ev_wait_hndl_peer_socket.is_open());
-  assert(m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.is_open());
-  assert(m_rcv_ev_wait_hndl_idle_timer_fired_peer.is_open());
-
-  Native_handle saved(m_ev_wait_hndl_peer_socket.release());
-  m_ev_wait_hndl_peer_socket = create_ev_wait_hndl_func();
-  m_ev_wait_hndl_peer_socket.assign(saved);
-
-  saved.m_native_handle = m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release();
-  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer = create_ev_wait_hndl_func();
-  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.assign(saved);
-
-  saved.m_native_handle = m_rcv_ev_wait_hndl_idle_timer_fired_peer.release();
-  m_rcv_ev_wait_hndl_idle_timer_fired_peer = create_ev_wait_hndl_func();
-  m_rcv_ev_wait_hndl_idle_timer_fired_peer.assign(saved);
-
-  return true;
-} // Native_socket_stream::Impl::replace_event_wait_handles()
-
-bool Native_socket_stream::Impl::start_connect_ops(util::sync_io::Event_wait_func&& ev_wait_func)
-{
-  return start_ops<Op::S_CONN>(std::move(ev_wait_func));
-} // Native_socket_stream::Impl::start_connect_ops()
-
-bool Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name, Error_code* sync_err_code_ptr,
-                                               flow::async::Task_asio_err&& on_done_func)
-{
-  namespace bind_ns = flow::util::bind_ns;
-  using asio_local_stream_socket::Endpoint;
-  using asio_local_stream_socket::Peer_socket;
-  using asio_local_stream_socket::endpoint_at_shared_name;
-  using flow::util::ostream_op_string;
-  using flow::async::Task_asio_err;
-  using util::Task;
-
-  if (m_state != State::S_NULL)
-  {
-    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Wanted to connect to [" << absolute_name << "] "
-                     "but already not in NULL state.  Ignoring.");
-    return false;
-  }
-  // else
-  if (!op_started<Op::S_CONN>("async_connect"))
-  {
-    return false;
-  }
-  // else
-
-  m_state = State::S_CONNECTING;
-
-  FLOW_LOG_INFO("Socket stream [" << *this << "]: Will attempt connect to [" << absolute_name << "].");
-
-  Error_code sync_err_code;
-  const auto remote_endpoint = endpoint_at_shared_name(get_logger(), absolute_name, &sync_err_code);
-  assert((remote_endpoint == Endpoint()) == bool(sync_err_code)); // (By the way it WARNs on error.)
-
-  if (!sync_err_code)
-  {
-    // Endpoint was fine; do the actual async connect attempt.
-
-    /* Normally we'd do m_peer_socket->async_connect(F), but in the sync_io pattern we have to break it down into
-     * some non-blocking operation(s) with an async-wait delegated to the user via m_conn_ev_wait_func().
-     * (Internally that's what ->async_connect() does, but the wait is done by boost.asio.)
-     * Namely that's:
-     *   -# Set socket to non-blocking mode: ->non_blocking(true).
-     *   -# Synchronous ->connect().
-     *      -# This might succeed -- or fail -- immediately, as it's a local socket.  Done.  Otherwise:
-     *   -# It will yield would-block indicating connection in-progress.
-     *   -# Wait for writability of socket.
-     *   -# Once that's ready, done.  (If it really failed, it'll be "writable" -- but as soon as they try using it,
-     *      the true error shall be revealed.)
-     *
-     * We will do just that, for maximum resiliency in the face of who-knows-what.  In reality (as tested in Linux)
-     * the situation is simultaneously simpler -- in practice -- and more complicated (the reasons for why it works
-     * that way).  I explain... it's pretty messy.  This is with boost.asio from Boost 1.81.
-     *
-     * The trickiness is in ->connect().  If the opposing acceptor is listen()ing, and there is sufficient backlog
-     * space, then it just immediately succeeds.  If it is not listen()ing, then it just immediately fails.
-     * Now suppose it is listen()ing, but it ran out of backlog space.  Then: Whether ->non_blocking(true) or not
-     * (but, like, yes, it's true for us), it internally does the following.
-     *   -# ::connect().  If returns error.
-     *   -# If that error is would-block (EWOULDBLOCK or EAGAIN or EINPROGRESS; but really-really EAGAIN is what happens
-     *      in Linux with Unix domain sockets):
-     *   -# ::poll(), awaiting (with infinite timeout) writability of socket.
-     *      - Yes, it does this totally ignoring ->non_blocking().  That reads like a bug, and no comments explain
-     *        it, but in practice it apparently is not a bug; at least it's not for Unix domain sockets in my
-     *        (ygoldfel) testing.
-     *   -# The ::poll() immediately returns 1 active FD, meaning it's writable.
-     *      - I have no idea why, exactly.  In point of fact in blocking mode the ::connect() will actually sit there
-     *        and wait for the backlog to clear.  It does make sense non-blocking ::connect() immediately yields
-     *        EAGAIN.  But then ::poll() reports immediate writability?  That is rather strange.  Why wouldn't
-     *        the connect() just return an error then?
-     *   -# The code then tries to get SO_ERROR through a ::getsockopt().  This might be a TCP-stack thing more;
-     *      in any case it yields no error in practice with Unix domain socket.  (I really traced through the code to
-     *      confirm this; socket_ops.ipp is the file.)
-     * So, ostensibly the ->connect() succeeds in this situation.  However, ->write_some() at that point just
-     * hilariously yields ENOTCONN.  So all is well that ends... poorly?  Point is, that's what happens; at least
-     * it doesn't just sit around blocking inside ->connect() despite non_blocking(true).  Is it okay behavior
-     * given the situation (backlog full)?  Firsly backlog really shouldn't be full given a properly
-     * operating opposing acceptor (by the way it default to like 4096).  But if it is, I'd say this behavior is
-     * fine, and my standard is this: Even using a nice, civilized, normal m_peer_socket->async_connect(), the
-     * resulting behavior is *exactly* the same: The ->async_connect() quickly "succeeds"; then
-     * ->async_write() immediately ENOTCONNs.  If we do equally well as a properly operated ->async_connect(),
-     * then what else can they ask for really?
-     *
-     * That said, again, out of a preponderance of caution and future-proofness (?) we don't rely on the above
-     * always happening; and in fact have a clause for getting would_block from ->connect() in which case
-     * we do the whole m_conn_ev_wait_func() thing.  For now it won't be exercised is all. */
-
-    assert((!m_peer_socket->non_blocking()) && "New NULL-state socket should start as not non-blocking.");
-    m_peer_socket->non_blocking(true, sync_err_code);
-    if (!sync_err_code)
-    {
-      m_peer_socket->connect(remote_endpoint, sync_err_code);
-      if (sync_err_code == boost::asio::error::would_block)
-      {
-        FLOW_LOG_INFO("Socket stream [" << *this << "]: boost::asio::connect() (non-blocking) got would-block; "
-                      "while documented as possible this is actually rather surprising based on our testing "
-                      "and understanding of internal boost.asio code.  Proceeding to wait for writability.");
-        m_conn_ev_wait_func(&m_ev_wait_hndl_peer_socket,
-                            true, // Wait for write.
-                            // Once writable do this.
-                            boost::make_shared<Task>
-                              ([this, on_done_func = std::move(on_done_func)]() mutable
-        {
-          conn_on_ev_peer_socket_writable(std::move(on_done_func));
-        }));
-
-        sync_err_code = error::Code::S_SYNC_IO_WOULD_BLOCK;
-      }
-      else if (sync_err_code)
-      {
-        FLOW_LOG_WARNING("Socket stream [" << *this << "]: boost::asio::connect() (non-blocking) completed "
-                         "immediately but with error [" << sync_err_code << "] [" << sync_err_code.message() << "].  "
-                         "Connect request failing.  Will emit error via sync-args.");
-      }
-      // else { Success.  Reminder: this and fatal error are both much likelier than would-block. }
-    } // if (!err_code) [m_peer_socket->non_blocking(true)] (but it may have become truthy inside)
-    else // if (err_code) [m_peer_socket->non_blocking(true)]
-    {
-      FLOW_LOG_WARNING("Socket stream [" << *this << "]: Trying to set non-blocking mode yielded error, "
-                       "which is pretty crazy; details: [" << sync_err_code << "] "
-                       "[" << sync_err_code.message() << "].  Connect request failing.  "
-                       "Will emit error via sync-args.");
-    }
-  } // if (!sync_err_code) [endpoint construction] (but it may have become truthy inside)
-  // else if (sync_err_code) [endpoint construction] { It logged. }
-
-  // If got here, sync_err_code indicates immediate success or failure of async_connect().
-  m_state = sync_err_code ? State::S_NULL : State::S_PEER;
-
-  // Standard error-reporting semantics.
-  if ((!sync_err_code_ptr) && sync_err_code)
-  {
-    throw flow::error::Runtime_error(sync_err_code, "Native_socket_stream::Impl::async_connect()");
-  }
-  // else
-  sync_err_code_ptr && (*sync_err_code_ptr = sync_err_code);
-  // And if (!sync_err_code_ptr) + no error => no throw.
-
-  return true;
-} // Native_socket_stream::Impl::async_connect()
-
-void Native_socket_stream::Impl::conn_on_ev_peer_socket_writable(flow::async::Task_asio_err&& on_done_func)
-{
-  assert((m_state == State::S_CONNECTING) && "Only we can get out of CONNECTING state in the first place.");
-
-  /* The wait indicates it's writable... or "writable," meaning in error state.  While we could try some
-   * trick like ::getsockopt(SO_ERROR), it's all academic anyway: in Linux at least, as noted in long
-   * comment in async_connect(), ->connect() will either succeed or fail right away; and in the one
-   * case where one can force a connectable-but-not-immediately situation -- hitting a backlog-full acceptor --
-   * it'll still just succeed.  Anyway, if it weren't academic, then even if we falsely assume PEER state here,
-   * when really m_peer_socket is hosed underneath, it'll just get exposed the moment we try to read or write.
-   * So just relax. */
-
-  FLOW_LOG_INFO("Socket stream [" << *this << "]: Writable-wait upon would-blocked connect attempt: done.  "
-                "Entering PEER state.  Will emit to completion handler.");
-  m_state = State::S_PEER;
-  on_done_func(Error_code());
-  FLOW_LOG_TRACE("Handler completed.");
-} // Native_socket_stream::Impl::conn_on_ev_peer_socket_writable()
-
-util::Process_credentials
-  Native_socket_stream::Impl::remote_peer_process_credentials(Error_code* err_code) const
-{
-  using asio_local_stream_socket::Opt_peer_process_credentials;
-  using util::Process_credentials;
-
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(Process_credentials, Native_socket_stream::Impl::remote_peer_process_credentials,
-                                     _1);
-  // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
-
-  if (!state_peer("remote_peer_process_credentials()"))
-  {
-    err_code->clear(); // As promised.
-    return Process_credentials();
-  }
-  // else
-
-  if (!m_peer_socket)
-  {
-    *err_code = error::Code::S_LOW_LVL_TRANSPORT_HOSED;
-    return Process_credentials();
-  }
-  // else
-
-  Opt_peer_process_credentials sock_opt; // Contains default-cted Process_credentials.
-  m_peer_socket->get_option(sock_opt, *err_code);
-
-  return sock_opt;
-} // Native_socket_stream::Impl::remote_peer_process_credentials()
-
-const std::string& Native_socket_stream::Impl::nickname() const
-{
-  return m_nickname;
-}
-
-bool Native_socket_stream::Impl::state_peer(util::String_view context) const
-{
-  if (m_state != State::S_PEER)
-  {
-    FLOW_LOG_WARNING("Socket stream [" << *this << "]: In context [" << context << "] we must be in PEER state, "
-                     "but we are not.  Probably a user bug, but it is not for us to judge.");
-    return false;
-  }
-  // else
-  return true;
-}
-
-std::ostream& operator<<(std::ostream& os, const Native_socket_stream::Impl& val)
-{
-  return os << "SIO[" << val.nickname() << "]@" << static_cast<const void*>(&val);
-}
+#endif
 
 } // namespace ipc::transport::sync_io

@@ -54,16 +54,17 @@
  *       one can always convert the latter to the former by calling `x.async_io_obj()`.
  *
  * @note In cases where performance is not a real concern, such as for the assumed-rare
- *       ipc::session::Client_session::async_connect() operations, internally `sync_io::X` may actually be written
+ *       ipc::session::Server_session::async_accept() operations, internally `sync_io::X` may actually be written
  *       in terms of `X` instead... but we digress.  Either way it is a black box.
  *
  * Some examples of `X`es that have `sync_io::X` counterparts:
  *   - core-layer transport::Native_socket_stream
- *     (including its `async_connect()`, `async_receive_*()`, and the handler-less -- but nevertheless potentially
+ *     (including its `async_receive_*()`, and the handler-less -- but nevertheless potentially
  *     asynchronous -- `send_*()`) and all other `Blob_sender`, `Blob_receiver`, `Native_handle_sender`,
  *     `Native_handle_receiver` concept impls including the bundling transport::Channel;
  *   - structured-layer ipc::transport::struc::Channel;
- *   - session::Client_session (with its `async_connect()`) and session::Session_server (with its `async_accept()`);
+ *   - session::Client_session (with its channel-accept and error handlers) and session::Session_server (ditto, plus
+ *     with its `async_accept()`);
  *     - all their session::shm counterparts.
  *
  * ### The async-I/O (default) pattern ###
@@ -499,17 +500,15 @@
  * `x.start_send_blob_ops()` for setup.
  *
  * What if an object can do multiple things though?  `Native_socket_stream` (operating as a `Blob_sender` and
- * `Blob_receiver`) can do 3: it can
- *   - connect (`.async_connect()`),
+ * `Blob_receiver`) can do at least 2: it can
  *   - send (`.send_blob()`, `.end_sending()`, `.async_end_sending()`, `.auto_ping()`),
  *   - and receive (`.async_receive_blob()`, `.idle_timer_run()`).
  *
- * These are 3 distinct *op-types*, and each one has its own independent API started via `.start_connect_ops()`,
- * `.start_send_blob_ops()`, and `.start_receive_blob_ops()` respectively.
+ * These are 2 distinct *op-types*, and each one has its own independent API started via
+ * `.start_send_blob_ops()` and `.start_receive_blob_ops()` respectively.  (If it were networked -- this might
+ * be in the works -- it would probably gain a 3rd op-type via `.start_connect_ops()`.)
  *
- * Not that interesting in and of itself; but what about concurrency?  Answer: The connect op-type can be factored
- * out of the discussion entirely: if you're not connected yet, you can't send or receive; and if you are connected,
- * then you can't connect.  So just... don't.
+ * Not that interesting in and of itself; but what about concurrency?  Answer:
  *
  * Things only get interesting once 2+ op-types (in practice, as of this writing, it's
  * 2 at most in all known use cases) can occur concurrently.  Namely that's
@@ -533,7 +532,7 @@
  * async operations outstanding simultaneously (e.g., initiating a send while an `.async_receive_*(..., F)` has not yet
  * finished as signified by `F()`): you just cannot literally call mutating parts of `x` API concurrently.
  *
- * @see ipc::util::sync_io::Event_wait_func -- details about connecting your event loop to a
+ * @see ipc::util::sync_io::Event_wait_func -- details about hooking up your event loop to a
  *      `sync_io`-pattern-implementing Flow-IPC object.
  * @see ipc::util::sync_io::Asio_waitable_native_handle -- take a look particularly if your event loop is built on
  *      boost.asio.
@@ -598,7 +597,7 @@ using Task_ptr = boost::shared_ptr<Task>;
  * Suppose `T` is an ipc::transport or ipc::session object type, always in a `"sync_io"` sub-namespace, that
  * operates according to the `sync_io` pattern.  (For example, `T` might be transport::sync_io::Native_socket_stream.)
  * Then `T::start_X_ops(Event_wait_func&&)`, and/or a compatible template, must be invoked to begin unidirectional work
- * of type X (e.g., `start_X_ops()` might be `start_connect_ops()` or `start_send_blob_ops()` or
+ * of type X (e.g., `start_X_ops()` might be `start_send_blob_ops()` or
  * `start_receive_native_handle_ops()`) on a given `T`; the `T` memorizes the function until its destruction.
  *
  * From that point on, the `T` might at times be unable to complete an operation (for example
@@ -620,9 +619,9 @@ using Task_ptr = boost::shared_ptr<Task>;
  *     - In terms of thread safety, and generally, one should consider this function a non-`const` member of `T`'s
  *       sub-API.  (The sub-API in question is the set of methods that correspond to unidirectional-operation
  *       of type X, where `T::start_X_ops()` was invoked to kick things off.  For example, in `Native_socket_stream`
- *       as used as a Blob_sender, that's its `send_blob()` and `end_sending()` methods.)
+ *       as used as a Blob_sender, that's its `send_blob()` and `*end_sending()` methods.)
  *       That is, `(*on_active_ev_func)()` may not be called concurrently to any `T` sub-API method
- *       (`Native_socket_stream::send_blob()`, `Native_socket_stream::end_sending()` in the recent example) or other
+ *       (`Native_socket_stream::send_blob()`, `*end_sending()` in the recent example) or other
  *       `(*on_active_ev_func)()`.  `(*on_active_ev_func)()` may well, itself, synchronously invoke
  *       `Event_wait_func` to indicate interest in a new event.
  *

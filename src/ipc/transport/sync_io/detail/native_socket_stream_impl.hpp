@@ -80,7 +80,7 @@ namespace ipc::transport::sync_io
  * safe concurrency without sacrificing perf.  (Spoiler alert: a tiny and simple critical section w/r/t
  * `m_*peer_socket` only.)
  *
- * There is, also, NULL state, wherein one can async_connect().  This is separate from the other 2, in this case
+ * There is, also, NULL state, wherein one can sync_connect() et al.  This is separate from the other 2, in this case
  * preceding them entirely.  We will soon discuss each algorithm: connect-ops, send-ops, receive-ops (though
  * connect-ops is treated more as an afterthought at the end).  Before we can speak of send-ops and receive-ops
  * algorithms, we have to establish the substrate over which they operate: the protocol they speak.  Don't worry;
@@ -235,6 +235,45 @@ namespace ipc::transport::sync_io
  * we have to issue async-waits to the user via `sync_io` pattern.  #Native_handle complicates it a bit more too.
  * That said all that stuff is tactical really.  Just see the code.
  *
+ * ### Connect-ops impl design ###
+ * The algorithm itself is easy enough to just follow in the code.  What is subtle however, we think, is why it is
+ * structured the way it is.  As per the public API of sync_io::Native_socket_stream (and the async-I/O-pattern
+ * counterpart transport::Native_socket_stream for that matter), there is only the one public API, sync_connect():
+ * it is non-blocking and synchronous, meaning it totally succeeds or fails immediately.  async_connect() and
+ * start_connect_ops() are `private`; replace_event_wait_handles() does not affect connect-ops.  Yet sync_connect()
+ * is written around those `private` facilities.  One, how is this even possible -- if there's (even internally)
+ * an async step, how can sync_connect() be synchronous yet non-blocking?  And two, supposing that is fine, then
+ * why write it this way -- as if following the `sync_io` pattern but entirely within the internal code of a `*this`?
+ *
+ * For the 1st question: First we quote the transport::Native_socket_stream public doc header which explains
+ * why there is only `sync_connect()` but no `async_connect()`:
+ * "Without networking, the other side (Native_stream_socket_acceptor) either exists/is listening; or no.
+ * Connecting is a synchronous, non-blocking operation; so an `async_connect()` API in this context only makes
+ * life harder for the user.  (However, there are some serious plans to add a networking-capable counterpart
+ * (probably via TCP at least) to Native_socket_stream; that one will almost certainly have an `async_connect()`,
+ * while its `sync_connect()` will probably become potentially blocking.)"  So that is why it works: internally
+ * with a Unix domain stream socket async-connect either immediately succeeds or fails in
+ * all situations, at least in Linux (as of this writing all that's supported).  (There are some further details
+ * inline in `async_connect()` impl.)  So internally it's simple to do a non-blocking sync-connect; return
+ * success/failure if not would-block; or async-wait for writability in the rare would-block situation; this too
+ * is resolved quickly, and we can internally use a future-promise pair to briefly-await that resolution inside
+ * sync_connect().
+ *
+ * That doesn't answer the 2nd question: Why is it written like this?  It would seem the code could be more compact
+ * if it were not written in the `sync_io`-pattern fashion, wherein we have a (`private`) start_connect_ops() and
+ * call it as-if we're an outside connect-ops user of sorts.  Answer: Truthfully, historically, I (ygoldfel)
+ * originally wrote it that way not really contemplating closely whether a local-socket connect-op can really
+ * take a blocking amount of time; and async_connect() *was* public.  Once I looked into it however, it became
+ * clear that it's always quick, which allowed various APIs -- all the way up to ipc::session::Session connect API --
+ * quite a bit more convenient to use.  At that point making only a public `sync_connect()` became a no-brainer.
+ * However, while I did contemplate then cutting down that code to get rid of the `sync_io`-pattern structuring,
+ * I realized that over time this would only hurt us.  Why?  Answer: As we said publicly in the quote above,
+ * there probably *will* be a networked public `async_connect()`, and a huge % of the code in the
+ * networked-socket-stream class containing it will be reused from Native_socket_stream.  At that point
+ * the `sync_io`-pattern-based structuring will come in quite handy.  It's a subjective decision, undoubtedly, but
+ * I feel pretty good about it.  Also, it's really not all that much complex; after all the `sync_io` pattern
+ * is used all over the place including our own `*this` send-ops and receive-ops.
+ *
  * ### Error handling ###
  * See Impl::m_snd_pending_err_code and Impl::m_rcv_pending_err_code doc headers.  It's pretty simple:
  * one that pipe is hosed, the appropriate one is set to truthy.  Now any user sending or receiving (whichever
@@ -311,6 +350,9 @@ public:
 
   // Methods.
 
+  /* Please see transport::Native_socket_stream::Impl::release() (also dead code) doc header; explains why this is
+   * dead code but remains. */
+#if 0
   /**
    * Key helper of Native_socket_stream::release(), this operates on a `*this` suitable for
    * `.release()` and makes it as-if no `start_*_ops()` or replace_event_wait_handles() have been called
@@ -332,6 +374,7 @@ public:
    * Behavior is undefined (assertion may trip) if requirements above have not been met.
    */
   void reset_sync_io_setup();
+#endif
 
   /**
    * See Native_socket_stream counterpart.
@@ -362,26 +405,13 @@ public:
 
   /**
    * See Native_socket_stream counterpart.
-   *
-   * @param ev_wait_func
-   *        See Native_socket_stream counterpart.
-   * @return See Native_socket_stream counterpart.
-   */
-  bool start_connect_ops(util::sync_io::Event_wait_func&& ev_wait_func);
-
-  /**
-   * See Native_socket_stream counterpart.
-   *
    * @param absolute_name
    *        See Native_socket_stream counterpart.
-   * @param sync_err_code
-   *        See Native_socket_stream counterpart.
-   * @param on_done_func
+   * @param err_code
    *        See Native_socket_stream counterpart.
    * @return See Native_socket_stream counterpart.
    */
-  bool async_connect(const Shared_name& absolute_name, Error_code* sync_err_code,
-                     flow::async::Task_asio_err&& on_done_func);
+  bool sync_connect(const Shared_name& absolute_name, Error_code* err_code);
 
   // Send-ops API.
 
@@ -547,14 +577,14 @@ private:
   {
     /**
      * Not a peer.  Barring moves-from/moves-to: Possible initial state (via certain ctors); goes to CONNECTING
-     * (via async_connect()).  Only async_connect() is possible in this state (other public methods tend to return
-     * immediately).
+     * (via async_connect()).  Only async_connect() (via public sync_connect()) is possible in this state (other
+     * public methods tend to return immediately).
      */
     S_NULL,
 
     /**
      * Not a peer but async_connect() in progress to try to make it a peer.  Barring moves-from/moves-to:
-     * Entry from NULL; goes to PEER or NULL.  Public methods tend to return immediately in this state.
+     * Entry from NULL; goes to PEER or NULL.
      */
     S_CONNECTING,
 
@@ -685,6 +715,43 @@ private:
   // Methods.
 
   // Connect-ops.
+
+  /**
+   * It is `start_ops<Op::S_CONN>()`.  See "Connect-ops impl design" in class doc header.  This guy could
+   * someday become public if and only if async_connect() became public.
+   *
+   * @param ev_wait_func
+   *        Usual `sync_io`-pattern meaning.
+   * @return What start_ops() returns.
+   */
+  bool start_connect_ops(util::sync_io::Event_wait_func&& ev_wait_func);
+
+  /**
+   * The core of sync_connect(), written in the `sync_io`-pattern style.  See "Connect-ops impl design" in class doc
+   * header.  This guy (in slightly modified form, likely returning `bool` for example) could someday become public,
+   * if we extend `*this` in some form to networked socket streams.  Until then: this must be called
+   * in NULL state; otherwise behavior undefined (assertion may trip).
+   *
+   * As of this writing -- until it is networked -- this will always complete in a non-blocking amount of time,
+   * even if the call yields would-block (error::Code::S_SYNC_IO_WOULD_BLOCK).  So in the latter case it is still
+   * guaranteed that the internally-triggered async-wait via start_connect_ops() machinery shall be satisfied
+   * immediately.  (See inside the code for OS-dependent subtleties, but the bottom line is as written.)
+   *
+   * @param absolute_name
+   *        See sync_connect().
+   * @param sync_err_code
+   *        Must not be null (assertion may trip otherwise; but if this becomes public null would be allowed).
+   *        That aside: Usual `sync_io`-pattern meaning: If connect succeded or failed synchronously,
+   *        this is set to the result (falsy indicating reaching PEER state); otherwise set to the usual
+   *        would-block value.  In the latter case, per `sync_io`-pattern the `start_connect_ops()`-passed
+   *        async-wait function shall be invoked to await a native-handle event condition; and once
+   *        the async op does complete, `on_done_func(E)` is invoked, where `E` is the async equivalent of
+   *        `*sync_err_code`.
+   * @param on_done_func
+   *        See `sync_err_code`.
+   */
+  void async_connect(const Shared_name& absolute_name, Error_code* sync_err_code,
+                     flow::async::Task_asio_err&& on_done_func);
 
   /**
    * Handler for the async-wait in case async_connect() cannot synchronously complete the #m_peer_socket
@@ -1148,15 +1215,15 @@ private:
    *
    * ### Rationale ###
    * The above facts are important -- namely that from the very start (up to an error) the FD is loaded and never
-   * changes -- because the watcher FD-wrappers (1 for each op-type: connection, sends, receives) used in
-   * the `sync_io` pattern can be simply and correctly initialized at any time and not change thereafter.
-   * E.g., `start_send_*_ops()` can be called by the user at any time, even in NULL state.
+   * changes -- because the watcher FD-wrappers used in
+   * the `sync_io` pattern can be simply and correctly initialized at any time and not change thereafter (
+   * in terms what FD they wrap).
    *
    * As for the null-pointer state, it exists for 2 reasons which are somewhat in synergy:
    *   - It is a way of giving back the FD-resource to the kernel as early as possible.
    *     (Destroying `Peer_socket` closes the contained FD/socket.)
    *   - It is a way for the incoming-direction processing logic to inform the outgoing-direction counterpart logic
-   *     that it has detected the socket is entirely hosed,in both directions (and hence no need to even try further
+   *     that it has detected the socket is entirely hosed, in both directions (and hence no need to even try further
    *     operations on it); and vice versa.
    *
    * As to that 2nd reason: a couple of other approaches would work:
@@ -1259,6 +1326,45 @@ private:
   // Connect-ops data.
 
   /**
+   * Event loop used exclusively by sync_connect() which as needed `->start()`s a short-lived thread and `->stop()`s it
+   * before returning, in case async_connect() does not complete synchronously.  Null in PEER state; non-null in NULL
+   * state (when sync_connect() might be called and not no-op).
+   *
+   * See "Connect-ops impl design" in class doc header for key background discussion of sync_connect() et al.
+   */
+  std::optional<flow::async::Single_thread_task_loop> m_conn_async_worker;
+
+  /**
+   * This is to (#m_peer_socket, #m_conn_async_worker) what #m_ev_wait_hndl_peer_socket is to (#m_peer_socket,
+   * transport::Native_socket_stream::Impl::m_worker), respectively.  Thus it stores yet another copy of
+   * `m_peer_socket->native_handle()` but associated with `m_conn_async_worker->task_engine()`; so that
+   * async_connect() -- if it needs to execute an async-wait -- can (via `sync_io` pattern) make use of
+   * `m_conn_ev_wait_hndl_peer_socket->async_wait(F)`, and completion handler `F()` shall be posted onto the
+   * short-lived thread resulting from `m_conn_async_worker->start()` in sync_connect().
+   *
+   * Null if and only if #m_conn_async_worker is null.
+   * 
+   * See "Connect-ops impl design" in class doc header for key background discussion of sync_connect() et al.
+   *
+   * ### Rationale ###
+   * It is also possible to instead just use #m_ev_wait_hndl_peer_socket for the connect-ops `sync_io`-pattern
+   * setup, along with using it for send-ops and receive-ops.  However, while storing marginally less state,
+   * it is pretty annoying in other ways: replace_event_wait_handles() to set up future send-ops and receive-ops
+   * can happen at any time, including before sync_connect(); so sync_connect() would need to save
+   * #m_ev_wait_hndl_peer_socket, then re-associate it with #m_conn_async_worker, then restore it.  Whereas by
+   * decoupling as we do here, we separate the NULL-state and PEER-state algorithms cleanly and need to worry
+   * about that stuff.
+   *
+   * (Maintenance note: If/when -- as speculated in class doc header section "Connect-ops impl design" -- we make
+   * start_connect_ops() and async_connect() public at some point, then probably it'll be best to indeed
+   * eliminate `m_conn_ev_wait_hndl_peer_socket` and use `m_ev_wait_hndl_peer_socket` for all the ops, including
+   * having replace_event_wait_handles() handle connect-ops stuff in addition to send-ops and receive-ops.  Now
+   * the user will be in charge of providing async-waiting machinery for connect-ops per normal `sync_op` pattern,
+   * as opposed to the existing situation where we manage that internally to `*this`.)
+   */
+  std::optional<util::sync_io::Asio_waitable_native_handle> m_conn_ev_wait_hndl_peer_socket;
+
+  /**
    * Function (set forever in start_connect_ops()) through which we invoke the outside event loop's
    * async-wait facility for descriptors/events relevant to connect-ops.  See util::sync_io::Event_wait_func
    * doc header for a refresher on this mechanic.
@@ -1343,9 +1449,9 @@ private:
   util::sync_io::Asio_waitable_native_handle m_snd_ev_wait_hndl_auto_ping_timer_fired_peer;
 
   /**
-   * Function (set forever in `start_send_*_ops()`) through which we invoke the outside event loop's
-   * async-wait facility for descriptors/events relevant to send-ops.  See util::sync_io::Event_wait_func
-   * doc header for a refresher on this mechanic.
+   * Function (set forever in `start_send_*_ops()`) through which we invoke the
+   * outside event loop's async-wait facility for descriptors/events relevant to send-ops.
+   * See util::sync_io::Event_wait_func doc header for a refresher on this mechanic.
    */
   util::sync_io::Event_wait_func m_snd_ev_wait_func;
 
@@ -1432,9 +1538,9 @@ private:
   util::sync_io::Asio_waitable_native_handle m_rcv_ev_wait_hndl_idle_timer_fired_peer;
 
   /**
-   * Function (set forever in `start_receive_*_ops()`) through which we invoke the outside event loop's
-   * async-wait facility for descriptors/events relevant to receive-ops.  See util::sync_io::Event_wait_func
-   * doc header for a refresher on this mechanic.
+   * Function (set forever in `start_receive_*_ops()`) through which we invoke the
+   * outside event loop's async-wait facility for descriptors/events relevant to receive-ops.
+   * See util::sync_io::Event_wait_func doc header for a refresher on this mechanic.
    */
   util::sync_io::Event_wait_func m_rcv_ev_wait_func;
 }; // class Native_socket_stream::Impl
@@ -1472,7 +1578,7 @@ bool Native_socket_stream::Impl::op_started(util::String_view context) const
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: Op-type [" << int(OP) << "]: "
                      "In context [" << context << "] we must be start_...()ed, "
-                     "but we are not.  Probably a user bug, but it is not for us to judge.");
+                     "but we are not.  Probably a caller bug, but it is not for us to judge.");
     return false;
   }
   // else
@@ -1487,7 +1593,7 @@ bool Native_socket_stream::Impl::start_ops(util::sync_io::Event_wait_func&& ev_w
   if (!ev_wait_func_ptr->empty())
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: Op-type [" << int(OP) << "]: Start-ops requested, "
-                     "but we are already started.  Probably a user bug, but it is not for us to judge.");
+                     "but we are already started.  Probably a caller bug, but it is not for us to judge.");
     return false;
   }
   // else
@@ -1497,9 +1603,10 @@ bool Native_socket_stream::Impl::start_ops(util::sync_io::Event_wait_func&& ev_w
     if (m_state == State::S_PEER)
     {
       FLOW_LOG_WARNING("Socket stream [" << *this << "]: Start-connect-ops requested, but we are already (and "
-                       "irreversibly) in PEER state.  Ignoring.");
+                       "irreversibly) in PEER state.  Probably a caller bug, but it is not for us to judge.");
       return false;
     }
+
     // else
     assert((m_state == State::S_NULL)
            && "Should not be able to get to CONNECTING state without start_connect_ops() in the first place.");

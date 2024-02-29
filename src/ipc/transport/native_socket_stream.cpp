@@ -81,14 +81,14 @@ Native_socket_stream::Native_socket_stream(Sync_io_obj&& sync_io_core_in_peer_st
 
 Native_socket_stream::~Native_socket_stream() = default; // It's only explicitly defined to formally document it.
 
-Native_socket_stream::Sync_io_obj Native_socket_stream::release()
-{
-  return impl()->release();
-}
-
 const std::string& Native_socket_stream::nickname() const
 {
   return impl()->nickname();
+}
+
+bool Native_socket_stream::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
+{
+  return impl()->sync_connect(absolute_name, err_code);
 }
 
 util::Process_credentials Native_socket_stream::remote_peer_process_credentials(Error_code* err_code) const
@@ -150,12 +150,6 @@ std::ostream& operator<<(std::ostream& os, const Native_socket_stream& val)
 }
 
 // Though, some of them (the templates) had to be written as _fwd() non-templated helpers that take various Function<>s.
-
-bool Native_socket_stream::async_connect_fwd(const Shared_name& absolute_name,
-                                             flow::async::Task_asio_err&& on_done_func)
-{
-  return impl()->async_connect(absolute_name, std::move(on_done_func));
-}
 
 bool Native_socket_stream::async_end_sending_fwd(flow::async::Task_asio_err&& on_done_func)
 {
