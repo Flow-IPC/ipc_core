@@ -707,7 +707,7 @@ public:
    *        See concept API.
    * @return See concept API.
    */
-  bool send_blob(const util::Blob_const& blob, Error_code* err_code);
+  bool send_blob(const util::Blob_const& blob, Error_code* err_code = 0);
 
   /**
    * Yields `hndl_snd()->` same method.
@@ -720,7 +720,7 @@ public:
    *        See concept API.
    * @return See concept API.
    */
-  bool send_native_handle(Native_handle hndl_or_null, const util::Blob_const& meta_blob, Error_code* err_code);
+  bool send_native_handle(Native_handle hndl_or_null, const util::Blob_const& meta_blob, Error_code* err_code = 0);
 
   /**
    * Performs `hndl_snd()->` and/or `blob_snd()->` same method, synthesizing completion handlers into one
