@@ -242,7 +242,7 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
      * but if you look inside you'll see we say this is by far likelier than the converse.  (@todo Maybe we shouldn't
      * even create m_conn_async_worker at all, unless we know we need to start the thread?  It's probably OK as-is;
      * probably the thread start/join is the heaviest aspect of all this, and if we typically avoid that, we've done
-     * fine.  Revisit sometime though.  It'd just make m_conn_ev_wait_hndl_peer_socket life-cycle more complicated.) */
+     * fine.  Revisit sometime though.  It'd just make m_conn_ev_wait_hndl_peer_socket lifecycle more complicated.) */
     m_conn_async_worker->start();
 
     // And now we wait (for a very short time).
