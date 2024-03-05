@@ -41,8 +41,12 @@ public:
     m_logger(&m_config)
   {
     // Yes, it is formally (and practically) fine to do this after the Logger took the m_config ptr already.
-    m_config.init_component_to_union_idx_mapping<Log_component>(100, 100);
-    m_config.init_component_names<Log_component>(ipc::S_IPC_LOG_COMPONENT_NAME_MAP, false, "test-");
+    m_config.init_component_to_union_idx_mapping<Log_component>
+      (100, flow::log::Config::standard_component_payload_enum_sparse_length<Log_component>());
+    m_config.init_component_names<Log_component>(ipc::S_IPC_LOG_COMPONENT_NAME_MAP, false, "ipc-");
+    m_config.init_component_to_union_idx_mapping<flow::Flow_log_component>
+      (100, flow::log::Config::standard_component_payload_enum_sparse_length<flow::Flow_log_component>());
+    m_config.init_component_names<flow::Flow_log_component>(flow::S_FLOW_LOG_COMPONENT_NAME_MAP, false, "flow-");
     // Now the logging may commence.
   }
   /**
