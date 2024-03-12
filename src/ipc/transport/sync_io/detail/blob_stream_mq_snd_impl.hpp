@@ -759,7 +759,7 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::~Blob_stream_mq_sender_impl()
 
     /* No-op if no send is pending; but it'd be boring worrying about checking m_pending_payloads_q.empty() just
      * to avoid a no-op.  It's harmless (not *exactly* a no-op, but m_mq is not long for this world -- so who cares
-     * if it dies while in interrupted-sends mode or otherwise). */
+     * if it dies while in interrupted-sends mode or otherwise?). */
 
     if (m_mq)
     {

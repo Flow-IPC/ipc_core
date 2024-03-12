@@ -574,16 +574,19 @@ Blob_stream_mq_receiver_impl<Persistent_mq_handle>::Blob_stream_mq_receiver_impl
 template<typename Persistent_mq_handle>
 Blob_stream_mq_receiver_impl<Persistent_mq_handle>::~Blob_stream_mq_receiver_impl()
 {
-  // This is near-identical to Blob_stream_mq_sender_impl ctor.  Keeping comments light.  @todo Code reuse.
+  // This is near-identical to Blob_stream_mq_sender_impl dtor.  Keeping comments light.  @todo Code reuse.
 
-  FLOW_LOG_INFO("Blob_stream_mq_receiver [" << *this << "]: Shutting down.  Async-wait worker thread and timer "
-                "thread will shut down/be joined shortly; but we must interrupt any currently-running async-wait to "
-                "ensure async-wait worker thread actually exits.");
-
-  if (m_mq)
+  if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
   {
-    m_mq->interrupt_receives();
-  }
+    FLOW_LOG_INFO("Blob_stream_mq_receiver [" << *this << "]: Shutting down.  Async-wait worker thread and timer "
+                  "thread will shut down/be joined shortly; but we must interrupt any currently-running async-wait to "
+                  "ensure async-wait worker thread actually exits.");
+
+    if (m_mq)
+    {
+      m_mq->interrupt_receives();
+    }
+  } // if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
 }
 
 template<typename Persistent_mq_handle>
