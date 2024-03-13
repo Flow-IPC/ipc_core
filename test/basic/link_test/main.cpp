@@ -41,7 +41,6 @@ int main(int argc, char const * const * argv)
   using std::exception;
 
   constexpr String_view LOG_FILE = "ipc_core_link_test.log";
-  constexpr int BAD_EXIT = 1;
   constexpr size_t SZ = 1000;
 
   /* Set up logging within this function.  We could easily just use `cout` and `cerr` instead, but this
@@ -113,7 +112,7 @@ int main(int argc, char const * const * argv)
   catch (const exception& exc)
   {
     FLOW_LOG_WARNING("Caught exception: [" << exc.what() << "].");
-    return BAD_EXIT;
+    return 1;
   }
 
   return 0;
