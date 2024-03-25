@@ -64,7 +64,7 @@ public:
    */
   Opt_peer_process_credentials(const Opt_peer_process_credentials& src);
 
-  /// Methods.
+  // Methods.
 
   /**
    * Boring copy assignment.
