@@ -61,7 +61,7 @@ public:
    */
   Process_credentials(const Process_credentials& src);
 
-  /// Methods.
+  // Methods.
 
   /**
    * Boring copy assignment.

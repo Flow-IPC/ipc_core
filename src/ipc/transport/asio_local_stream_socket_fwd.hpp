@@ -273,7 +273,7 @@ void async_write_with_native_handle(flow::log::Logger* logger_ptr,
  *     If `N != payload_blob.size()`, then the remaining bytes cannot currently be sent without blocking and should
  *     be tried later.  (Informally: Consider async_write_with_native_handle() in that case.)
  *   - If non-null `err_code`, then `N == 0` is returned; and `*err_code == E` is set to the triggering problem.
- *     If null, then flow::error::Runtime_error is thrown containing `Error_code E`.
+ *     If null, then `flow::error::Runtime_error` is thrown containing `Error_code E`.
  *     - `E == boost::asio::error::would_block` specifically indicates the non-fatal condition wherein `*peer_socket`
  *       cannot currently send, until it reaches writable state again.
  *     - Other `E` values indicate the connection is (potentially gracefully) permanently incapable of transmission.
@@ -341,9 +341,6 @@ size_t nb_write_some_with_native_handle(flow::log::Logger* logger_ptr,
  * given `peer_socket->non_blocking() == true` has the same semantics except it cannot and will not read any native
  * handle.  (It would probably just "eat it"/ignore it; though we have not tested that at this time.)
  *
- * @see Please read the "Blob/handle semantics" about working with native
- *      handle accompaniment, in the nb_read_some_with_native_handle() doc header.
- *
  * Certain aspects of `Peer_socket::read_some()` are not included in the present function, however, though merely
  * because they were not necessary as of this writing and hence excluded for simplicity; these are formally described
  * below.
@@ -372,7 +369,7 @@ size_t nb_write_some_with_native_handle(flow::log::Logger* logger_ptr,
  *     be tried later if desired.  (Informally: In that case consider `Peer_socket::async_wait()` followed by retrying
  *     the present function, in that case.)
  *   - If non-null `err_code`, then `N == 0` is returned; and `*err_code == E` is set to the triggering problem.
- *     If null, then flow::error::Runtime_error is thrown containing `Error_code E`.
+ *     If null, then `flow::error::Runtime_error` is thrown containing `Error_code E`.
  *     - `E == boost::asio::error::would_block` specifically indicates the non-fatal condition wherein `*peer_socket`
  *       cannot currently receive, until it reaches readable state again (i.e., bytes and possibly handle arrive from
  *       peer).
