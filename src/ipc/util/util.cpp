@@ -158,13 +158,6 @@ const uint8_t* blob_data(const Blob_const& blob)
   return static_cast<const uint8_t*>(blob.data());
 }
 
-/**
- * Syntactic-sugary helper that returns pointer to first byte in a mutable buffer, as `uint8_t*`.
- *
- * @param blob
- *        The buffer.
- * @return See above.
- */
 uint8_t* blob_data(const Blob_mutable& blob)
 {
   return static_cast<uint8_t*>(blob.data());

@@ -26,7 +26,7 @@ list(APPEND CMAKE_MESSAGE_INDENT "- ")
 set(PROJ_CAMEL "IpcCore")
 set(PROJ_HUMAN "Flow-IPC (Core)")
 
-set(OS_SUPPORT_MSG "Only Linux is supported for now.  For ipc_core: macOS/BSD might require some coding; "
+set(OS_SUPPORT_MSG "Only Linux is supported for now.  For ipc_core: macOS/etc. might require some coding; "
                       "Windows might require still more.")
 # Subtext: Off the top of one's head: POSIX MQ support in Mac may need investigation; unavailable in Windows
 # so needs to be not compiled.  Otherwise we might be all-right; but requires looking-into and testing.
