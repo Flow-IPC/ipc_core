@@ -25,7 +25,8 @@ namespace ipc::util
 {
 
 #ifndef FLOW_OS_LINUX
-#  error "Flow-IPC supports transmitting native handles in Linux only; a core feature.  Build in Linux only."
+static_assert(false, "Flow-IPC supports transmitting native handles in Linux only; a core feature.  "
+                       "Build in Linux only.");
 #endif
 // From this point on (in #including .cpp files as well) POSIX is assumed; and in a few spots specifically Linux.
 

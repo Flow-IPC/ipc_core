@@ -62,18 +62,24 @@ class Use_counted_object;
  * set a compile-time array<> size.  So just make an exception and define the enum fully here.  It's not
  * "really" an aggregate type (class), so it's all right. */
 
+#ifndef FLOW_OS_LINUX
+static_assert(false, "Design of Permissions_level assumes a POSIX-y security model with users and groups; "
+                       "we have not yet considered whether it can apply to Windows in its current form.  "
+                       "Should work in non-Linux POSIX OS (like macOS) but must be checked/tested.");
+#endif
+
 /**
  * Simple specifier of desired access permissions, usually but not necessarily translated into
  * a `Permissions` value (though even then different value in different contexts).  May be used to map, say,
  * from a Permissions_level to a #Permissions value in an
  * `array<Permissions, size_t(Permissions_level::S_END_SENTINEL)>`.
  *
- * While, unlike #Permissions, this `enum` intends not be overtly based on a POSIX RWXRWXRWC model, it does
+ * While, unlike #Permissions, this `enum` intends not be overtly based on a POSIX RWXRWXRWX model, it does
  * still assume the 3 user groupings are "user themselves," "user's group," and "everyone."  The 1st and 3rd
  * are likely universal, but the 2nd may not apply to all OS -- through probably all POSIX/Unix ones --
  * and even for something like Linux there could be different groupings such as ones based on OS ACL.
  * As of this writing it's fine, as this is a POSIX-targeted library at least (in fact, Linux, as of this writing,
- * but that could change to include, say, MacOS/BSD).
+ * but that could change to include, say, macOS/similar).
  *
  * @internal
  * ### Maintenance ###
@@ -194,7 +200,7 @@ Permissions shared_resource_permissions(Permissions_level permissions_lvl);
  *
  * ### Rationale ###
  * It may seem unnecessary, particularly given that it sometimes (in our internal code, but I mention it
- * publicly for exposition purposes) placed right after the
+ * publicly for exposition purposes) is placed right after the
  * creation of the resource (file, SHM pool, POSIX MQ, shared mutex, etc.) -- where the same `perms` is supplied
  * to the creation-API, whichever is applicable.  The reason is that those APIs tend to make the corresponding OS
  * call (e.g., `open()`) which is bound by the "process umask" in POSIX/Linux; so for example if it's set to

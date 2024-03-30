@@ -146,7 +146,7 @@ void remove_persistent_shm_pool(flow::log::Logger* logger_ptr, const Shared_name
    * shows that smo::remove() calls shared_memory_object::remove() which calls some internal
    * ipcdetail::delete_file() which calls... drumroll... freakin' ::unlink(const char*).  Hence we haxor: */
 #ifndef FLOW_OS_LINUX // @todo Should maybe check Boost version or something too?
-#  error "Code in remove_persistent_shm_pool() relies on Boost invoking Linux unlink() with errno."
+  static_assert(false, "Code in remove_persistent_shm_pool() relies on Boost invoking Linux unlink() with errno.");
 #endif
   const auto& sys_err_code = *err_code = Error_code(errno, system_category());
   FLOW_ERROR_SYS_ERROR_LOG_WARNING();

@@ -22,7 +22,8 @@
 #include <boost/array.hpp>
 
 #ifndef FLOW_OS_LINUX // Sanity-re-check.  We'll be sending sockets through sockets, etc., which requires Linux.
-#  error "Should not have gotten to this line; should have required Linux; this .cpp file assumes it."
+static_assert(false, "Should not have gotten to this line; should have required Linux; this .cpp file assumes it.  "
+                       "Might work in other POSIX OS (e.g., macOS) but must be checked/tested.");
 #endif
 #include <sys/types.h>
 #include <sys/socket.h>

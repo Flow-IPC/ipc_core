@@ -19,7 +19,8 @@
 
 // Not compiled: for documentation only.  Contains concept docs as of this writing.
 #ifndef IPC_DOXYGEN_ONLY
-#  error "As of this writing this is a documentation-only "header" (the "source" is for humans and Doxygen only)."
+static_assert(false, "As of this writing this is a documentation-only \"header\" "
+                       "(the \"source\" is for humans and Doxygen only).");
 #else // ifdef IPC_DOXYGEN_ONLY
 
 namespace ipc::transport

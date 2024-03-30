@@ -313,7 +313,8 @@ void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
     // Endpoint was fine; do the actual async connect attempt.
 
 #ifndef FLOW_OS_LINUX
-#  error "Some below code, at least comments, has been verified with Linux only.  Revisit before extending to other OS."
+    static_assert(false, "Some below code, at least comments, has been verified with Linux only.  "
+                           "Revisit before extending to other OS.");
 #endif
 
     /* Normally we'd do m_peer_socket->async_connect(F), but in the sync_io pattern we have to break it down into

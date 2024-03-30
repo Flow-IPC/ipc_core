@@ -941,7 +941,8 @@ void Bipc_mq_handle::remove_persistent(flow::log::Logger* logger_ptr, // Static.
    * shows that mq::remove() calls shared_memory_object::remove() which calls some internal
    * ipcdetail::delete_file() which calls... drumroll... freakin' ::unlink(const char*).  Hence we haxor: */
 #ifndef FLOW_OS_LINUX // @todo Should maybe check Boost version or something too?
-#  error "Code in Bipc_mq_handle::remove_persistent() relies on Boost invoking Linux unlink() with errno."
+  static_assert(false,
+                "Code in Bipc_mq_handle::remove_persistent() relies on Boost invoking Linux unlink() with errno.");
 #endif
   const auto& sys_err_code = *err_code = Error_code(errno, system_category());
   FLOW_ERROR_SYS_ERROR_LOG_WARNING();

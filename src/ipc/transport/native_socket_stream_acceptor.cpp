@@ -262,7 +262,8 @@ void Native_socket_stream_acceptor::on_next_peer_socket_or_error(const Error_cod
      * particular.  Just re-check that for sanity for now.  (This is a bit of future-proofing, so that the problem is
      * obvious if porting the code.) */
 #ifndef FLOW_OS_LINUX
-#  error "Should not have gotten to this line; should have required Linux; the next thing assumes not-Win-<8.1."
+    static_assert(false, "Should not have gotten to this line; should have required Linux; "
+                           "the next thing assumes not-Win-<8.1.");
 #endif
     // Could store a raw handle too, but this is exactly as fast and adds some logging niceties.
     Native_handle native_peer_socket(m_next_peer_socket.release());
