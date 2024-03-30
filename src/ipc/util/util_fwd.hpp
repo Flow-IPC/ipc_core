@@ -62,9 +62,10 @@ class Use_counted_object;
  * set a compile-time array<> size.  So just make an exception and define the enum fully here.  It's not
  * "really" an aggregate type (class), so it's all right. */
 
-#ifdef FLOW_OS_WIN
+#ifndef FLOW_OS_LINUX
 static_assert(false, "Design of Permissions_level assumes a POSIX-y security model with users and groups; "
-                       "we have not yet considered whether it can apply to Windows in its current form.");
+                       "we have not yet considered whether it can apply to Windows in its current form.  "
+                       "Should work in non-Linux POSIX OS (like macOS) but must be checked/tested.");
 #endif
 
 /**

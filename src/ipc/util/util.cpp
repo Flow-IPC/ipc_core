@@ -138,8 +138,10 @@ bool process_running(process_id_t process_id)
   // using ::errno; // It's a macro apparently.
 
   // The below, down to the impl, is described in the doc header.  Note these are POSIX semantics.
-#if !defined(FLOW_OS_LINUX) && !defined(FLOW_OS_MAC)
-#  error "Using POSIX ::kill() semantics.  @todo Should check for POSIX/Unix; not Linux or Mac.  Add a FLOW_OS_...."
+#ifndef FLOW_OS_LINUX
+  static_assert(false, "Using POSIX ::kill(pid, 0) semantics to check whether process running.  "
+                         "Have not coded Windows equivalent yet.  Should work in non-Linux POSIX OS but "
+                         "must be checked/tested.");
 #endif
 
   if (kill(process_id, 0) == 0)

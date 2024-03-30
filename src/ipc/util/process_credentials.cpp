@@ -73,7 +73,7 @@ std::string Process_credentials::process_invoked_as(Error_code* err_code) const
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
 #ifndef FLOW_OS_LINUX
-#  error "process_invoked_as() depends on Linux /proc semantics."
+  static_assert(false, "process_invoked_as() depends on Linux /proc semantics.");
 #endif
 
   path cmd_line_path("/proc");

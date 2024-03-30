@@ -24,7 +24,8 @@ namespace ipc::util
 
 // Static initializers.
 
-// Reminder: We've assured via #error that this is being built in POSIX.  (Windows has a special value too though.)
+/* Reminder: We've assured via static_assert(false) that this is being built in POSIX.
+ * (Windows has a special value too though.) */
 const Native_handle::handle_t Native_handle::S_NULL_HANDLE = -1;
 
 // Native_handle implementations.
@@ -95,8 +96,10 @@ size_t hash_value(Native_handle val)
 
 bool operator<(Native_handle val1, Native_handle val2)
 {
-  /* In POSIX and Windows this is valid.  So don't worry about #ifdef'ing for OS, #error, etc.
-   * I did check that even in Windows they are formally integers still. */
+  /* In POSIX and Windows this is valid.  So don't worry about #ifdef'ing for OS, static_assert(false), etc.
+   * I did check that even in Windows they are formally integers still.  Update: Actually... not sure... depends
+   * on what's a Native_handle; if it's SOCKET then sure, but otherwise -- who knows?  There's probably a ticket
+   * about that whole topic. */
   return val1.m_native_handle < val2.m_native_handle;
 }
 

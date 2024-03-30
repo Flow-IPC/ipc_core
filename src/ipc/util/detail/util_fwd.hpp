@@ -58,7 +58,8 @@ extern const boost::array<Permissions, size_t(Permissions_level::S_END_SENTINEL)
   PRODUCER_CONSUMER_RESOURCE_PERMISSIONS_LVL_MAP;
 
 #ifndef FLOW_OS_LINUX
-#  error "IPC_KERNEL_PERSISTENT_RUN_DIR (/var/run) semantics require Unix; tested in Linux specifically only."
+static_assert(false, "IPC_KERNEL_PERSISTENT_RUN_DIR (/var/run) semantics require Unix; "
+                       "tested in Linux specifically only.");
 #endif
 /**
  * Absolute path to the directory (without trailing separator) in the file system where kernel-persistent

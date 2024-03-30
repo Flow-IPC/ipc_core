@@ -33,7 +33,8 @@ namespace ipc::transport
 // Types.
 
 #ifndef FLOW_OS_LINUX
-#  error "Posix_mq_handle relies on Linux semantics and has not been tested in other Unix; cannot exist in Windows."
+static_assert(false, "Posix_mq_handle relies on Linux semantics and has not been tested in other POSIX OS; "
+                       "likely does not exist in Windows.");
 #endif
 
 /**
@@ -683,7 +684,7 @@ template<typename Handle_name_func>
 void Posix_mq_handle::for_each_persistent(const Handle_name_func& handle_name_func) // Static.
 {
 #ifndef FLOW_OS_LINUX
-#  error "This method relies on/has been tested only with Linux /dev/mqueue semantics."
+  static_assert(false, "This method relies on/has been tested only with Linux /dev/mqueue semantics.");
 #endif
   util::for_each_persistent_impl("/dev/mqueue", handle_name_func);
 }

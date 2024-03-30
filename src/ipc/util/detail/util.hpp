@@ -112,7 +112,8 @@ void for_each_persistent_impl(const fs::path& persistent_obj_dev_dir_path, const
      *     its own .is_regular_file(), but boost.fs lacks this; though the latter is described in terms of
      *     of the free function anyway; so meh.) */
 #ifndef FLOW_OS_LINUX
-#  error "We rely on Linux /dev/... (etc.) semantics, where the object-mapped files are classified as regular files."
+    static_assert(false, "We rely on Linux /dev/... (etc.) semantics, where the object-mapped files "
+                           "are classified as regular files.");
 #endif
     Error_code err_code;
     const auto dir_entry_status = dir_entry.status(err_code);
@@ -130,7 +131,7 @@ template<typename Handle_name_func>
 void for_each_persistent_shm_pool(const Handle_name_func& handle_name_func)
 {
 #ifndef FLOW_OS_LINUX
-#  error "This method relies on/has been tested only with Linux /dev/shm semantics."
+  static_assert(false, "This method relies on/has been tested only with Linux /dev/shm semantics.");
 #endif
   for_each_persistent_impl("/dev/shm", handle_name_func);
 }

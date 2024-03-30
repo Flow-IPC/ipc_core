@@ -30,7 +30,8 @@ namespace ipc::transport::asio_local_stream_socket
 // Types.
 
 #ifndef FLOW_OS_LINUX
-#  error "Flow-IPC must define Opt_peer_process_credentials w/ Linux SO_PEERCRED semantics.  Build in Linux only."
+static_assert(false, "Flow-IPC must define Opt_peer_process_credentials w/ Linux SO_PEERCRED semantics.  "
+                       "Build in Linux only.");
 #endif
 
 /**
