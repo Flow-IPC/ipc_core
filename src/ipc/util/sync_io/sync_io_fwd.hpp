@@ -54,7 +54,7 @@
  *       one can always convert the latter to the former by calling `x.async_io_obj()`.
  *
  * @note In cases where performance is not a real concern, such as for the assumed-rare
- *       ipc::session::Server_session::async_accept() operations, internally `sync_io::X` may actually be written
+ *       ipc::session::Session_server::async_accept() operations, internally `sync_io::X` may actually be written
  *       in terms of `X` instead... but we digress.  Either way it is a black box.
  *
  * Some examples of `X`es that have `sync_io::X` counterparts:
