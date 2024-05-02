@@ -46,7 +46,7 @@
  * in terms of `sync_io::X`; the latter is essentially the core logic, while the former provides
  * auto-parallelization and a simpler interface.
  *
- * @note For this reason comment sometimes refer to a `sync_io::X` *core*: where the basic `X`-ish capabalities and
+ * @note For this reason comments sometimes refer to a `sync_io::X` *core*: where the basic `X`-ish capabalities and
  *       data live.  The *async-I/O* `X` is then often built around a `sync_io::X` core.  Because of this it is
  *       usually easy, and fast, to convert a `sync_io::X` into an `X` -- via a move-like ctor called
  *       `sync_io`-core *adopting ctor*.  Additionally, ipc::transport::Channel template -- which bundles local peer
@@ -278,7 +278,7 @@
  *       but `sync_err_code` is a null pointer, then a `flow::error::Runtime_error` is thrown with
  *       the would be `*sync_err_code` stored inside the exception object (and a message in its `.what()`).
  *
- * So let's say you call `sync_io` x.async_receive_blob(), providing it `&sync_err_code, &sz` args, otherwise
+ * So let's say you call `sync_io` `x.async_receive_blob()`, providing it `&sync_err_code, &sz` args, otherwise
  * using the same arg values as with async-I/O.  (For simplicity of discussion let's assume you did not pass
  * null pointer for the sync-err-code arg.)  Then: `F()` will no longer
  * execute from some unspecified thread at some unknown future time.  Instead there are 2 possibilities.
@@ -483,16 +483,16 @@
  * you simply don't provide one.  (By convention it will also lack an `async_` prefix in the method name.)
  * Beyond that, everything is the same:
  *   - It may (or may not) initiate an async-wait by calling the `Event_wait_func` you supplied via
- *     `start_*_ops()`.
+ *     `start_*ops()`.
  *   - Your `Event_wait_func` should indeed -- on successful async-wait -- invoke `(*on_active_ev_func)()`.
  *     Internally that may continue, or complete, whatever async processing `x` needs to do.
  *     - The difference: it won't invoke some completion handler of yours... as you didn't (and couldn't) provide one.
  *
  * ### Multiple op-types in a given `sync_io`-pattern-implementing object ###
- * Consider, first, ipc::session::sync_io::Session_server.  It has only one operation, really:
- * session::sync_io::Session_server::async_accept().  To set it up, you'll do (as explained above by another example
- * use case): `x.start_accept_ops()`, possibly preceded by `x.replace_event_wait_handles()` (but that guy is beside
- * the point).
+ * Consider, first, ipc::session::sync_io::Session_server_adapter.  It has only one operation, really:
+ * session::sync_io::Session_server_adapter::async_accept().  To set it up, you'll do (as explained above by another
+ * example use case): `x.start_ops()`, possibly preceded by `x.replace_event_wait_handles()` (but that guy is
+ * beside the point).
  *
  * Easy enough.  The `x` can't do any other "type of thing."  Same is true of, say,
  * ipc::transport::sync_io::Blob_stream_mq_sender: it can only `x.send_blob()` (and `x.auto_ping()`,
@@ -596,8 +596,8 @@ using Task_ptr = boost::shared_ptr<Task>;
  * ------------------------
  * Suppose `T` is an ipc::transport or ipc::session object type, always in a `"sync_io"` sub-namespace, that
  * operates according to the `sync_io` pattern.  (For example, `T` might be transport::sync_io::Native_socket_stream.)
- * Then `T::start_X_ops(Event_wait_func&&)`, and/or a compatible template, must be invoked to begin unidirectional work
- * of type X (e.g., `start_X_ops()` might be `start_send_blob_ops()` or
+ * Then `T::start_*ops(Event_wait_func&&)`, and/or a compatible template, must be invoked to begin unidirectional work
+ * of type X (e.g., `start_*ops()` might be `start_send_blob_ops()` or
  * `start_receive_native_handle_ops()`) on a given `T`; the `T` memorizes the function until its destruction.
  *
  * From that point on, the `T` might at times be unable to complete an operation (for example
@@ -618,7 +618,7 @@ using Task_ptr = boost::shared_ptr<Task>;
  *     the user must invoke `(*on_active_ev_func)()` (without args and expecting no return value).
  *     - In terms of thread safety, and generally, one should consider this function a non-`const` member of `T`'s
  *       sub-API.  (The sub-API in question is the set of methods that correspond to unidirectional-operation
- *       of type X, where `T::start_X_ops()` was invoked to kick things off.  For example, in `Native_socket_stream`
+ *       of type X, where `T::start_*ops()` was invoked to kick things off.  For example, in `Native_socket_stream`
  *       as used as a Blob_sender, that's its `send_blob()` and `*end_sending()` methods.)
  *       That is, `(*on_active_ev_func)()` may not be called concurrently to any `T` sub-API method
  *       (`Native_socket_stream::send_blob()`, `*end_sending()` in the recent example) or other
@@ -626,7 +626,7 @@ using Task_ptr = boost::shared_ptr<Task>;
  *       `Event_wait_func` to indicate interest in a new event.
  *
  * Naturally the key question arises: what, specifically, should a particular #Event_wait_func (as passed-into
- * a `T::start_X_ops()`) *do*?  Indeed, this requires great care on the `sync_io` pattern user's part.
+ * a `T::start_*ops()`) *do*?  Indeed, this requires great care on the `sync_io` pattern user's part.
  *
  * Formally speaking the contract is as follows.  Let `F` be the particular `Event_wait_func`.
  *   -# Upon `F()` being called, it shall register -- through a technique of the user's choice (a couple are
@@ -770,7 +770,7 @@ using Task_ptr = boost::shared_ptr<Task>;
  * a boost.asio `posix::descriptor` which itself is a thin wrapper around a native handle (FD).  It has
  * boost.asio-supplied `.async_wait()`.  However, and this is a key point:
  *
- * To make it work, before invoking `T::start_X_ops()`, you must supply your execution context/executor -- usually
+ * To make it work, before invoking `T::start_*ops()`, you must supply your execution context/executor -- usually
  * a boost.asio `Task_engine` (a/k/a `boost::asio::io_contexst`) or strand (`boost::asio::io_context::strand`) --
  * w/r/t which you plan to `.async_wait()` down the line.  This is done via `T::replace_event_wait_handles()`,
  * an otherwise optional call.  If using flow.async, this might be (e.g.):
@@ -790,7 +790,7 @@ using Task_ptr = boost::shared_ptr<Task>;
  * @note As explained in "Integrating with reactor-pattern..." above, `hndl` is
  *       a boost.asio I/O object, as opposed to just a Native_handle or even Native_handle::handle_t,
  *       specifically for the boost.asio integration use case.  If *not* integrating with boost.asio,
- *       `start_X_ops()` is to be used without preceding it by `replace_event_wait_handles()`,
+ *       `start_*ops()` is to be used without preceding it by `replace_event_wait_handles()`,
  *       and `hndl->native_handle()` is the only meaningful part of `*hndl`, with `.async_wait()` being meaningless
  *       and unused.  Conversely, if integrating with boost.asio, `hndl->native_handle()` itself should not be
  *       required in your code, while `.async_wait()` is the only meaningful aspect of `*hndl`.
