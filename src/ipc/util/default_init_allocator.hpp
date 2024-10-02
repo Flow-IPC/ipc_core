@@ -29,7 +29,7 @@ namespace ipc::util
  *
  * ### Rationale (why) ###
  * Suppose you have `vector<uint8_t> v(10);`.  This will create a buffer and fill with at least 10 zeroes.
- * What if you want it *not* do this?  Maybe you don't want it for performane.
+ * What if you want it *not* do this?  Maybe you don't want it because performance.
  * Actually, consider an even sneakier situation that involves correctness, not just perf.  Suppose you
  * have `vector<uint8_t> v` with `.capacity() == 10` and `.size() == 0`, but you're letting some 3rd-party code
  * operate in range `[v.begin(), v.begin() + v.capacity())`, and you're using `.size()` as a store of the result
