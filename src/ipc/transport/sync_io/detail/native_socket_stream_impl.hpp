@@ -1343,7 +1343,7 @@ private:
    * short-lived thread resulting from `m_conn_async_worker->start()` in sync_connect().
    *
    * Null if and only if #m_conn_async_worker is null.
-   * 
+   *
    * See "Connect-ops impl design" in class doc header for key background discussion of sync_connect() et al.
    *
    * ### Rationale ###
