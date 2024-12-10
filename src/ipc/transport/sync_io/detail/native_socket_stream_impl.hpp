@@ -1320,7 +1320,7 @@ private:
    * Linux's `epoll_ctl()` and `epoll_wait()`, to do so.  With such a stateful mechanism the right thing to do
    * would be to unregister the now-worthless native-socket-handle on which they might currently be registered
    * to detect active events (as asked by us via `sync_io` pattern).  So with `epoll` they'd do perhaps
-   * `epoll_ctl(EPOLL_CTL_DEL)` to remove the FD from an epoll-set FD... but we just closed (`::close()`) it!
+   * `epoll_ctl(EPOLL_CTL_DEL)` to remove the FD from an epoll-set FD... but we just closed (`"::close()"`) it!
    * That's bad.  (In reality -- subtleties/details omitted -- we might be able to get away without catastrophic
    * events... but at absolute best, this is entropy-laden and ugly and really just merely fortunate.)
    *
