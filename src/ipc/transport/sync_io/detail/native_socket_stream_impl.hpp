@@ -1197,7 +1197,8 @@ private:
 
   /**
    * The peer stream-type Unix domain socket; or null pointer if we've detected the connection has become hosed
-   * and hence closed+destroyed the boost.asio `Peer_socket`.  Note that (1) it starts non-null, and is in
+   * and hence have ceased all all work on the boost.asio `Peer_socket` short of its destruction.
+   * Note that (1) it starts non-null (see also related #m_peer_socket_hosed), and is in
    * "open" (FD-bearing) state from the start -- even if the NULL-state ctor was used; and (2) can only
    * become null (irreversibly so) when in PEER state, only on error.
    *   - In State::S_NULL #m_state, this is an "open" (FD-bearing) but unconnected socket.
@@ -1222,6 +1223,8 @@ private:
    * As for the null-pointer state, it exists for 2 reasons which are somewhat in synergy:
    *   - It is a way of giving back the FD-resource to the kernel as early as possible.
    *     (Destroying `Peer_socket` closes the contained FD/socket.)
+   *     - Update: Unfortunately another, more important consideration has obsoleted this reason.  It no longer applies.
+   *       See #m_peer_socket_hosed for more (but it's not that interesting here).
    *   - It is a way for the incoming-direction processing logic to inform the outgoing-direction counterpart logic
    *     that it has detected the socket is entirely hosed, in both directions (and hence no need to even try further
    *     operations on it); and vice versa.
@@ -1296,6 +1299,47 @@ private:
   boost::movelib::unique_ptr<asio_local_stream_socket::Peer_socket> m_peer_socket;
 
   /**
+   * Null to start, this takes on the value from #m_peer_socket when and only when #m_peer_socket is nullified
+   * (which occurs when and only when an error is detected on it).  Protected (along with #m_peer_socket) by
+   * #m_peer_socket_mutex.
+   *
+   * So, at steady state, either #m_peer_socket is null, or #m_peer_socket_hosed is null, but never both null
+   * or both non-null.
+   *   - `m_peer_socket` begins as non-null, `m_peer_socket_hosed` null.
+   *   - `m_peer_socket_hosed = std::move(m_peer_socket` may execute (or never execute), swapping them.
+   *   - In destructor, the non-null one gets destroyed; which internally closes the contained native-socket (FD).
+   *
+   * ### Rationale ###
+   * Why do this?  Why not simply nullify `m_peer_socket`, both to mark it (as explained in its doc header) for
+   * algorithmic purposes and to return the FD resource to the OS?  The answer is subtle but very real:
+   * Suppose an error is detected on the socket, and we simply destroy it -- thus closing the native socket.
+   * In most cases this is okay; the user code will be informed of the error and not do further work on the socket.
+   * What work does it do with it anyway?  Answer: it is allowed to, at most, "watch" it: await readability
+   * and/or writability, so as to report it to `*this` as part of the `sync_io` pattern.  Once `*this` is hosed,
+   * there's no need to watch it, right?  Right... so consider they might be using a native mechanism, most notably
+   * Linux's `epoll_ctl()` and `epoll_wait()`, to do so.  With such a stateful mechanism the right thing to do
+   * would be to unregister the now-worthless native-socket-handle on which they might currently be registered
+   * to detect active events (as asked by us via `sync_io` pattern).  So with `epoll` they'd do perhaps
+   * `epoll_ctl(EPOLL_CTL_DEL)` to remove the FD from an epoll-set FD... but we just closed (`::close()`) it!
+   * That's bad.  (In reality -- subtleties/details omitted -- we might be able to get away without catastrophic
+   * events... but at absolute best, this is entropy-laden and ugly and really just merely fortunate.)
+   *
+   * In short, we should not invalidate a native-handle that we may have asked the `*this` user to be watching
+   * for activity, until we are sure they are no longer doing that.  We can only be sure of that -- particularly
+   * in light of the potential desire to unregister it from watch-set(s) -- once our dtor begins execution, at which
+   * point they're contractually obligated to not touch the native-handle any longer.
+   *
+   * Okay... in that case... why not simply *not* nullify #m_peer_socket but use some other marker (a separate flag,
+   * `bool m_peer_socket_hosed` maybe)?  Answer: Sure, we could.  It's not necessarily better or worse.  In truth
+   * it's arguably a historic artifact of how the code was written before considering the aforementioned problematic
+   * scenario.  That said, the present approach is reasonably elegant.  If #m_peer_socket is null, there's no
+   * temptation to try to do something with it, and for all practical intents and purposes no more work is possible
+   * on #m_peer_socket, once an error is detected.  So it's nice to nullify it.  Then this `m_peer_socket_hosed`
+   * just lives in peace, on death row, until it is safe to really close (in dtor).
+   */
+  boost::movelib::unique_ptr<asio_local_stream_socket::Peer_socket> m_peer_socket_hosed;
+
+  /**
    * Descriptor waitable by outside event loop async-waits -- storing the same `Native_handle` as (and thus being
    * used to wait on events from) #m_peer_socket.
    *
@@ -1310,7 +1354,7 @@ private:
    */
   util::sync_io::Asio_waitable_native_handle m_ev_wait_hndl_peer_socket;
 
-  /// Protects #m_peer_socket and its bro #m_ev_wait_hndl_peer_socket.
+  /// Protects #m_peer_socket and its bros #m_ev_wait_hndl_peer_socket and #m_peer_socket_hosed.
   flow::util::Mutex_non_recursive m_peer_socket_mutex;
 
   /**

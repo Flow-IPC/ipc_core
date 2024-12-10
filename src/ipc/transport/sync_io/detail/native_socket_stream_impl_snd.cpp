@@ -809,10 +809,14 @@ size_t Native_socket_stream::Impl::snd_nb_write_low_lvl_payload(Native_handle hn
       }
       else if (*err_code)
       {
-        // True-blue system error.  Kill off *m_peer_socket: might as well give it back to the system (it's a resource).
+        /* True-blue system error.  Kill off *m_peer_socket (connection hosed).  We could simply nullify it, which would
+         * give it back to the system (it's a resource), but see m_peer_socket_hosed doc header for explanation as
+         * to why we cannot, and why instead we transfer it to "death row" until dtor executes, at which
+         * point ::close(m_peer_socket_hosed->native_handle()) will actually happen. */
 
-        // Closes peer socket to the (hosed anyway) connection; including ::close(m_peer_socket->native_handle()).
-        m_peer_socket.reset();
+        assert((!m_peer_socket_hosed) && "m_peer_socket_hosed must start as null and only become non-null once.  Bug?");
+        m_peer_socket_hosed = std::move(m_peer_socket);
+        assert((!m_peer_socket) && "Shocking unique_ptr misbehavior!");
 
         // *err_code is truthy; n_sent_or_zero == 0; cool.
       }

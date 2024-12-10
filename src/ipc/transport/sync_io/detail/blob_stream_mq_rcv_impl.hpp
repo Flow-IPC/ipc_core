@@ -305,8 +305,18 @@ private:
    * (in fact that is the main utility of Persistent_mq_handle::interrupt_receives()).  It makes the
    * Persistent_mq_handle::wait_receivable() immediately return.
    *
-   * If and only if #m_pending_err_code is truthy, #m_mq is null; hence the handle's system resources (and the
-   * handle object's memory itself) are given back at the earliest possible time.
+   * ### When is it null? ###
+   * It is null if and only if in ctor we were unable to create it (an error occurred in subsuming `mq` arg).
+   * Other than this quite-fatal corner case, #m_mq remains non-null until dtor executes.
+   *
+   * Important subtlety: We might be tempted to also nullify it upon detecting an error on the queue, so as to
+   * early-return a resource to the OS.  However, for the same reason detailed in doc header for
+   * Native_socket_stream::Impl::m_peer_socket_hosed, we must not do so until dtor runs.
+   * (Technically this is only the case if `Mq::S_HAS_NATIVE_HANDLE == true`, as only then would the user be
+   * potentially directly performing async-waits on the underlying native-handle... but let's not get overly cute
+   * and entropy-laden.)
+   *
+   * So, reminder: Do not `m_mq.reset()` until dtor, if not null upon exiting ctor!
    */
   typename Base::Auto_closing_mq m_mq;
 
