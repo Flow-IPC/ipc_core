@@ -65,7 +65,7 @@ namespace ipc::util::sync_io
  *     know which timer it is, by being informed via `Event_wait_func`'s' `on_active_ev_func` arg.
  *
  * The latter option is much more attractive in terms of API simplicity from the user's point of view (at least).
- * So we go with that.  Having make this decision, how to actually make it work?  Possibilities:
+ * So we go with that.  Having made this decision, how to actually make it work?  Possibilities:
  *   - The OS has these mechanisms.  Linux, at least, has `timerfd_create()` and buddies, specifically for this.
  *     One can schedule a timer, so the kernel keeps track of all that and does it in the background; when
  *     ready the FD becomes readable.  Done.
