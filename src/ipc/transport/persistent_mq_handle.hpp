@@ -187,8 +187,8 @@ namespace ipc::transport
  * However, if one wanted to take advantage of the non-concept (edit: see below update) ability to be watched
  * (via FD) with the kernel's help and without an added thread, they could specialize `Blob_stream_mq_*er`
  * for Posix_mq_handle which does offer a kernel-FD accessor `.native_handle()`.  Update: This is now done
- * (in fact it is not specialized as of this writing but rather uses a few simple `if constexpr
- * ()`s).  Accordingly the concept now allows for `native_handle()` optionally: see
+ * (in fact it is not specialized as of this writing but rather uses a few simple `if constexpr()`s).
+ * Accordingly the concept now allows for `native_handle()` optionally: see
  * Persistent_mq_handle::S_HAS_NATIVE_HANDLE.
  */
 class Persistent_mq_handle // Note: movable but not copyable.

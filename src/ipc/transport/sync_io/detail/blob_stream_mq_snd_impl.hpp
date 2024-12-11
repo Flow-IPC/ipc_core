@@ -628,7 +628,7 @@ private:
    * Never touched if Persistent_mq_handle::S_HAS_NATIVE_HANDLE.
    */
   std::optional<flow::async::Single_thread_task_loop> m_blocking_worker;
-}; // class Blob_stream_mq_sender
+}; // class Blob_stream_mq_sender_impl
 
 // Free functions: in *_fwd.hpp.
 

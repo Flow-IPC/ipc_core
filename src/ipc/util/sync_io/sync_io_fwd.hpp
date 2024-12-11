@@ -717,7 +717,9 @@ using Task_ptr = boost::shared_ptr<Task>;
  *
  * However `EPOLLONESHOT` pertains to the entire descriptor, not one specific waited-on event (read or write).
  * Therefore this optimization is helpful only if `.events` is being set to `EPOLLIN` or `EPOLLOUT` -- not
- * `EPOLLIN | EPOLLOUT`.  Be careful.
+ * `EPOLLIN | EPOLLOUT`.  Be careful.  That said, it should be possible to use `dup()` to clone the descriptor
+ * in question; then use the original for (e.g.) `EPOLLIN` exclusively and the clone for `EPOLLOUT` exclusively
+ * resulting in a clean solution.
  *
  * ### Integrating with boost.asio ###
  * Suppose your application is using boost.asio (possibly with flow.async to manage threads),
