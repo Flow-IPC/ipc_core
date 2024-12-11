@@ -483,8 +483,10 @@ private:
    * (in fact that is the main utility of Persistent_mq_handle::interrupt_sends()).  It makes the
    * Persistent_mq_handle::wait_sendable() immediately return.
    *
-   * If and only if #m_pending_err_code is truthy, #m_mq is null; hence the handle's system resources (and the
-   * handle object's memory itself) are given back at the earliest possible time.
+   * ### When is it null? ###
+   * See Blob_stream_mq_receiver_impl::m_mq doc header.  The same comments apply here.
+   *
+   * Explicit reminder though: Do not `m_mq.reset()` until dtor, if not null upon exiting ctor!
    */
   typename Base::Auto_closing_mq m_mq;
 
@@ -1353,8 +1355,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(c
     const bool sent = m_mq->try_send(orig_blob, &m_pending_err_code);
     if (m_pending_err_code) // It will *not* emit would-block (will just return false but no error).
     {
-      m_mq.reset();
-      // Return resources.  (->try_send() logged WARNING sufficiently.)
+      // ->try_send() logged WARNING sufficiently.
 
       assert(!sent);
       avoided_qing_or_null && (*avoided_qing_or_null = false);
