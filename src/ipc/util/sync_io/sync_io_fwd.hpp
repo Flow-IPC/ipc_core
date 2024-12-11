@@ -651,6 +651,13 @@ using Task_ptr = boost::shared_ptr<Task>;
  *          not asking for this and log WARNING or even FATAL/abort program.  With `epoll_*()`, `EPOLLONESHOT` and/or
  *          `EPOLLET` may be of aid, but be very careful.
  *
+ * @warning With this mechanism we are exposing native handles/FDs on which work is potentially performed
+ *          by Flow-IPC internals.  You may perform operations only as described here, namely read-only "watching"
+ *          of events; do not transmit anything or close such handles under any circumstances.  In addition such
+ *          a native handle is guaranteed to be valid until the `sync_io`-pattern object exists, but once the
+ *          destructor begins you must never touch it again.  Corollary: See warning below in `epoll`-focused
+ *          section below.
+ *
  * ### Integrating with reactor-pattern `poll()` and similar ###
  * Suppose your application is using POSIX `poll()`.  Typically a data structure will be maintained mirroring
  * the `fds[].events` (events of interest) sub-argument to `poll()`; for example an `unordered_map<>` from FD
@@ -709,6 +716,16 @@ using Task_ptr = boost::shared_ptr<Task>;
  * `events` bit-mask so as to then `|=` or `&=` it.  Therefore a mirroring data structure (such as the
  * aforementioned `unordered_map<>` from FD to rd/wr/rd-wr) may be necessary in practice.  In my (ygoldfel)
  * experience using such a mirroring thing is typical in any case.
+ *
+ * @warning When a `sync_io`-pattern-API object (e.g., transport::sync_io::Native_socket_stream or
+ *          transport::struc::sync_io::Channel or session::sync_io::Server_session_adapter) is about to be
+ *          destroyed (by you), it is very possible you have 1+ outstanding async-waits on 1+ native handles (FDs).
+ *          You *must* deregister any earlier `epoll_ctl(...ADD)`s via `epoll_ctl(...DEL)`, and you must do
+ *          so *before* destroying the Flow-IPC object.  Failure to do so can lead to unexpected chaos
+ *          (such as [explained here](https://idea.popcount.org/2017-03-20-epoll-is-fundamentally-broken-22/)).
+ *          Conversely doing so but after Flow-IPC object destructor has begun executing breaks the earlier-mentioned
+ *          rule wherein a handle must not be touched at that point (and is likely invalid or refers to something else
+ *          by then).
  *
  * One tip: `EPOLLONESHOT` may be quite useful: It means you can limit your code to just doing
  * `epoll_ctl(...ADD)` without requiring the counterpart `epoll_ctl(...DEL)` once the event does fire.
