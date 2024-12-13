@@ -228,7 +228,7 @@
  *     So it will return either:
  *     - `SSL_ERROR_WANT_READ` (meaning, "the underlying stream-socket handle (FD) needs to be readable -- call me
  *       again after you've *async-waited* successfully on this *event-of-interest*, and I will try again"); or
- *     - `SSL_ERROR_WANT_WRITE` (same but needs writability isntead).
+ *     - `SSL_ERROR_WANT_WRITE` (same but needs writability instead).
  *
  * Your application would then internally register interest in FD so-and-so to be readable or writable.  Perhaps
  * some `SSL_write()` would be interested in another such event simultaneously too.  So then the next time the
@@ -580,7 +580,7 @@ class Asio_waitable_native_handle;
  *
  * @note That said it is recommended that one `std::move()` any #Task_ptr whenever possible, such as when
  *       capturing it in a lambda (e.g., `[task_ptr = std::move(task_ptr)`).  This advice applies generally
- *       to all `shared_ptr` captures (*"whenever possible"* being important), but this is just a reminder.
+ *       to all `shared_ptr` captures ("whenever possible" being important), but this is just a reminder.
  */
 using Task_ptr = boost::shared_ptr<Task>;
 
@@ -740,7 +740,7 @@ using Task_ptr = boost::shared_ptr<Task>;
  *
  * ### Integrating with boost.asio ###
  * Suppose your application is using boost.asio (possibly with flow.async to manage threads),
- * with a `flow::util::Task_engine::run()` comprising the event loop, in proactor pattern fashion.
+ * with a `flow::util::Task_engine::run()` embodying the event loop, in proactor pattern fashion.
  * (We would recommend just that, preferring it to an old-school reactor-pattern via `[e]poll*()` directly.)
  * *Your* loop is asynchronously expressed, but you can still use the `sync_io` pattern to graft
  * Flow-IPC operations into it, so that they are invoked synchronously, when you want, in the exact thread you
@@ -790,7 +790,7 @@ using Task_ptr = boost::shared_ptr<Task>;
  * boost.asio-supplied `.async_wait()`.  However, and this is a key point:
  *
  * To make it work, before invoking `T::start_*ops()`, you must supply your execution context/executor -- usually
- * a boost.asio `Task_engine` (a/k/a `boost::asio::io_contexst`) or strand (`boost::asio::io_context::strand`) --
+ * a boost.asio `Task_engine` (a/k/a `boost::asio::io_context`) or strand (`boost::asio::io_context::strand`) --
  * w/r/t which you plan to `.async_wait()` down the line.  This is done via `T::replace_event_wait_handles()`,
  * an otherwise optional call.  If using flow.async, this might be (e.g.):
  *
