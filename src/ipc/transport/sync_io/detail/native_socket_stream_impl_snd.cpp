@@ -198,7 +198,7 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
     }; // const auto send_low_lvl_payload =
 
     /* Send-or-queue each payload of which we spoke above.  There's a very high chance all of this is done inline;
-     * but there's a small chance either there's either stuff queued already (we've delegated waiting for would-block
+     * but there's a small chance either there's stuff queued already (we've delegated waiting for would-block
      * to clear to user), or not but this can't fully complete (encountered would-block).  We don't care here per
      * se; I am just saying for context, to clarify what "send-or-queue" means. */
     send_low_lvl_payload(1, hndl_or_null, meta_length_blob); // It sets m_snd_pending_err_code.
@@ -208,7 +208,13 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
       send_low_lvl_payload(2, Native_handle(), meta_blob); // It sets m_snd_pending_err_code.
     }
 
-    FLOW_LOG_WARNING("XXX: AFTER: send_low_lvl_payload(2, Native_handle(), meta_blob); // It sets m_snd_pending_err_code.");
+    FLOW_LOG_WARNING("XXX2.0: AFTER: send_low_lvl_payload(2, Native_handle(), meta_blob); // It sets m_snd_pending_err_code.");
+
+    FLOW_LOG_WARNING("XXX2.0: *err_code = [" << *err_code << "][" << err_code->message() >> "].");
+    FLOW_LOG_WARNING("XXX2.0: m_snd_pending_err_code = [" << m_snd_pending_err_code << "][" << m_snd_pending_err_code.message() >> "].");
+    flow::util::this_thread::sleep_for(boost::chrono::milliseconds(250));
+    FLOW_LOG_WARNING("XXX2.1: *err_code = [" << *err_code << "][" << err_code->message() >> "].");
+    FLOW_LOG_WARNING("XXX2.1: m_snd_pending_err_code = [" << m_snd_pending_err_code << "][" << m_snd_pending_err_code.message() >> "].");
 
     *err_code = m_snd_pending_err_code; // Emit the new error.
 
