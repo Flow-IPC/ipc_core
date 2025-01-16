@@ -94,15 +94,29 @@ bool Native_socket_stream::Impl::send_blob(const util::Blob_const& blob, Error_c
 bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, const util::Blob_const& meta_blob,
                                                     Error_code* err_code)
 {
+  if (!err_code)
+  {
+    Error_code our_err_code;
+    const auto result = send_native_handle(hndl_or_null, meta_blob, &our_err_code);
+    if (our_err_code)
+    {
+      throw flow::util::Runtime_error(our_err_code, "send_native_handleXXX");
+    }
+    // else
+    return result;
+  }
+  // else if (err_code):
+
   using util::Fine_duration;
   using util::Blob_const;
   using flow::util::buffers_dump_string;
   using boost::chrono::round;
   using boost::chrono::milliseconds;
-
+#if 0
   FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Native_socket_stream::Impl::send_native_handle,
                                      hndl_or_null, flow::util::bind_ns::cref(meta_blob), _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
+#endif
 
   // We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
 
@@ -202,12 +216,13 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
      * to clear to user), or not but this can't fully complete (encountered would-block).  We don't care here per
      * se; I am just saying for context, to clarify what "send-or-queue" means. */
     send_low_lvl_payload(1, hndl_or_null, meta_length_blob); // It sets m_snd_pending_err_code.
-    FLOW_LOG_WARNING("XXX: AFTER: send_low_lvl_payload(1, hndl_or_null, meta_length_blob); // It sets m_snd_pending_err_code.");
+    //FLOW_LOG_WARNING("XXX: AFTER: send_low_lvl_payload(1, hndl_or_null, meta_length_blob); // It sets m_snd_pending_err_code.");
     if ((meta_length_raw != 0) && (!m_snd_pending_err_code))
     {
       send_low_lvl_payload(2, Native_handle(), meta_blob); // It sets m_snd_pending_err_code.
     }
 
+#if 0
     FLOW_LOG_WARNING("XXX3.0: AFTER: send_low_lvl_payload(2, Native_handle(), meta_blob); // It sets m_snd_pending_err_code.");
     flow::util::this_thread::sleep_for(boost::chrono::milliseconds(125));
     FLOW_LOG_WARNING("XXX3.1: AFTER: flow::util::this_thread::sleep_for(boost::chrono::milliseconds(125));");
@@ -216,10 +231,11 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
     flow::util::this_thread::sleep_for(boost::chrono::milliseconds(125));
     FLOW_LOG_WARNING("XXX2.1: m_snd_pending_err_code = [" << m_snd_pending_err_code << "][" << m_snd_pending_err_code.message() << "].");
     FLOW_LOG_WARNING("XXX2.1: *err_code = [" << *err_code << "][" << err_code->message() << "].");
+#endif
 
     *err_code = m_snd_pending_err_code; // Emit the new error.
 
-    FLOW_LOG_WARNING("XXX: AFTER: *err_code = m_snd_pending_err_code; // Emit the new error.");
+    //FLOW_LOG_WARNING("XXX: AFTER: *err_code = m_snd_pending_err_code; // Emit the new error.");
 
     // Did either thing generate a new error?
     if (*err_code)
@@ -232,14 +248,14 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
     }
     else if (m_snd_auto_ping_period != Fine_duration::zero()) // && (!*err_code)
     {
-      FLOW_LOG_WARNING("XXX: IN: else if (m_snd_auto_ping_period != Fine_duration::zero()) // && (!*err_code)");
+      //FLOW_LOG_WARNING("XXX: IN: else if (m_snd_auto_ping_period != Fine_duration::zero()) // && (!*err_code)");
       /* Send requested, and there was no error; that represents non-idleness.  If auto_ping() has been called
        * (the feature is engaged), idleness shall occur at worst in m_snd_auto_ping_period; hence reschedule
        * snd_on_ev_auto_ping_now_timer_fired(). */
 
       const size_t n_canceled = m_snd_auto_ping_timer.expires_after(m_snd_auto_ping_period);
 
-      FLOW_LOG_WARNING("XXX: AFTER: [ " << n_canceled << "]: const size_t n_canceled = m_snd_auto_ping_timer.expires_after(m_snd_auto_ping_period);");
+      //FLOW_LOG_WARNING("XXX: AFTER: [ " << n_canceled << "]: const size_t n_canceled = m_snd_auto_ping_timer.expires_after(m_snd_auto_ping_period);");
 
       FLOW_LOG_TRACE("Socket stream [" << *this << "]: Send request from user; hence rescheduled "
                      "auto-ping to occur in "
@@ -267,7 +283,7 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
   } /* else if (!m_snd_finished) && (meta_blob.size() OK) && (!m_snd_pending_err_code)
      *         (but m_snd_pending_err_code may have become truthy inside) */
 
-  FLOW_LOG_WARNING("XXX: BEFORE: if (*err_code)");
+  //FLOW_LOG_WARNING("XXX: BEFORE: if (*err_code)");
 
   if (*err_code)
   {
@@ -283,7 +299,7 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
                      "[" << (*err_code == error::Code::S_SENDS_FINISHED_CANNOT_SEND) << "].");
   }
 
-  FLOW_LOG_WARNING("XXX: AFTER: if (*err_code)");
+  //FLOW_LOG_WARNING("XXX: AFTER: if (*err_code)");
 
   return true;
 } // Native_socket_stream::Impl::send_native_handle()
