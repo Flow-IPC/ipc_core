@@ -210,10 +210,10 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
 
     FLOW_LOG_WARNING("XXX2.0: AFTER: send_low_lvl_payload(2, Native_handle(), meta_blob); // It sets m_snd_pending_err_code.");
 
-    FLOW_LOG_WARNING("XXX2.0: *err_code = [" << *err_code << "][" << err_code->message() >> "].");
+    FLOW_LOG_WARNING("XXX2.0: *err_code = [" << *err_code << "][" << err_code->message() << "].");
     FLOW_LOG_WARNING("XXX2.0: m_snd_pending_err_code = [" << m_snd_pending_err_code << "][" << m_snd_pending_err_code.message() << "].");
     flow::util::this_thread::sleep_for(boost::chrono::milliseconds(250));
-    FLOW_LOG_WARNING("XXX2.1: *err_code = [" << *err_code << "][" << err_code->message() >> "].");
+    FLOW_LOG_WARNING("XXX2.1: *err_code = [" << *err_code << "][" << err_code->message() << "].");
     FLOW_LOG_WARNING("XXX2.1: m_snd_pending_err_code = [" << m_snd_pending_err_code << "][" << m_snd_pending_err_code.message() << "].");
 
     *err_code = m_snd_pending_err_code; // Emit the new error.
