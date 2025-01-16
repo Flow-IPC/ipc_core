@@ -100,7 +100,7 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
     const auto result = send_native_handle(hndl_or_null, meta_blob, &our_err_code);
     if (our_err_code)
     {
-      throw flow::util::Runtime_error(our_err_code, "send_native_handleXXX");
+      throw flow::error::Runtime_error(our_err_code, "send_native_handleXXX");
     }
     // else
     return result;
