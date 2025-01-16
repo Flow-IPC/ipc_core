@@ -94,29 +94,15 @@ bool Native_socket_stream::Impl::send_blob(const util::Blob_const& blob, Error_c
 bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, const util::Blob_const& meta_blob,
                                                     Error_code* err_code)
 {
-  if (!err_code)
-  {
-    Error_code our_err_code;
-    const auto result = send_native_handle(hndl_or_null, meta_blob, &our_err_code);
-    if (our_err_code)
-    {
-      throw flow::error::Runtime_error(our_err_code, "send_native_handleXXX");
-    }
-    // else
-    return result;
-  }
-  // else if (err_code):
-
   using util::Fine_duration;
   using util::Blob_const;
   using flow::util::buffers_dump_string;
   using boost::chrono::round;
   using boost::chrono::milliseconds;
-#if 0
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Native_socket_stream::Impl::send_native_handle,
-                                     hndl_or_null, flow::util::bind_ns::cref(meta_blob), _1);
+
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR2("Native_socket_stream::Impl::send_native_handle()",
+                                     bool, send_native_handle, hndl_or_null, meta_blob, ARG_err_code);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
-#endif
 
   // We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
 
@@ -223,6 +209,10 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
     }
 
 #if 0
+2025-01-16 06:56:31.736766293 +0000 [warn]: T7fe572183780: IPC-TRANSPORT: native_socket_stream_impl_snd.cpp:send_native_handle(211): XXX3.0: AFTER: send_low_lvl_payload(2, Native_handle(), meta_blob); // It sets m_snd_pending_err_code.
+2025-01-16 06:56:31.861878422 +0000 [warn]: T7fe572183780: IPC-TRANSPORT: native_socket_stream_impl_snd.cpp:send_native_handle(213): XXX3.1: AFTER: flow::util::this_thread::sleep_for(boost::chrono::milliseconds(125));
+2025-01-16 06:56:31.861991853 +0000 [warn]: T7fe572183780: IPC-TRANSPORT: native_socket_stream_impl_snd.cpp:send_native_handle(214): XXX2.0: m_snd_pending_err_code = [system:0][Success].
+
     FLOW_LOG_WARNING("XXX3.0: AFTER: send_low_lvl_payload(2, Native_handle(), meta_blob); // It sets m_snd_pending_err_code.");
     flow::util::this_thread::sleep_for(boost::chrono::milliseconds(125));
     FLOW_LOG_WARNING("XXX3.1: AFTER: flow::util::this_thread::sleep_for(boost::chrono::milliseconds(125));");
