@@ -28,12 +28,10 @@ namespace ipc::transport::asio_local_stream_socket
 Endpoint endpoint_at_shared_name(flow::log::Logger* logger_ptr,
                                  const Shared_name& absolute_name, Error_code* err_code)
 {
-  namespace bind_ns = flow::util::bind_ns;
   using boost::system::system_error;
   using std::string;
 
-  FLOW_ERROR_EXEC_FUNC_AND_THROW_ON_ERROR(Endpoint, endpoint_at_shared_name,
-                                          logger_ptr, bind_ns::cref(absolute_name), _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(Endpoint, endpoint_at_shared_name, logger_ptr, absolute_name, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   FLOW_LOG_SET_CONTEXT(logger_ptr, Log_component::S_TRANSPORT);

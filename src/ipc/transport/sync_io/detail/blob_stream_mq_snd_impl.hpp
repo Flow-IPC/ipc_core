@@ -882,8 +882,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
   using boost::chrono::round;
   using boost::chrono::milliseconds;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob,
-                                     flow::util::bind_ns::cref(blob), _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, send_blob, blob, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   assert((blob.size() != 0) && "Do not send_blob() empty blobs.");

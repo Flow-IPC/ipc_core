@@ -69,7 +69,7 @@ std::string Process_credentials::process_invoked_as(Error_code* err_code) const
   using std::string;
   // using ::errno; // It's a macro apparently.
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(std::string, Process_credentials::process_invoked_as, _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(string, process_invoked_as, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
 #ifndef FLOW_OS_LINUX

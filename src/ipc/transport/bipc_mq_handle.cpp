@@ -155,7 +155,7 @@ bool Bipc_mq_handle::try_send(const util::Blob_const& blob, Error_code* err_code
 {
   using flow::util::buffers_dump_string;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Bipc_mq_handle::try_send, flow::util::bind_ns::cref(blob), _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, try_send, blob, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   assert(m_mq && "As advertised: try_send() => undefined behavior if not successfully cted or was moved-from.");
@@ -268,8 +268,7 @@ bool Bipc_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_duratio
   using boost::chrono::round;
   using boost::chrono::microseconds;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Bipc_mq_handle::timed_send,
-                                     flow::util::bind_ns::cref(blob), timeout_from_now, _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, timed_send, blob, timeout_from_now, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   // Similar to a combo of (blocking) send() and (non-blocking) try_send() -- keeping comments light where redundant.
@@ -345,7 +344,7 @@ bool Bipc_mq_handle::try_receive(util::Blob_mutable* blob, Error_code* err_code)
   using flow::util::buffers_dump_string;
   using util::Blob_mutable;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Bipc_mq_handle::try_receive, blob, _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, try_receive, blob, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   assert(m_mq && "As advertised: try_receive() => undefined behavior if not successfully cted or was moved-from.");
@@ -464,7 +463,7 @@ bool Bipc_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duration
   using boost::chrono::round;
   using boost::chrono::microseconds;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Bipc_mq_handle::timed_receive, blob, timeout_from_now, _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, timed_receive, blob, timeout_from_now, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   // Similar to a combo of (blocking) receive() and (non-blocking) try_receive() -- keeping comments light.
@@ -637,7 +636,7 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
   using Bipc_mq_mtx = bipc::interprocess_mutex;
   using Bipc_mq_lock = bipc::scoped_lock<Bipc_mq_mtx>;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Bipc_mq_handle::timed_wait_receivable, timeout_from_now, _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, wait_impl, timeout_from_now, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   assert(m_mq

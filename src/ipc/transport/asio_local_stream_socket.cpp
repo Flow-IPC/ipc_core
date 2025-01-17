@@ -38,7 +38,6 @@ size_t nb_write_some_with_native_handle(flow::log::Logger* logger_ptr,
                                         Native_handle payload_hndl, const util::Blob_const& payload_blob,
                                         Error_code* err_code)
 {
-  namespace bind_ns = flow::util::bind_ns;
   using boost::system::system_category;
   using boost::array;
   namespace sys_err_codes = boost::system::errc;
@@ -52,8 +51,8 @@ size_t nb_write_some_with_native_handle(flow::log::Logger* logger_ptr,
   using ::MSG_NOSIGNAL;
   // using ::errno; // It's a macro apparently.
 
-  FLOW_ERROR_EXEC_FUNC_AND_THROW_ON_ERROR(size_t, nb_write_some_with_native_handle,
-                                          logger_ptr, peer_socket_ptr, payload_hndl, bind_ns::cref(payload_blob), _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(size_t, nb_write_some_with_native_handle,
+                                     logger_ptr, peer_socket_ptr, payload_hndl, payload_blob, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   /* To reader/maintainer: The below isn't that difficult, but if you need exact understanding and definitely if you
@@ -206,7 +205,6 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
                                        Error_code* err_code,
                                        int message_flags)
 {
-  namespace bind_ns = flow::util::bind_ns;
   using boost::system::system_category;
   using boost::array;
   namespace sys_err_codes = boost::system::errc;
@@ -220,9 +218,9 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
   using ::MSG_CTRUNC;
   // using ::errno; // It's a macro apparently.
 
-  FLOW_ERROR_EXEC_FUNC_AND_THROW_ON_ERROR(size_t, nb_read_some_with_native_handle,
-                                          logger_ptr, peer_socket_ptr, target_payload_hndl_ptr,
-                                          bind_ns::cref(target_payload_blob), _1, message_flags);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(size_t, nb_read_some_with_native_handle,
+                                     logger_ptr, peer_socket_ptr, target_payload_hndl_ptr,
+                                     target_payload_blob, _1, message_flags);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   /* To reader/maintainer: The below isn't that difficult, but if you need exact understanding and definitely if you
