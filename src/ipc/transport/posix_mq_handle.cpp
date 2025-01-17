@@ -681,7 +681,7 @@ bool Posix_mq_handle::try_send(const util::Blob_const& blob, Error_code* err_cod
   using ::mq_send;
   // using ::EAGAIN; // A macro apparently.
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Posix_mq_handle::try_send, flow::util::bind_ns::cref(blob), _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, try_send, blob, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   assert((!m_mq.null())
@@ -807,8 +807,7 @@ bool Posix_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_durati
   using ::mq_send;
   // using ::EAGAIN; // A macro apparently.
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Posix_mq_handle::timed_send,
-                                     flow::util::bind_ns::cref(blob), timeout_from_now, _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, timed_send, blob, timeout_from_now, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   // Similar to a combo of (blocking) send() and (non-blocking) try_send() -- keeping comments light where redundant.
@@ -885,7 +884,7 @@ bool Posix_mq_handle::try_receive(util::Blob_mutable* blob, Error_code* err_code
   using ::mq_receive;
   // using ::EAGAIN; // A macro apparently.
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Posix_mq_handle::try_receive, blob, _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, try_receive, blob, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   assert((!m_mq.null())
@@ -1007,8 +1006,7 @@ bool Posix_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duratio
   using ::mq_receive;
   // using ::EAGAIN; // A macro apparently.
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Posix_mq_handle::timed_receive,
-                                     blob, timeout_from_now, _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, timed_receive, blob, timeout_from_now, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   // Similar to a combo of (blocking) receive() and (non-blocking) try_receive() -- keeping comments light if redundant.
@@ -1189,7 +1187,7 @@ bool Posix_mq_handle::wait_impl(util::Fine_duration timeout_from_now_or_none, bo
   using ::epoll_wait;
   using Epoll_event = ::epoll_event;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Posix_mq_handle::wait_impl, timeout_from_now_or_none, snd_else_rcv, _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, wait_impl, timeout_from_now_or_none, snd_else_rcv, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   assert((!m_mq.null())

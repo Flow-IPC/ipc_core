@@ -72,8 +72,7 @@ Protocol_negotiator::proto_ver_t Protocol_negotiator::negotiated_proto_ver() con
 
 bool Protocol_negotiator::compute_negotiated_proto_ver(proto_ver_t opposing_max_proto_ver, Error_code* err_code)
 {
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Protocol_negotiator::compute_negotiated_proto_ver,
-                                     opposing_max_proto_ver, _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, compute_negotiated_proto_ver, opposing_max_proto_ver, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   if (negotiated_proto_ver() != S_VER_UNKNOWN)

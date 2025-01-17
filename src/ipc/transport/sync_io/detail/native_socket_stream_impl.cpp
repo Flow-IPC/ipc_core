@@ -188,8 +188,7 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
   using util::sync_io::Asio_waitable_native_handle;
   using boost::promise;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Native_socket_stream::Impl::sync_connect,
-                                     flow::util::bind_ns::cref(absolute_name), _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, sync_connect, absolute_name, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   /* Please see "Connect-ops impl design" in class doc header for background.  Long story short, though:
@@ -281,7 +280,6 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
 void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name, Error_code* sync_err_code_ptr,
                                                flow::async::Task_asio_err&& on_done_func)
 {
-  namespace bind_ns = flow::util::bind_ns;
   using asio_local_stream_socket::Endpoint;
   using asio_local_stream_socket::Peer_socket;
   using asio_local_stream_socket::endpoint_at_shared_name;
@@ -475,8 +473,7 @@ util::Process_credentials
   using asio_local_stream_socket::Opt_peer_process_credentials;
   using util::Process_credentials;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(Process_credentials, Native_socket_stream::Impl::remote_peer_process_credentials,
-                                     _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(Process_credentials, remote_peer_process_credentials, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   if (!state_peer("remote_peer_process_credentials()"))

@@ -100,8 +100,7 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
   using boost::chrono::round;
   using boost::chrono::milliseconds;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, Native_socket_stream::Impl::send_native_handle,
-                                     hndl_or_null, flow::util::bind_ns::cref(meta_blob), _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, send_native_handle, hndl_or_null, meta_blob, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   // We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
@@ -198,7 +197,7 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
     }; // const auto send_low_lvl_payload =
 
     /* Send-or-queue each payload of which we spoke above.  There's a very high chance all of this is done inline;
-     * but there's a small chance either there's either stuff queued already (we've delegated waiting for would-block
+     * but there's a small chance either there's stuff queued already (we've delegated waiting for would-block
      * to clear to user), or not but this can't fully complete (encountered would-block).  We don't care here per
      * se; I am just saying for context, to clarify what "send-or-queue" means. */
     send_low_lvl_payload(1, hndl_or_null, meta_length_blob); // It sets m_snd_pending_err_code.
