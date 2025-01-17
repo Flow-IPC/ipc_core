@@ -636,7 +636,7 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
   using Bipc_mq_mtx = bipc::interprocess_mutex;
   using Bipc_mq_lock = bipc::scoped_lock<Bipc_mq_mtx>;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, wait_impl, timeout_from_now, _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, (wait_impl<WAIT_TYPE, SND_ELSE_RCV>), timeout_from_now, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   assert(m_mq
