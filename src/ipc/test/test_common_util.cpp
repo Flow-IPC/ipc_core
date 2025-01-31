@@ -64,12 +64,27 @@ static void collect_output(flow::util::String_ostream& ss,
                            bool output_buffer)
 {
   collect_output(ss.os(), func, os);
-  const string& output = ss.str();
   if (output_buffer)
   {
     // Output results
-    os << output;
+    os << ss.str();
+    os.flush();
   }
+}
+
+bool check_output(const string& output, const vector<string>& regex_matches)
+{
+  bool result = true;
+  for (auto const& iter : regex_matches)
+  {
+    std::regex cur_regex(iter);
+    if (!std::regex_search(output, cur_regex))
+    {
+      result = false;
+    }
+  }
+
+  return result;
 }
 
 bool check_output(const std::function<void()>& func,
@@ -89,19 +104,7 @@ bool check_output(const std::function<void()>& func,
   flow::util::String_ostream ss;
 
   collect_output(ss, func, os, output_buffer);
-  const string& output = ss.str();
-
-  bool result = true;
-  for (auto const& iter : regex_matches)
-  {
-    std::regex cur_regex(iter);
-    if (!std::regex_search(output, cur_regex))
-    {
-      result = false;
-    }
-  }
-
-  return result;
+  return check_output(ss.str(), regex_matches);
 }
 
 string collect_output(const std::function<void()>& func, ostream& os, bool output_buffer)
