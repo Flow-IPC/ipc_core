@@ -34,6 +34,16 @@ namespace ipc::test
 std::string get_test_suite_name();
 
 /**
+ * Examines output for matches.
+ *
+ * @param output The output to match against.
+ * @param regex_matches The regular expression matches (gtest format) to check in the stream output.
+ * @param output_buffer Whether to output the contents of the buffer to the intended destination.
+ *
+ * @return Whether the output matched the expected regular expression.
+ */
+bool check_output(const std::string& output, const std::vector<std::string>& regex_matches);
+/**
  * Executes a function and examines stream output for a match.
  *
  * @param func The function to execute.
@@ -48,19 +58,29 @@ bool check_output(const std::function<void()>& func,
                   const std::string& regex_match,
                   bool output_buffer = true);
 /**
- * Executes a function and examines stream output for a match.
+ * Executes a function and examines stream output for matches.
  *
  * @param func The function to execute.
  * @param os The stream to check output on.
  * @param regex_matches The regular expression matches (gtest format) to check in the stream output.
  * @param output_buffer Whether to output the contents of the buffer to the intended destination.
  *
- * @return Whether the output matched the expected regular expression.
+ * @return Whether the output matched the expected regular expressions.
  */
 bool check_output(const std::function<void()>& func,
                   std::ostream& os,
                   const std::vector<std::string>& regex_matches,
                   bool output_buffer = true);
+/**
+ * Examines output for matches.
+ *
+ * @param output The output to match against.
+ * @param regex_matches The regular expression matches (gtest format) to check in the stream output.
+ * @param output_buffer Whether to output the contents of the buffer to the intended destination.
+ *
+ * @return Whether the output matched the expected regular expression.
+ */
+bool check_output(const std::string& output, const std::vector<std::string>& regex_matches);
 /**
  * Collects output during the execution of a function.
  *
@@ -70,7 +90,7 @@ bool check_output(const std::function<void()>& func,
  *
  * @return The collected output.
  */
-std::string collect_output(const std::function<void()>& func, std::ostream& os, bool output_buffer = true);
+std::string collect_output(const std::function<void()>& func, std::ostream& os = std::cout, bool output_buffer = true);
 /**
  * Returns the RSS memory used by the process.
  *
