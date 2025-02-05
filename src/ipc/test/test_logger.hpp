@@ -19,7 +19,7 @@
 
 #include <flow/log/simple_ostream_logger.hpp>
 #include <ipc/common.hpp>
-#include "ipc/test/test_config.hpp"
+#include <flow/test/test_config.hpp>
 
 namespace ipc::test
 {
@@ -36,16 +36,16 @@ public:
    *
    * @param min_severity Lowest severity that will pass through logging filter.
    */
-  Test_logger(const flow::log::Sev& min_severity = Test_config::get_singleton().m_sev) :
+  Test_logger(const flow::log::Sev& min_severity = flow::test::Test_config::get_singleton().m_sev) :
     m_config(min_severity),
     m_logger(&m_config)
   {
     // Yes, it is formally (and practically) fine to do this after the Logger took the m_config ptr already.
     m_config.init_component_to_union_idx_mapping<Log_component>
-      (100, flow::log::Config::standard_component_payload_enum_sparse_length<Log_component>());
+      (100, flow::log::Config::standard_component_payload_enum_sparse_length<Log_component>(), true);
     m_config.init_component_names<Log_component>(ipc::S_IPC_LOG_COMPONENT_NAME_MAP, false, "ipc-");
     m_config.init_component_to_union_idx_mapping<flow::Flow_log_component>
-      (100, flow::log::Config::standard_component_payload_enum_sparse_length<flow::Flow_log_component>());
+      (200, flow::log::Config::standard_component_payload_enum_sparse_length<flow::Flow_log_component>(), true);
     m_config.init_component_names<flow::Flow_log_component>(flow::S_FLOW_LOG_COMPONENT_NAME_MAP, false, "flow-");
     // Now the logging may commence.
   }
