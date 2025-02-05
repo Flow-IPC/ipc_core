@@ -22,28 +22,10 @@
 namespace ipc::test
 {
 
-/**
- * Shared pointer deleter that does nothing (e.g., doesn't delete the underlying pointer) as there is
- * no storage allocated for the pointer.
- */
-template <class T>
-struct Fake_object_deleter
-{
-  /**
-   * The delete operator, which does nothing.
-   *
-   * @param obj The pointer to delete.
-   */
-  void operator()([[maybe_unused]] T* obj) const
-  {
-    // Intentionally do nothing as there is no memory allocated
-  }
-}; // struct Fake_object_deleter
-
 template <class T>
 std::shared_ptr<T> create_fake_shared_object(T* address)
 {
-  return std::shared_ptr<T>(static_cast<T*>(address), Fake_object_deleter<T>());
+  return std::shared_ptr<T>(address, [](auto&&...) {}); // The deleter does nothing.
 }
 
 } // namespace ipc::test
