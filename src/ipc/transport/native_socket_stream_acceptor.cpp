@@ -39,7 +39,10 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
                                                              Error_code* err_code) :
   flow::log::Log_context(logger_ptr, Log_component::S_TRANSPORT),
   m_absolute_name(absolute_name_arg),
-  m_worker(get_logger(), flow::util::ostream_op_string(*this)), // Start the 1 thread.
+  m_worker(get_logger(), // Start the 1 thread.
+           /* (Linux) OS thread name will truncate m_absolute_name to 15-5=10 chars here; high chance that'll include
+            * something decently useful; probably not everything though.  It's a decent attempt. */
+           flow::util::ostream_op_string("NSSA-", m_absolute_name.str())),
   m_next_peer_socket(*(m_worker.task_engine())) // Steady state: start it as empty, per doc header.
 {
   using asio_local_stream_socket::Acceptor;
@@ -47,6 +50,7 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
   using asio_local_stream_socket::endpoint_at_shared_name;
   using util::String_view;
   using flow::error::Runtime_error;
+  using flow::async::reset_thread_pinning;
   using boost::system::system_error;
 
   /* For simplicity we'll just do all the work in thread W we're about to start.  Whether to do some initial stuff
@@ -58,6 +62,8 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
   FLOW_LOG_TRACE("Acceptor [" << *this << "]: Awaiting initial setup/listening in worker thread.");
   m_worker.start([&]() // Execute all this synchronously in the thread.
   {
+    reset_thread_pinning(get_logger()); // Don't inherit any strange core-affinity!  Worker must float free.
+
     auto const asio_engine = m_worker.task_engine();
 
     FLOW_LOG_INFO("Acceptor [" << *this << "]: Starting (am in worker thread).");
@@ -66,7 +72,7 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
     assert((local_endpoint == Endpoint()) == bool(sys_err_code));
     if (sys_err_code) // It logged.
     {
-      return; // Escape the post() callback, that is.
+      return; // Escape the start() callback, that is.
     }
     // else
 
@@ -85,7 +91,7 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
                        "be due to address/name clash; details logged below.");
       sys_err_code = exc.code();
       FLOW_ERROR_SYS_ERROR_LOG_WARNING();
-      return; // Escape the post() callback, that is.
+      return; // Escape the start() callback, that is.
     }
 
     FLOW_LOG_INFO("Acceptor [" << *this << "]: "
@@ -131,6 +137,8 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
 Native_socket_stream_acceptor::~Native_socket_stream_acceptor()
 {
   using flow::async::Single_thread_task_loop;
+  using flow::async::reset_thread_pinning;
+  using flow::util::ostream_op_string;
 
   // We are in thread U.  By contract in doc header, they must not call us from a completion handler (thread W).
 
@@ -145,9 +153,12 @@ Native_socket_stream_acceptor::~Native_socket_stream_acceptor()
 
   FLOW_LOG_INFO("Acceptor [" << *this << "]: Continuing shutdown.  Next we will run pending handlers from some "
                 "other thread.  In this user thread we will await those handlers' completion and then return.");
-  Single_thread_task_loop one_thread(get_logger(), "temp_deinit");
+  Single_thread_task_loop one_thread(get_logger(), ostream_op_string("NSSADeinit-", m_absolute_name.str()));
+
   one_thread.start([&]()
   {
+    reset_thread_pinning(get_logger()); // Don't inherit any strange core-affinity.  Float free.
+
     FLOW_LOG_INFO("Acceptor [" << *this << "]: "
                   "In transient finisher thread: Shall run all pending internal handlers (typically none).");
 
