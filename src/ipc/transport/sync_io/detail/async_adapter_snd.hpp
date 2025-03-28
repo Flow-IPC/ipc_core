@@ -292,6 +292,7 @@ template<typename Core_t>
 Async_adapter_sender<Core_t>::~Async_adapter_sender()
 {
   using flow::async::Single_thread_task_loop;
+  using flow::async::reset_thread_pinning;
   using flow::util::ostream_op_string;
 
   /* Pre-condition: m_worker is stop()ed, and any pending tasks on it have been executed.
@@ -304,9 +305,12 @@ Async_adapter_sender<Core_t>::~Async_adapter_sender()
 
   if (!m_end_sending_on_done_func_or_empty.empty())
   {
-    Single_thread_task_loop one_thread(get_logger(), ostream_op_string(m_log_pfx, "-snd-temp_deinit"));
+    Single_thread_task_loop one_thread(get_logger(),
+                                       ostream_op_string("ASdDeinit-", m_log_pfx));
     one_thread.start([&]()
     {
+      reset_thread_pinning(get_logger()); // Don't inherit any strange core-affinity.  Float free.
+
       FLOW_LOG_INFO(m_log_pfx << ": In transient snd-finisher thread: "
                     "Shall run pending graceful-sends-close completion handler.");
       m_end_sending_on_done_func_or_empty(error::Code::S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER);

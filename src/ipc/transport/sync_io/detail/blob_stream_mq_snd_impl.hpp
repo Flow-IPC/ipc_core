@@ -649,7 +649,9 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
   // m_mq null for now but is set up below.
   m_mq_max_msg_sz(mq.max_msg_size()), // Just grab this now though.
   m_ev_wait_hndl_mq(m_ev_hndl_task_engine_unused), // This needs to be .assign()ed still.
-  m_timer_worker(get_logger(), flow::util::ostream_op_string(*this)),
+  m_timer_worker(get_logger(),
+                 // Brief-ish for use in OS thread names or some such.
+                 flow::util::ostream_op_string("MQSdS-", nickname())),
   m_finished(false),
   m_auto_ping_period(util::Fine_duration::zero()), // auto_ping() not yet called.
   m_auto_ping_timer(m_timer_worker.create_timer()), // Inactive timer (auto_ping() not yet called).
@@ -664,6 +666,7 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
 {
   using flow::error::Runtime_error;
   using flow::util::ostream_op_string;
+  using flow::async::reset_this_thread_pinning;
   using boost::asio::connect_pipe;
 
   auto& sys_err_code = m_pending_err_code;
@@ -705,8 +708,12 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
 
       // Start thread W, for when we (and if) we need to use it to async-wait for transmissibility.
       m_blocking_worker.emplace(get_logger(),
-                                ostream_op_string("mq_snd-", nickname())); // Thread W started just below.
-      m_blocking_worker->start();
+                                /* (Linux) OS thread name will truncate nickname() to 15-6=9 chars here;
+                                 * decent chance that'll include something decently useful; probably
+                                 * not everything though; depends on nickname.  It's a decent attempt. */
+                                ostream_op_string("MQSdS-", nickname())); // Thread W started just below.
+      m_blocking_worker->start(reset_this_thread_pinning);
+      // Don't inherit any strange core-affinity!  ^-- Worker must float free.
 
       // For now we just set up the IPC-pipe and the sync_io-watched FD mirror.  First things first... err, second....
       connect_pipe(*m_mq_ready_reader, *m_mq_ready_writer, sys_err_code);

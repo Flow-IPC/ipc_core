@@ -59,7 +59,7 @@ Asio_waitable_native_handle::~Asio_waitable_native_handle()
 
 Native_handle Asio_waitable_native_handle::native_handle()
 {
-  return Base::is_open()? Native_handle(Base::native_handle()) : Native_handle();
+  return Base::is_open() ? Native_handle(Base::native_handle()) : Native_handle();
 }
 
 void Asio_waitable_native_handle::assign(Native_handle hndl)

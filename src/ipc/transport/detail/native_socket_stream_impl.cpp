@@ -34,15 +34,19 @@ Native_socket_stream::Impl::Impl(sync_io::Native_socket_stream&& sync_io_core_mo
   flow::log::Log_context(sync_io_core_moved.get_logger(), Log_component::S_TRANSPORT),
 
   m_worker(boost::movelib::make_unique<flow::async::Single_thread_task_loop>
-             (sync_io_core_moved.get_logger(), sync_io_core_moved.nickname())),
-
+             (get_logger(),
+              /* (Linux) OS thread name will truncate .nickname() to 15-4=11 chars here; high chance that'll include
+               * something decently useful; probably not everything though; depends on nickname.
+               * It's a decent attempt. */
+              flow::util::ostream_op_string("Sck-", sync_io_core_moved.nickname()))),
   // Adopt the just-cted, idle sync_io::Native_socket_stream.  It may be in NULL state or PEER state.
   m_sync_io(std::move(sync_io_core_moved))
 {
   using util::sync_io::Asio_waitable_native_handle;
   using util::sync_io::Task_ptr;
+  using flow::async::reset_this_thread_pinning;
 
-  m_worker->start();
+  m_worker->start(reset_this_thread_pinning); // Don't inherit any strange core-affinity!  Worker must float free.
 
   // We're using a boost.asio event loop, so we need to base the async-waited-on handles on our Task_engine.
 #ifndef NDEBUG
@@ -74,7 +78,7 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
 
   // Lastly, as we're in PEER state, set up send-ops and receive-ops state machines.
 
-  const auto log_pfx = ostream_op_string("Socket stream [", *this, ']');
+  const auto log_pfx = ostream_op_string("Sck-", nickname()); // Brief-ish for use in OS thread names or some such.
   m_snd_sync_io_adapter.emplace(get_logger(), log_pfx, m_worker.get(), &m_sync_io);
   m_rcv_sync_io_adapter.emplace(get_logger(), log_pfx, m_worker.get(), &m_sync_io);
 
@@ -100,6 +104,7 @@ Native_socket_stream::Impl::Impl(sync_io::Native_socket_stream&& sync_io_core_in
 Native_socket_stream::Impl::~Impl()
 {
   using flow::async::Single_thread_task_loop;
+  using flow::async::reset_thread_pinning;
   using flow::util::ostream_op_string;
 
   // We are in thread U.  By contract in doc header, they must not call us from a completion handler (thread W).
@@ -156,9 +161,11 @@ Native_socket_stream::Impl::~Impl()
   FLOW_LOG_INFO("Socket stream [" << *this << "]: Continuing shutdown.  Next we will run pending handlers from some "
                 "other thread.  In this user thread we will await those handlers' completion and then return.");
 
-  Single_thread_task_loop one_thread(get_logger(), ostream_op_string(nickname(), "-temp_deinit"));
+  Single_thread_task_loop one_thread(get_logger(), ostream_op_string("SckDeinit-", nickname()));
   one_thread.start([&]()
   {
+    reset_thread_pinning(get_logger()); // Don't inherit any strange core-affinity.  Float free.
+
     FLOW_LOG_INFO("Socket stream [" << *this << "]: "
                   "In transient finisher thread: Shall run all pending internal handlers (typically none).");
 
@@ -312,6 +319,7 @@ sync_io::Native_socket_stream Native_socket_stream::Impl::release()
   using util::sync_io::Asio_waitable_native_handle;
   using util::sync_io::Task_ptr;
   using flow::util::ostream_op_string;
+  using flow::async::reset_this_thread_pinning;
 
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: Releasing idle-state object to new socket-stream core object.");
 
@@ -337,7 +345,7 @@ sync_io::Native_socket_stream Native_socket_stream::Impl::release()
   m_worker
     = boost::movelib::make_unique<flow::async::Single_thread_task_loop>
         (core.get_logger(), core.nickname());
-  m_worker->start();
+  m_worker->start(reset_this_thread_pinning);
 
   // m_sync_io is as-if-just-cted, so do what ctor does regarding .replace_event_wait_handles().
 #ifndef NDEBUG

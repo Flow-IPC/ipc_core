@@ -42,8 +42,9 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
   m_protocol_negotiator(get_logger(), nickname(),
                         1, 1), // Initial protocol!  @todo Magic-number `const`(s), particularly if/when v2 exists.
   m_ev_wait_hndl_peer_socket(m_ev_hndl_task_engine_unused), // This needs to be .assign()ed still, at least.
-  m_timer_worker(get_logger(), flow::util::ostream_op_string(*this)),
-
+  m_timer_worker(get_logger(),
+                 // Brief-ish for use in OS thread names or some such.
+                 flow::util::ostream_op_string("SckS-", m_nickname)),
   m_snd_finished(false),
   m_snd_auto_ping_period(util::Fine_duration::zero()), // auto_ping() not yet called.
   m_snd_auto_ping_timer(m_timer_worker.create_timer()), // Inactive timer (auto_ping() not yet called).
@@ -71,6 +72,7 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
 {
   using util::sync_io::Asio_waitable_native_handle;
   using util::sync_io::Task_ptr;
+  using flow::util::ostream_op_string;
   using std::string;
 
   FLOW_LOG_INFO("Socket stream [" << *this << "]: In NULL state: Started timer thread.  Otherwise inactive.");
@@ -93,7 +95,7 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
    * We do -1- and -2- below.  -3- happens inside sync_connect() as needed.  */
 
   // Create the single-thread loop object, but do not ->start() thread yet (see sync_connect() as to why not).
-  m_conn_async_worker.emplace(get_logger(), string("conn-") + nickname());
+  m_conn_async_worker.emplace(get_logger(), ostream_op_string("SckC-", nickname()));
 
   // -1- replace_event_wait_handles() counterpart.  To avoid conflict, use separate guy from m_ev_wait_hndl_peer_socket.
   m_conn_ev_wait_hndl_peer_socket.emplace(*(m_conn_async_worker->task_engine()),
@@ -186,6 +188,7 @@ bool Native_socket_stream::Impl::start_connect_ops(util::sync_io::Event_wait_fun
 bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
 {
   using util::sync_io::Asio_waitable_native_handle;
+  using flow::async::reset_this_thread_pinning;
   using boost::promise;
 
   FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, sync_connect, absolute_name, _1);
@@ -242,7 +245,8 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
      * even create m_conn_async_worker at all, unless we know we need to start the thread?  It's probably OK as-is;
      * probably the thread start/join is the heaviest aspect of all this, and if we typically avoid that, we've done
      * fine.  Revisit sometime though.  It'd just make m_conn_ev_wait_hndl_peer_socket lifecycle more complicated.) */
-    m_conn_async_worker->start();
+    m_conn_async_worker->start(reset_this_thread_pinning);
+    // Don't inherit any strange core-affinity!  ^-- Worker must float free.
 
     // And now we wait (for a very short time).
     done_promise.get_future().wait();
@@ -283,7 +287,6 @@ void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
   using asio_local_stream_socket::Endpoint;
   using asio_local_stream_socket::Peer_socket;
   using asio_local_stream_socket::endpoint_at_shared_name;
-  using flow::util::ostream_op_string;
   using flow::async::Task_asio_err;
   using util::Task;
 

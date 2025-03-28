@@ -376,6 +376,7 @@ template<typename Core_t>
 Async_adapter_receiver<Core_t>::~Async_adapter_receiver()
 {
   using flow::async::Single_thread_task_loop;
+  using flow::async::reset_thread_pinning;
   using flow::util::ostream_op_string;
 
   /* Pre-condition: m_worker is stop()ed, and any pending tasks on it have been executed.
@@ -387,9 +388,12 @@ Async_adapter_receiver<Core_t>::~Async_adapter_receiver()
 
   if (m_user_request)
   {
-    Single_thread_task_loop one_thread(get_logger(), ostream_op_string(m_log_pfx, "-rcv-temp_deinit"));
+    Single_thread_task_loop one_thread(get_logger(),
+                                       ostream_op_string("ARcDeinit-", m_log_pfx));
     one_thread.start([&]()
     {
+      reset_thread_pinning(get_logger()); // Don't inherit any strange core-affinity.  Float free.
+
       FLOW_LOG_TRACE("Running head slot async-receive completion handler.");
       m_user_request->m_on_done_func(error::Code::S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER, 0);
       FLOW_LOG_TRACE("User receive handler finished.");

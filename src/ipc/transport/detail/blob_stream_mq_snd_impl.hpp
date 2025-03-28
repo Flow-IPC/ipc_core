@@ -232,8 +232,12 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
 template<typename Persistent_mq_handle>
 Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
   (sync_io::Blob_stream_mq_sender<Mq>&& sync_io_core_in_peer_state_moved) :
+
   flow::log::Log_context(sync_io_core_in_peer_state_moved.get_logger(), Log_component::S_TRANSPORT),
-  m_worker(sync_io_core_in_peer_state_moved.get_logger(), sync_io_core_in_peer_state_moved.nickname()),
+  m_worker(get_logger(),
+           /* (Linux) OS thread name will truncate .nickname() to 15-5=10 chars here; high chance that'll include
+            * something decently useful; probably not everything though; depends on nickname.  It's a decent attempt. */
+           flow::util::ostream_op_string("MQSd-", sync_io_core_in_peer_state_moved.nickname())),
   // Adopt the just-cted, idle sync_io:: core.
   m_sync_io(std::move(sync_io_core_in_peer_state_moved))
   // m_sync_io_adapter is null but is set-up shortly below.
@@ -241,8 +245,9 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
   using util::sync_io::Asio_waitable_native_handle;
   using util::sync_io::Task_ptr;
   using flow::util::ostream_op_string;
+  using flow::async::reset_this_thread_pinning;
 
-  m_worker.start();
+  m_worker.start(reset_this_thread_pinning); // Don't inherit any strange core-affinity!  Worker must float free.
 
   // We're using a boost.asio event loop, so we need to base the async-waited-on handles on our Task_engine.
 #ifndef NDEBUG
@@ -254,7 +259,9 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
 
   /* Have to do this after .replace_event_wait_handles() by the adapter's ctor's contract.
    * As of this writing that's the only reason m_sync_io_adapter is optional<>. */
-  m_sync_io_adapter.emplace(get_logger(), ostream_op_string("Blob_stream_mq_sender [", *this, ']'),
+  m_sync_io_adapter.emplace(get_logger(),
+                            // Brief-ish for use in OS thread names or some such.
+                            ostream_op_string("MQSd-", nickname()),
                             &m_worker, &m_sync_io);
 } // Blob_stream_mq_sender_impl::Blob_stream_mq_sender_impl()
 
@@ -262,6 +269,7 @@ template<typename Persistent_mq_handle>
 Blob_stream_mq_sender_impl<Persistent_mq_handle>::~Blob_stream_mq_sender_impl()
 {
   using flow::async::Single_thread_task_loop;
+  using flow::async::reset_thread_pinning;
   using flow::util::ostream_op_string;
 
   // We are in thread U.  By contract in doc header, they must not call us from a completion handler (thread W).
@@ -286,9 +294,11 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::~Blob_stream_mq_sender_impl()
                 "from some other thread.  In this user thread we will await those handlers' completion and then "
                 "return.");
 
-  Single_thread_task_loop one_thread(get_logger(), ostream_op_string(nickname(), "-temp_deinit"));
+  Single_thread_task_loop one_thread(get_logger(), ostream_op_string("MQSdDeinit-", nickname()));
   one_thread.start([&]()
   {
+    reset_thread_pinning(get_logger()); // Don't inherit any strange core-affinity.  Float free.
+
     FLOW_LOG_INFO("Blob_stream_mq_sender [" << *this << "]: "
                   "In transient finisher thread: Shall run all pending internal handlers (typically none).");
 

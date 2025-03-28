@@ -30,9 +30,14 @@ namespace ipc::util::sync_io
 Timer_event_emitter::Timer_event_emitter(flow::log::Logger* logger_ptr, String_view nickname_str) :
   flow::log::Log_context(logger_ptr, Log_component::S_UTIL),
   m_nickname(nickname_str),
-  m_worker(get_logger(), std::string("tmr_ev-") + m_nickname)
+  m_worker(get_logger(),
+           /* (Linux) OS thread name will truncate m_nickname to 15-5=10 chars here; high chance that'll include
+            * something decently useful; probably not everything though; depends on nickname.  It's a decent attempt. */
+           std::string("TEvE-") + m_nickname)
 {
-  m_worker.start();
+  m_worker.start(flow::async::reset_this_thread_pinning);
+  // Don't inherit any strange core-affinity!  ^-- Worker must float free.
+
   FLOW_LOG_TRACE("Timer_event_emitter [" << *this << "]: Idle timer-emitter thread started.");
 }
 
