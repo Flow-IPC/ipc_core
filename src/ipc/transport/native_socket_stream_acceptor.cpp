@@ -42,7 +42,7 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
   m_worker(get_logger(), // Start the 1 thread.
            /* (Linux) OS thread name will truncate m_absolute_name to 15-5=10 chars here; high chance that'll include
             * something decently useful; probably not everything though.  It's a decent attempt. */
-           flow::util::ostream_op_string("NSSA-", m_absolute_name)),
+           flow::util::ostream_op_string("NSSA-", m_absolute_name.str())),
   m_next_peer_socket(*(m_worker.task_engine())) // Steady state: start it as empty, per doc header.
 {
   using asio_local_stream_socket::Acceptor;
@@ -153,7 +153,7 @@ Native_socket_stream_acceptor::~Native_socket_stream_acceptor()
 
   FLOW_LOG_INFO("Acceptor [" << *this << "]: Continuing shutdown.  Next we will run pending handlers from some "
                 "other thread.  In this user thread we will await those handlers' completion and then return.");
-  Single_thread_task_loop one_thread(get_logger(), ostream_op_string("NSSADeinit-", m_absolute_name));
+  Single_thread_task_loop one_thread(get_logger(), ostream_op_string("NSSADeinit-", m_absolute_name.str()));
 
   one_thread.start([&]()
   {
