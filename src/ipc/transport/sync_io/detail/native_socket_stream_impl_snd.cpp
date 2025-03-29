@@ -36,46 +36,51 @@ bool Native_socket_stream::Impl::start_send_native_handle_ops(util::sync_io::Eve
   // else
 
   const auto protocol_ver_to_send_if_needed = m_protocol_negotiator.local_max_proto_ver_for_sending();
-  if (protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_UNKNOWN)
+#if 1
+  assert((protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_UNKNOWN)
+         && "start_*_ops() shall be the first place to send protocol-negotiation... but it is already sent!");
+#else
+  /* .release() + reset_sync_io_setup() do not exist (are `if 0`d); see comments over there about all that.
+   * So similarly we are `if 0`d.  If those guys come back, then the following perhaps would too. */
+  if (protocol_ver_to_send_if_needed == Protocol_negotiator::S_VER_UNKNOWN)
   {
-    assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
-           && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
-
-    assert((!m_snd_pending_err_code) && "We should be the first send-related transmission code possible.");
-
-    /* As discussed in m_protocol_negotiator doc header and class doc header "Protocol negotiation" section:
-     * send a special as-if-send_blob()-user-message: no Native_handle; meta-blob = sized
-     * to sizeof(protocol_ver_to_send_if_needed), containing protocol_ver_to_send_if_needed.
-     * By the way m_protocol_negotiator logged about the fact we're about to send it, so we can be pretty quiet.
-     *
-     * The mechanics here are very similar to how send_native_handle() invokes snd_sync_write_or_q_payload().
-     * Keeping comments light, except where something different applies (as of this writing that's just: the
-     * meaning of snd_sync_write_or_q_payload() return value). */
-
-    const auto fake_meta_length_raw = low_lvl_payload_blob_length_t(protocol_ver_to_send_if_needed);
-    const Blob_const payload_blob(&fake_meta_length_raw, sizeof(fake_meta_length_raw));
-
-    FLOW_LOG_TRACE("Socket stream [" << *this << "]: Want to send protocol-negotiation info.  "
-                   "About to send payload 1 of 1; "
-                   "contains low-level blob of size [" << payload_blob.size() << "] "
-                   "located @ [" << payload_blob.data() << "].");
-
-    snd_sync_write_or_q_payload({}, payload_blob, false);
-    /* m_send_pending_err_code may have become truthy; just means next send_*()/whatever will emit that error.
-     *
-     * Otherwise: Either it inline-sent it (very likely), or it got queued.
-     *            Either way: no error; let's get on with queuing-or-sending real stuff like send_*() payloads.
-     * P.S. There's only 1 protocol version as of this writing, so there's no ambiguity, and we can just get on with
-     * sending stuff right away.  This could change in the future.  See m_protocol_negotiator doc header for more. */
-  }
-  else
-  {
+    // Corner case... we come from a .release()d guy.  See Impl::reset_sync_io_setup().  Already sent it.
     FLOW_LOG_TRACE("Socket stream [" << *this << "]: Wanted to send protocol-negotiation info; "
                    "but we've marked it as already-sent, even though we are in start_*_ops() in PEER state.  "
                    "Probably we come from a .release()d Native_socket_stream which has already done it; cool.");
-
+    return true;
   }
-  // else { Corner case... we come from a .release()d guy.  See Impl::reset_sync_io_setup().  Already sent it. }
+#endif
+
+  assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
+         && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
+
+  assert((!m_snd_pending_err_code) && "We should be the first send-related transmission code possible.");
+
+  /* As discussed in m_protocol_negotiator doc header and class doc header "Protocol negotiation" section:
+   * send a special as-if-send_blob()-user-message: no Native_handle; meta-blob = sized
+   * to sizeof(protocol_ver_to_send_if_needed), containing protocol_ver_to_send_if_needed.
+   * By the way m_protocol_negotiator logged about the fact we're about to send it, so we can be pretty quiet.
+   *
+   * The mechanics here are very similar to how send_native_handle() invokes snd_sync_write_or_q_payload().
+   * Keeping comments light, except where something different applies (as of this writing that's just: the
+   * meaning of snd_sync_write_or_q_payload() return value). */
+
+  const auto fake_meta_length_raw = low_lvl_payload_blob_length_t(protocol_ver_to_send_if_needed);
+  const Blob_const payload_blob(&fake_meta_length_raw, sizeof(fake_meta_length_raw));
+
+  FLOW_LOG_TRACE("Socket stream [" << *this << "]: Want to send protocol-negotiation info.  "
+                 "About to send payload 1 of 1; "
+                 "contains low-level blob of size [" << payload_blob.size() << "] "
+                 "located @ [" << payload_blob.data() << "].");
+
+  snd_sync_write_or_q_payload({}, payload_blob, false);
+  /* m_send_pending_err_code may have become truthy; just means next send_*()/whatever will emit that error.
+   *
+   * Otherwise: Either it inline-sent it (very likely), or it got queued.
+   *            Either way: no error; let's get on with queuing-or-sending real stuff like send_*() payloads.
+   * P.S. There's only 1 protocol version as of this writing, so there's no ambiguity, and we can just get on with
+   * sending stuff right away.  This could change in the future.  See m_protocol_negotiator doc header for more. */
 
   return true;
 } // Native_socket_stream::Impl::start_send_native_handle_ops()

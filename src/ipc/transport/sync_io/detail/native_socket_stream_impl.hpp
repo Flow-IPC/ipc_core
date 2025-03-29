@@ -378,6 +378,15 @@ public:
 
   /**
    * See Native_socket_stream counterpart.
+   *
+   * @param released_hndl
+   *        See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
+  bool release_native_handle(Native_handle* released_hndl);
+
+  /**
+   * See Native_socket_stream counterpart.
    * @return See Native_socket_stream counterpart.
    */
   const std::string& nickname() const;
@@ -1090,14 +1099,16 @@ private:
 
   /**
    * Helper that returns `true` silently if the given Op `start_*_ops()` has been called; else
-   * logs WARNING and returns `false`.
+   * logs WARNING and returns `false`; or vice versa depending on the optional arg.
    *
    * @param context
    *        For logging: the algorithmic context (function name or whatever).
-   * @return See `start_*_ops()`.
+   * @param invert
+   *        If `false` (default) then `start_...()` should have been called; if `true` then the reverse.
+   * @return `true` if as-expected; `false` otherwise.
    */
   template<Op OP>
-  bool op_started(util::String_view context) const;
+  bool op_started(util::String_view context, bool invert = false) const;
 
   /**
    * Boiler-plate-reducing body of `start_*_ops()` for the given Op.
@@ -1208,8 +1219,8 @@ private:
    *     either direction, a null pointer.
    *
    * Moreover the FD cannot be replaced with another FD: if PEER-state ctor is used, then that FD is connected
-   * from the start; if NULL-state ctor is used, then that FD is unconnected but may become connected (if/when)
-   * State::S_PEER is reached (via async_connect()).
+   * from the start; if NULL-state ctor is used, then that FD is unconnected but may become connected (if/when
+   * State::S_PEER is reached (via async_connect())).
    *
    * `*m_peer_socket` is used *exclusively* for non-blocking calls; *never* `.async_*()`.  That conforms to
    * the `sync_io` pattern.  See #m_nb_task_engine doc header.
@@ -1217,8 +1228,8 @@ private:
    * ### Rationale ###
    * The above facts are important -- namely that from the very start (up to an error) the FD is loaded and never
    * changes -- because the watcher FD-wrappers used in
-   * the `sync_io` pattern can be simply and correctly initialized at any time and not change thereafter (
-   * in terms what FD they wrap).
+   * the `sync_io` pattern can be simply and correctly initialized at any time and not change thereafter
+   * (in terms or what FD they wrap).
    *
    * As for the null-pointer state, it exists for 2 reasons which are somewhat in synergy:
    *   - It is a way of giving back the FD-resource to the kernel as early as possible.
@@ -1616,13 +1627,14 @@ const util::sync_io::Event_wait_func* Native_socket_stream::Impl::sync_io_ev_wai
 }
 
 template<Native_socket_stream::Impl::Op OP>
-bool Native_socket_stream::Impl::op_started(util::String_view context) const
+bool Native_socket_stream::Impl::op_started(util::String_view context, bool invert) const
 {
-  if (sync_io_ev_wait_func<OP>()->empty())
+  if (sync_io_ev_wait_func<OP>()->empty() == (!invert))
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: Op-type [" << int(OP) << "]: "
-                     "In context [" << context << "] we must be start_...()ed, "
-                     "but we are not.  Probably a caller bug, but it is not for us to judge.");
+                     "In context [" << context << "] we must be "
+                     "[" << (invert ? "start_...()" : "NOT start_...()") << "]ed, " << "but the "
+                     "opposite is true.  Probably a caller bug, but it is not for us to judge.");
     return false;
   }
   // else

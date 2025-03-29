@@ -38,6 +38,13 @@ namespace ipc::transport::sync_io
  * counterpart to transport::Native_socket_stream -- and in fact the latter use an instance of the present
  * class as its core.
  *
+ * Note also release_native_handle().  This can be useful, if you'd like to use
+ * Flow-IPC to establish a connection (whether via ipc::session channels or via sync_connect() or via
+ * Native_socket_stream_acceptor) -- but then use your own wire protocol along that connection.  For example
+ * elsewhere the capnp-RPC integration into Flow-IPC uses this feature (see struc::shm::rpc::Session_vat_network
+ * ctor(s) taking `channel` arg and/or struc::shm::rpc::pluck_bidir_transport_hndl_from_channel()).
+ * Naturally in that case you may not use the `Blob_*er` or `Native_handle_*er` concept-implementing API.
+ *
  * @see transport::Native_socket_stream and util::sync_io doc headers.  The latter describes the general pattern which
  *      we implement here; it also contrasts it with the async-I/O pattern, which the former implements.
  *      In general we recommend you use a transport::Native_socket_stream rather than a `*this` --
@@ -295,6 +302,60 @@ public:
    * @return See above.
    */
   flow::log::Logger* get_logger() const;
+
+  /**
+   * In PEER state, before any call to `start_send_*_ops()` or `start_receive_*_ops()`, forgets the existing
+   * connection (native socket handle) and transfers that handle to the caller by assining `*released_hndl`.
+   *
+   * This method is effective -- and therefore will return `true` -- if and only if none of the following is the
+   * case:
+   *   - `*this` is in NULL state (not PEER state).
+   *     -  Either use handle-subsuming ctor to start in PEER state (perhaps by arranging for
+   *        a Channel via a session::Session; or via Native_socket_stream_acceptor); or sync_connect() to reach it.
+   *   - One or more of `start_receive_*_ops()` and `start_send_*_ops()` has been called since entering PEER state.
+   *     - As of this writing release_native_handle() is for fresh, clean `Native_socket_stream`s only.
+   *   - release_native_handle() has already been called since entering PEER state.
+   * 
+   * Otherwise (if any of those is the case), it will return `false` and no-op other than possible logging.
+   *
+   * ### Rationale ###
+   * Once a Unix domain socket connection is established, further traffic involves sending blobs/meta-blobs
+   * and possibly native handles; to make this work internally we implement a particular (simple) protocol to
+   * achieve at least message boundary-keeping.  This ability (and others) is essential to much of the rest of
+   * Flow-IPC, and even if the user only wants to use a Native_socket_stream for message-passing over a stream-type
+   * Unix domain socket connection, these features are useful.  However they're not necessary for *every* use-case
+   * involving a stream-type Unix domain socket connection; perhaps one wants to implement their own protocol.
+   * Of course one can simply use native or boost.asio (etc.) API to simply establish a UDS connection, and indeed
+   * many users do that... but Flow-IPC features very convenient ipc::session based channel-establishment
+   * abilities -- and it is entirely possible that a user might want to:
+   *   - use ipc::session to establish a stream UDS-bearing transport::Channel; but
+   *   - use their own protocol along that transport once established.
+   *
+   * (The precipitating use case in fact was that the capnp RPC module implements internally their own passing
+   * of special RPC-bearing capnp-serialized messages over sockets including UDS, and we wanted this to keep working
+   * while making use of SHM established by ipc::session, for zero-copy.  It was therefore natural to obtain the
+   * socket-stream connection via ipc::session too.)
+   *
+   * @todo Without introducing a breaking change, it is possible to extend
+   * ipc::transport::sync_io::Native_socket_stream::release_native_handle() to work even if a `*this` is not
+   * in pristine just-constructed/move-assigned state but is otherwise "at peace" (no outstanding async-ops, etc.).
+   * As of this writing one must not have called a PEER-state `start_*_ops()` method for `release_native_handle()`
+   * to work.  (Internally the impl is certainly possible, albeit touchy.  Such an ability was just not important
+   * in practice so far, and since improving this incrementally is not really a breaking change, we deemed it okay
+   * to punt on it.)
+   *
+   * @todo Upon achieving the preceding (in the code) to-do, it might be realistic to also add
+   * ipc::transport::Native_socket_stream::release_native_handle() (currently only the `sync_io`-pattern one
+   * makes sense).
+   *
+   * @param released_hndl
+   *        On success (`true` return); `*released_hndl` shall be assigned the now-released native handle.
+   *        `release_native_handle` must not be null, or behavior is undefined (assertion may trip).
+   *        On failure (`false` return) not touched.
+   * @return `true` on success; `false` if not in PEER state; or `start_*_ops()` was called in this PEER state; or
+   *         release_native_handle() has returned `true` already in this PEER state.
+   */
+  bool release_native_handle(Native_handle* released_hndl);
 
   /**
    * Implements Native_handle_sender *and* Native_handle_receiver APIs at the same time, per their concept contracts.

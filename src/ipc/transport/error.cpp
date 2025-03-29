@@ -123,13 +123,13 @@ std::string Category::message(int val) const // Virtual.
     return "Will not receive message: opposing user sent graceful-close via API.";
   case Code::S_LOW_LVL_TRANSPORT_HOSED_CANNOT_SEND:
     return "Unable to send outgoing traffic: an earlier-reported, or at least logged, system error had hosed the "
-           "underlying transport mechanism.";
+           "underlying transport mechanism; or user had ejected/closed the underlying transport handle.";
   case Code::S_LOW_LVL_TRANSPORT_HOSED_CANNOT_RECEIVE:
     return "Unable to receive incoming traffic: an earlier-reported, or at least logged, system error had hosed the "
-           "underlying transport mechanism.";
+           "underlying transport mechanism; or user had ejected/closed the underlying transport handle.";
   case Code::S_LOW_LVL_TRANSPORT_HOSED:
     return "Unable to access low-level details: an earlier-reported system error had hosed the underlying "
-           "transport mechanism.";
+           "transport mechanism; or user had ejected/closed the underlying transport handle.";
   case Code::S_LOW_LVL_UNEXPECTED_STREAM_PAYLOAD_BEYOND_HNDL:
     return "Unable to receive incoming traffic: message contains more than: 1 blob plus 0-1 native handles.";
   case Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE:

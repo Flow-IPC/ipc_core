@@ -80,6 +80,11 @@ const std::string& Native_socket_stream::nickname() const
   return impl()->nickname();
 }
 
+bool Native_socket_stream::release_native_handle(Native_handle* released_hndl)
+{
+  return impl()->release_native_handle(released_hndl);
+}
+
 bool Native_socket_stream::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
 {
   return impl()->sync_connect(absolute_name, err_code);

@@ -190,7 +190,7 @@ void async_write_with_native_handle(flow::log::Logger* logger_ptr,
 
   // Verbose and slow (100% skipped unless log filter passes).
   FLOW_LOG_DATA("Starting: Blob contents are "
-                "[" << buffers_dump_string(payload_blob, "  ") << "].");
+                "[\n" << buffers_dump_string(payload_blob, "  ") << "].");
 
   /* OK, now our task is to asynchronously send (1) payload_hndl (native handle) and (2) payload_blob (a buffer)
    * over peer_socket (a connected local socket).  As explicitly documented in boost.asio docs: it does not provide an

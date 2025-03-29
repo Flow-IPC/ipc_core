@@ -92,17 +92,20 @@ enum class Code
 
   /**
    * Unable to send outgoing traffic: an earlier-reported, or at least logged, system error had hosed the
-   * underlying transport mechanism.
+   * underlying transport mechanism; or user had ejected/closed the underlying transport handle.
    */
   S_LOW_LVL_TRANSPORT_HOSED_CANNOT_SEND,
 
   /**
    * Unable to receive incoming traffic: an earlier-reported, or at least logged, system error had hosed the
-   * underlying transport mechanism.
+   * underlying transport mechanism; or user had ejected/closed the underlying transport handle.
    */
   S_LOW_LVL_TRANSPORT_HOSED_CANNOT_RECEIVE,
 
-  /// Unable to access low-level details: an earlier-reported system error had hosed the underlying transport mechanism.
+  /**
+   * Unable to access low-level details: an earlier-reported system error had hosed the underlying transport mechanism;
+   * or user had ejected/closed the underlying transport handle.
+   */
   S_LOW_LVL_TRANSPORT_HOSED,
 
   /// Unable to receive incoming traffic: message contains more than: 1 blob plus 0-1 native handles.

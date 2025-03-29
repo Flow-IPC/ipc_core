@@ -180,6 +180,59 @@ Native_socket_stream::Impl::~Impl()
                 "handed out.");
 }
 
+bool Native_socket_stream::Impl::release_native_handle(Native_handle* released_hndl)
+{
+  assert(released_hndl);
+
+  if ((!state_peer("release_native_handle()"))
+      || (!op_started<Op::S_SND>("release_native_handle()", true))
+      || (!op_started<Op::S_RCV>("release_native_handle()", true)))
+  {
+    return false;
+  }
+  // else
+  if (!m_peer_socket)
+  {
+    // Without start_receive/send_*_ops() there should be no way to nullify m_peer_socket other than ourselves.
+    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Wanted to release native handle, but user had already "
+                     "apparently done so.  Probably a user bug, but it is not for us to judge.");
+    return false;
+  }
+  // else if (m_peer_socket):
+
+  Error_code sys_err_code;
+  released_hndl->m_native_handle = m_peer_socket->release(sys_err_code);
+  if (sys_err_code)
+  {
+    FLOW_LOG_FATAL("Socket stream [" << *this << "]: Wanted to release native handle, and conditions appear "
+                   "appropriate (start_send/receive_*_ops() not called), but boost.asio Peer_socket::release() "
+                   "emitted error.  This should never happenZ/possibly a bug on our part; check "
+                   "boost.asio code to see how this might have come about.  Details follow.");
+    FLOW_ERROR_SYS_ERROR_LOG_FATAL();
+    assert(false && "Peer_socket::release() bug?"); std::abort();
+    return false;
+  }
+  // else
+
+  /* Gotta be careful with this guy (the pointer itself).  Nullifying it *is* correct though:
+   * Really after this the user shouldn't do anything to *this except perhaps overwrite it via move-assignment;
+   * but suppose they do: they'd need to start_send/receive_*_ops() to be able to
+   * do anything, and it would (as of this writing) work fine and not involve m_peer_socket... but any
+   * attempt to then transmit (send_*(), async_receive_*(), others) or other ops (remote_peer_process_credentials())
+   * would notice null m_peer_socket and thus emit LOW_LVL_TRANSPORT_HOSED* error.  Those errors' msgs specifically
+   * mention this would happen either if another op earlier hosed the transport, or the user released/closed
+   * the transport.  The latter is what would have happened here.  Then later dtor will more or less no-op.
+   *
+   * As with other situations where we do m_peer_socket.reset() -- on socket error as of this writing -- there's
+   * no need to worry about m_ev_wait_hndl_peer_socket and such for the same reasons (basically m_peer_socket being
+   * null will prevent any real work). */
+  m_peer_socket.reset();
+
+  FLOW_LOG_INFO("Socket stream [" << *this << "]: Released native handle: [" << *released_hndl << "].");
+
+  return true;
+} // Native_socket_stream::Impl::release_native_handle()
+
 bool Native_socket_stream::Impl::start_connect_ops(util::sync_io::Event_wait_func&& ev_wait_func)
 {
   return start_ops<Op::S_CONN>(std::move(ev_wait_func));
