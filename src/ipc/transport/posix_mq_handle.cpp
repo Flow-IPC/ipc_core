@@ -71,6 +71,7 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
 {
   using util::set_resource_permissions;
   using flow::error::Runtime_error;
+  using flow::log::Sev;
   using boost::io::ios_all_saver;
   using boost::system::system_category;
   using ::mq_open;
