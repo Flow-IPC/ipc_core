@@ -58,9 +58,9 @@ Bipc_mq_handle::Bipc_mq_handle(Mode_tag mode_tag, flow::log::Logger* logger_ptr,
   constexpr char const * MODE_STR = std::is_same_v<Mode_tag, util::Create_only>
                                       ? "create-only" : "open-or-create";
 
-  if (get_logger()->should_log(Sev::S_TRACE, get_log_component()))
+  if (logger_ptr && logger_ptr->should_log(Sev::S_TRACE, get_log_component()))
   {
-    ios_all_saver saver(*(get_logger()->this_thread_ostream())); // Revert std::oct/etc. soon.
+    ios_all_saver saver{*(logger_ptr->this_thread_ostream())}; // Revert std::oct/etc. soon.
     FLOW_LOG_TRACE_WITHOUT_CHECKING
       ("Bipc_mq_handle [" << *this << "]: Constructing MQ handle to MQ at name [" << absolute_name() << "] in "
        "[" << MODE_STR << "] mode; max msg size [" << max_msg_sz << "] x [" << max_n_msg << "] msgs; "

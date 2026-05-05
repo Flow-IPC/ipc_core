@@ -71,6 +71,7 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
 {
   using util::set_resource_permissions;
   using flow::error::Runtime_error;
+  using flow::log::Sev;
   using boost::io::ios_all_saver;
   using boost::system::system_category;
   using ::mq_open;
@@ -88,10 +89,11 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
   constexpr bool CREATE_ONLY_ELSE_MAYBE = std::is_same_v<Mode_tag, util::Create_only>;
   constexpr char const * MODE_STR = CREATE_ONLY_ELSE_MAYBE ? "create-only" : "open-or-create";
 
+  if (logger_ptr && logger_ptr->should_log(Sev::S_TRACE, get_log_component()))
   {
-    ios_all_saver saver(*(get_logger()->this_thread_ostream())); // Revert std::oct/etc. soon.
+    ios_all_saver saver{*(logger_ptr->this_thread_ostream())}; // Revert std::oct/etc. soon.
 
-    FLOW_LOG_TRACE
+    FLOW_LOG_TRACE_WITHOUT_CHECKING
       ("Posix_mq_handle [" << *this << "]: Constructing MQ handle to MQ at name [" << absolute_name() << "] in "
        "[" << MODE_STR << "] mode; max msg size [" << max_msg_sz << "] x [" << max_n_msg << "] msgs; "
        "perms = [" << std::setfill('0') << std::setw(4) << std::oct << perms.get_permissions() << "].");
@@ -213,9 +215,10 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
         // else if (no_such_file_or_directory): Open failed, because MQ *just* got unlinked.  Try again!
 
         // This is fun and rare enough to warrant an INFO message.
+        if (logger_ptr && logger_ptr->should_log(Sev::S_INFO, get_log_component()))
         {
-          ios_all_saver saver(*(get_logger()->this_thread_ostream())); // Revert std::oct/etc. soon.
-          FLOW_LOG_INFO
+          ios_all_saver saver{*(logger_ptr->this_thread_ostream())}; // Revert std::oct/etc. soon.
+          FLOW_LOG_INFO_WITHOUT_CHECKING
             ("Posix_mq_handle [" << *this << "]: Create-or-open algorithm encountered the rare concurrency: "
              "MQ at name [" << absolute_name() << "] existed during the create-only mq_open() but disappeared "
              "before we were able to complete open-only mq_open().  Retrying in spin-lock fashion.  "
@@ -257,10 +260,11 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
 
   if (sys_err_code)
   {
+    if (logger_ptr && logger_ptr->should_log(Sev::S_WARNING, get_log_component()))
     {
-      ios_all_saver saver(*(get_logger()->this_thread_ostream())); // Revert std::oct/etc. soon.
+      ios_all_saver saver{*(logger_ptr->this_thread_ostream())}; // Revert std::oct/etc. soon.
 
-      FLOW_LOG_WARNING
+      FLOW_LOG_WARNING_WITHOUT_CHECKING
         ("Posix_mq_handle [" << *this << "]: mq_open() or set_resource_permissions() error (if the latter, details "
          "above and repeated below; otherwise error details only follow) while "
          "constructing MQ handle to MQ at name [" << absolute_name() << "] in "
