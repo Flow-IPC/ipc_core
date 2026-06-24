@@ -217,6 +217,11 @@ util::Process_credentials
   return m_sync_io.remote_peer_process_credentials(err_code);
 }
 
+bool Native_socket_stream::Impl::remote_peer_process_credentials(const util::Process_credentials& creds)
+{
+  return m_sync_io.remote_peer_process_credentials(creds);
+}
+
 const std::string& Native_socket_stream::Impl::nickname() const
 {
   return m_sync_io.nickname();

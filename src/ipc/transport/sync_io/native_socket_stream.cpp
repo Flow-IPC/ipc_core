@@ -99,6 +99,11 @@ util::Process_credentials Native_socket_stream::remote_peer_process_credentials(
   return impl()->remote_peer_process_credentials(err_code);
 }
 
+bool Native_socket_stream::remote_peer_process_credentials(const util::Process_credentials& creds)
+{
+  return impl()->remote_peer_process_credentials(creds);
+}
+
 size_t Native_socket_stream::send_meta_blob_max_size() const
 {
   return impl()->send_meta_blob_max_size();

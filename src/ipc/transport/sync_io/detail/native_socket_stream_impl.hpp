@@ -401,6 +401,15 @@ public:
    */
   util::Process_credentials remote_peer_process_credentials(Error_code* err_code) const;
 
+  /**
+   * See Native_socket_stream counterpart.
+   *
+   * @param creds
+   *        See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
+  bool remote_peer_process_credentials(const util::Process_credentials& creds);
+
   // Connect-ops API.
 
   /**
@@ -1112,6 +1121,13 @@ private:
   template<Op OP>
   bool start_ops(util::sync_io::Event_wait_func&& ev_wait_func);
 
+  /**
+   * To be called if and only if #m_peer_socket is connected -- actually ideally at the moment it becomes connected
+   * originally (or construction in such state, whichever happens first) -- this saves the accurate values
+   * into #m_peer_process_creds by invoking the OS-get-sock-options call on #m_peer_socket.
+   */
+  void save_peer_process_creds();
+
   // Data.
 
   // General data (both-direction pipes, connects, general).
@@ -1338,6 +1354,12 @@ private:
    * just lives in peace, on death row, until it is safe to really close (in dtor).
    */
   boost::movelib::unique_ptr<asio_local_stream_socket::Peer_socket> m_peer_socket_hosed;
+
+  /**
+   * Cached value returned by remote_peer_process_credentials(); set at entry to PEER state and (subsequently,
+   * optionally) via remote_peer_process_credentials() mutator; unused in other state(s).
+   */
+  util::Process_credentials m_peer_process_creds;
 
   /**
    * Descriptor waitable by outside event loop async-waits -- storing the same `Native_handle` as (and thus being

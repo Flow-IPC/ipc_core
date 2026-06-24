@@ -259,6 +259,15 @@ public:
 
   /**
    * See Native_socket_stream counterpart.
+   *
+   * @param creds
+   *        See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
+  bool remote_peer_process_credentials(const util::Process_credentials& creds);
+
+  /**
+   * See Native_socket_stream counterpart.
    * @return See Native_socket_stream counterpart.
    */
   size_t send_meta_blob_max_size() const;
