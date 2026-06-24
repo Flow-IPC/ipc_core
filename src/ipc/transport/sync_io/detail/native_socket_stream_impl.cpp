@@ -171,6 +171,9 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
 
   // Clear it; we've eaten it.
   native_peer_socket_moved = Native_handle();
+
+  // m_peer_socket is connected, so do this ASAP by its contract.
+  save_peer_process_creds();
 } // Native_socket_stream::Impl::Impl()
 
 Native_socket_stream::Impl::~Impl()
@@ -402,7 +405,13 @@ void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
                          "immediately but with error [" << sync_err_code << "] [" << sync_err_code.message() << "].  "
                          "Connect request failing.  Will emit error via sync-args.");
       }
-      // else { Success.  Reminder: this and fatal error are both much likelier than would-block. }
+      else
+      {
+        // Success.  Reminder: this and fatal error are both much likelier than would-block.
+
+        // m_peer_socket is connected, so do this ASAP by its contract.
+        save_peer_process_creds();
+      }
     } // if (!err_code) [m_peer_socket->non_blocking(true)] (but it may have become truthy inside)
     else // if (err_code) [m_peer_socket->non_blocking(true)]
     {
@@ -428,11 +437,22 @@ void Native_socket_stream::Impl::conn_on_ev_peer_socket_writable(flow::async::Ta
    * case where one can force a connectable-but-not-immediately situation -- hitting a backlog-full acceptor --
    * it'll still just succeed.  Anyway, if it weren't academic, then even if we falsely assume PEER state here,
    * when really m_peer_socket is hosed underneath, it'll just get exposed the moment we try to read or write.
-   * So just relax. */
+   * So just relax.
+   *
+   * Update: That was written before we added the save_peer_process_creds() call here.  It still holds, but the
+   * charade we are playing is furthered now; it's all academic, meaning in Linux at least the execution won't
+   * reach here; but if it did, what would it mean?  Well, hopefully save_peer_process_creds() would not fail.
+   * If it did fail, as currently written we consider this an impossibility and, like, std::abort().  So is that fine?
+   * That's almost a philosophical question... since execution cannot really reach here, so the hypothetical
+   * is essentially meaningless.  To summarize: this will vomit/abort() if the get-sock-opt fails here, which it
+   * won't, because none of this will execute.  @todo Be very careful here when extending the code to other OS! */
 
   FLOW_LOG_INFO("Socket stream [" << *this << "]: Writable-wait upon would-blocked connect attempt: done.  "
                 "Entering PEER state.  Will emit to completion handler.");
   m_state = State::S_PEER;
+
+  save_peer_process_creds();
+
   on_done_func(Error_code());
   FLOW_LOG_TRACE("Handler completed.");
 } // Native_socket_stream::Impl::conn_on_ev_peer_socket_writable()
@@ -470,33 +490,85 @@ bool Native_socket_stream::Impl::replace_event_wait_handles
   return true;
 } // Native_socket_stream::Impl::replace_event_wait_handles()
 
+void Native_socket_stream::Impl::save_peer_process_creds()
+{
+  using asio_local_stream_socket::Opt_peer_process_credentials;
+  using util::Process_credentials;
+
+  assert(m_peer_socket && "Internal bug: Contract violation?");
+
+  Error_code sys_err_code;
+  Opt_peer_process_credentials sock_opt; // Contains default-cted Process_credentials.
+  m_peer_socket->get_option(sock_opt, sys_err_code);
+
+  if (sys_err_code)
+  {
+    FLOW_LOG_FATAL("Socket stream [" << *this << "]: Get-sock-option call for Opt_peer_process_credentials failed.  "
+                   "For an ever-connected endpoint this should never happen.  If this endpoint originated inside "
+                   "Flow-IPC, there is a bug; please investigate call stack/etc.  If it originated from somewhat-exotic "
+                   "user code -- e.g., manual socketpair() -- then probably it is user error passing in invalid FD "
+                   "or some-such.  In that case perhaps @todo nicer error reporting.");
+    FLOW_ERROR_SYS_ERROR_LOG_FATAL();
+    assert(false
+             && "Get-sock-option call for Opt_peer_process_credentials failed.  "
+                "For an ever-connected endpoint this should never happen.  If this endpoint originated inside "
+                "Flow-IPC, there is a bug; please investigate call stack/etc.  If it originated from somewhat-exotic "
+                "user code -- e.g., manual socketpair() -- then probably it is user error passing in invalid FD "
+                "or some-such.  In that case perhaps @todo nicer error reporting.");
+    std::abort();
+  }
+  // else
+
+  m_peer_process_creds = sock_opt;
+
+  FLOW_LOG_INFO("Socket stream [" << *this << "]: At earliest opportunity saved opposing endpoint's process info "
+                "(can be overridden via mutator): [" << m_peer_process_creds << "].  "
+                "Here are our own creds: [" << Process_credentials::own_process_credentials() << "].");
+} // Native_socket_stream::Impl::save_peer_process_creds()
+
 util::Process_credentials
   Native_socket_stream::Impl::remote_peer_process_credentials(Error_code* err_code) const
 {
-  using asio_local_stream_socket::Opt_peer_process_credentials;
   using util::Process_credentials;
 
   FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(Process_credentials, remote_peer_process_credentials, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
-  if (!state_peer("remote_peer_process_credentials()"))
+  if (!state_peer("remote_peer_process_credentials(1)"))
   {
     err_code->clear(); // As promised.
-    return Process_credentials();
+    return {};
   }
   // else
 
   if (!m_peer_socket)
   {
     *err_code = error::Code::S_LOW_LVL_TRANSPORT_HOSED;
-    return Process_credentials();
+    return {};
   }
   // else
 
-  Opt_peer_process_credentials sock_opt; // Contains default-cted Process_credentials.
-  m_peer_socket->get_option(sock_opt, *err_code);
+  return m_peer_process_creds;
+} // Native_socket_stream::Impl::remote_peer_process_credentials()
 
-  return sock_opt;
+bool Native_socket_stream::Impl::remote_peer_process_credentials(const util::Process_credentials& creds)
+{
+  using util::Process_credentials;
+
+  if (!state_peer("remote_peer_process_credentials(2)"))
+  {
+    return false;
+  }
+  // else
+
+  FLOW_LOG_INFO("Socket stream [" << *this << "]: Overriding saved opposing-endpoint process info "
+                "via mutator: [" << creds << "].  "
+                "Previously saved values: [" << m_peer_process_creds << "].  "
+                "Here are our own (process) creds: [" << Process_credentials::own_process_credentials() << "].");
+
+  m_peer_process_creds = creds;
+
+  return true;
 } // Native_socket_stream::Impl::remote_peer_process_credentials()
 
 const std::string& Native_socket_stream::Impl::nickname() const

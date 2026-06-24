@@ -1060,6 +1060,9 @@ public:
    * Identical to Native_socket_stream::remote_peer_process_credentials(): OS-reported process credential
    * (PID, etc.) info about the *other* connected peer's process.  See its doc header.
    *
+   * @warning Failing to know its exact semantics may lead to confusing results that wouldn't be immediately clear,
+   *          until the downstream bugs appear!
+   *
    * @param err_code
    *        See above.
    * @return See above.
@@ -1127,6 +1130,9 @@ public:
   /**
    * Identical to Native_socket_stream::remote_peer_process_credentials(): OS-reported process credential
    * (PID, etc.) info about the *other* connected peer's process.  See its doc header.
+   *
+   * @warning Failing to know its exact semantics may lead to confusing results that wouldn't be immediately clear,
+   *          until the downstream bugs appear!
    *
    * @param err_code
    *        See above.
@@ -1328,6 +1334,9 @@ public:
   /**
    * Identical to Native_socket_stream::remote_peer_process_credentials(): OS-reported process credential
    * (PID, etc.) info about the *other* connected peer's process.  See its doc header.
+   *
+   * @warning Failing to know its exact semantics may lead to confusing results that wouldn't be immediately clear,
+   *          until the downstream bugs appear!
    *
    * @param err_code
    *        See above.

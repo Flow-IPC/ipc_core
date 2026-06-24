@@ -714,17 +714,52 @@ public:
   /**
    * OS-reported process credential (PID, etc.) info about the *other* connected peer's process, at the time
    * that the OS first established (via local-socket-connect or local-socket-connected-pair-generate call) that
-   * opposing peer socket.  The value returned, assuming a non-error-emitting execution, shall always be the same for a
-   * given `*this`.
+   * opposing peer socket -- unless overridden via mutator (please read here).
    *
-   * Informally: To avoid (though, formally, not guarantee) error::Code::S_LOW_LVL_TRANSPORT_HOSED, it is best
-   * to call this immediately upon entry of `*this` to PEER state and/or before
-   * invoking any other APIs.
+   * ### Exact semantics ###
+   * If one is not careful, it is possible to get in hard-to-realize trouble with this accessor.  Here are the
+   * exact semantics; then we'll briefly discuss their implications.
    *
-   * If invoked outside of PEER state returns `Process_credentials()` immediately
-   * and otherwise does nothing.
+   *   - If called in non-PEER state, returns `{}` but emits no error.
+   *   - If called in PEER state, but incoming/outgoing-direction processing earlier detected
+   *     that the underlying transport is hosed, returns `{}` (unless throws) and emits
+   *     error::Code::S_LOW_LVL_TRANSPORT_HOSED.
+   *     - As of this writing no other errors are possible.
+   *   - Otherwise (main case):
+   *     - If remote_peer_process_credentials() *mutator* has been called, returns copy of the value given to that
+   *       mutator last.  Otherwise:
+   *     - Returns the values accurate at the time that the connection was originally established.  To wit:
+   *       - If `*this` established connection via sync_connect() (or equivalent such as via native OS-connect):
+   *         returns the opposing process's info saved at the moment of successful OS-connect.
+   *       - If `*this` established connection via Native_socket_stream_acceptor::async_accept() (or equivalent such
+   *         as via native OS-accept):
+   *         returns the opposing process's info saved at the moment of successful OS-connect (background-accept op
+   *         subsequent to native OS-listen).
+   *       - If `*this` established connection via boost.asio `connect_pair()` (or equivalent such as via native OS
+   *         `socketpair()`): returns the info for the process that executed OS-socket-pair, at the time that
+   *         it was called.
    *
-   * @return See above; or `Peer_credentials()` if invoked outside of PEER state or in case of error.
+   * ### Rationale/implications ###
+   * In the *main case* path above: All of that is reasonable and as one would expect, with the exception of the very
+   * last bullet point, because typically (not always) one would then transmit one of the handles (FDs) returned by
+   * OS-socket-pair call to another process (over yet another Native_socket_stream) and then communicate over
+   * that channel.  In particular `ipc::session`-created `Channel`s internally operate that way.  In that case
+   * one might invoke remote_peer_process_credentials() and expect the PID/etc. of the opposing process; but that
+   * will be accurate only for the guy who received the handle/FD; whereas for the guy who sent it this method
+   * will return that guy's own PID... unhelpful, usually.
+   *
+   * The following are the key implications/corollaries of that.
+   *   - You should be aware of it, instead of assuming "opposing peer" means what you think it means.
+   *   - If you'd like to override this behavior, when it is inconvenient, use the mutator
+   *     remote_peer_process_credentials() (as shown above, those values will then be returned).  You would need
+   *     the correct values to pass to it, but these are usually available from the socket-stream used to
+   *     transmit the FD.  Namely one would perhaps call *that* guy's `.remote_peer_process_credentials()`.
+   *     - The `Channel`s returned by ipc::session already internally use this mechanism.  That is
+   *       Channel::remote_peer_process_credentials() will yield the actual opposing process's stuff, assuming
+   *       an ipc::session::Session or variant generated the Channel.  (If you create the `Channel` yourself, then
+   *       it is up to you to use the mutator to correct for this yourself.)
+   *
+   * @return See above; or `Peer_credentials{}` if invoked outside of PEER state or in case of error.
    *         The 2 eventualities can be distinguished by checking `*err_code` truthiness.  Better yet
    *         only call remote_peer_process_credentials() in PEER state, as it is otherwise conceptually meaningless.
    *
@@ -732,10 +767,25 @@ public:
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
    *        error::Code::S_LOW_LVL_TRANSPORT_HOSED (the incoming/outgoing-direction processing detected
    *        that the underlying transport is hosed; specific code was logged and can be obtained via
-   *        async_receive_native_handle() or similar),
-   *        system codes (albeit unlikely).
+   *        async_receive_native_handle() or similar).
    */
   util::Process_credentials remote_peer_process_credentials(Error_code* err_code = 0) const;
+
+  /**
+   * Overrides what same-named accessor shall return subsequently; useful when a socket-stream endpoint travels
+   * to another process relative to where the connection was first established.
+   *
+   * After calling this mutator, the same-named accessor shall return a value equal to `creds`, unless it yields
+   * `{}` (error case).
+   *
+   * @see doc header for remote_peer_process_credentials() accessor for important relevant information.
+   *
+   * @param creds
+   *        The value to save.
+   * @return `true` if called in PEER state (`creds` was saved);
+   *         `false` if called in another state (`creds` was not saved).
+   */
+  bool remote_peer_process_credentials(const util::Process_credentials& creds);
 
 private:
   // Types.

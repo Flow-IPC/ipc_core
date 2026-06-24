@@ -581,27 +581,22 @@ public:
   // Misc API.
 
   /**
-   * OS-reported process credential (PID, etc.) info about the *other* connected peer's process, at the time
-   * that the OS first established (via local-socket-connect or local-socket-connected-pair-generate call) that
-   * opposing peer socket.  The value returned, assuming a non-error-emitting execution, shall always be the same for a
-   * given `*this`.
-   *
-   * Informally: To avoid (though, formally, not guarantee) error::Code::S_LOW_LVL_TRANSPORT_HOSED, it is best
-   * to call this immediately upon entry of `*this` to PEER state and/or before
-   * invoking any other APIs.
-   *
-   * If invoked outside of PEER state returns `Process_credentials()` immediately
-   * and otherwise does nothing.
-   *
-   * @return See above; or `Peer_credentials()` if invoked outside of PEER state or in case of error.
-   *         The 2 eventualities can be distinguished by checking `*err_code` truthiness.  Better yet
-   *         only call remote_peer_process_credentials() in PEER state, as it is otherwise conceptually meaningless.
+   * See transport::Native_socket_stream counterpart.
    *
    * @param err_code
-   *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
-   *        See #Async_io_obj counterpart doc header.
+   *        See transport::Native_socket_stream counterpart.
+   * @return See transport::Native_socket_stream counterpart.
    */
   util::Process_credentials remote_peer_process_credentials(Error_code* err_code = 0) const;
+
+  /**
+   * See transport::Native_socket_stream counterpart.
+   *
+   * @param creds
+   *        See transport::Native_socket_stream counterpart.
+   * @return See transport::Native_socket_stream counterpart.
+   */
+  bool remote_peer_process_credentials(const util::Process_credentials& creds);
 
 private:
   // Types.
