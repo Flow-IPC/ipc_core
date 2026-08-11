@@ -48,7 +48,9 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
 {
   using Protocol = Native_socket_stream_cfg::Protocol;
   using Acceptor = asio_local_stream_socket::Acceptor<Protocol>;
+#ifndef NDEBUG
   using Endpoint = asio_local_stream_socket::Endpoint<Protocol>;
+#endif
   using asio_local_stream_socket::endpoint_at_shared_name;
   using util::String_view;
   using flow::error::Runtime_error;

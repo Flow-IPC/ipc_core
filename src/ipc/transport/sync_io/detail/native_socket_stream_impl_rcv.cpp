@@ -1574,7 +1574,7 @@ size_t Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_pkt_stream
   return n_rcvd_or_zero;
 } // Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_pkt_stream()
 
-template<typename Ignored = void> // See below.  Technicalities therein aside -- feel free to ignore this line.
+template<typename Ignored> // See below.  Technicalities therein aside -- feel free to ignore this line.
 size_t Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_byte_stream
          (Native_handle* target_payload_hndl_or_null,
           const util::Blob_mutable& target_payload_blob, Error_code* err_code)
