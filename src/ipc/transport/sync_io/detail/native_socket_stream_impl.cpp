@@ -301,7 +301,9 @@ void Native_socket_stream_impl::async_connect(const Shared_name& absolute_name, 
                                               flow::async::Task_asio_err&& on_done_func)
 {
   using Protocol = Native_socket_stream_cfg::Protocol;
+#ifndef NDEBUG
   using Endpoint = asio_local_stream_socket::Endpoint<Protocol>;
+#endif
   using asio_local_stream_socket::endpoint_at_shared_name;
   using flow::async::Task_asio_err;
   using util::Task;
