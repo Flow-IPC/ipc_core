@@ -341,7 +341,7 @@
  *   using ipc::util::sync_io::Asio_waitable_native_handle;
  *
  *   x.replace_event_wait_handles
- *     ([this]() -> auto { return Asio_waitable_native_handle(m_my_task_engine); });
+ *     ([this]() -> auto { return Asio_waitable_native_handle{m_my_task_engine}; });
  *   x.start_receive_blob_ops([this](Asio_waitable_native_handle* hndl_of_interest,
  *                                   bool ev_of_interest_snd_else_rcv,
  *                                   Task_ptr&& on_active_ev_func)
@@ -414,7 +414,7 @@
  *   ...
  *     // In your thread U:
  *
- *     Lock_guard<decltype(m_my_rcv_mutex)> lock(m_my_rcv_mutex); // <-- ATTN!  Protects x receive ops at least.
+ *     Lock_guard<decltype(m_my_rcv_mutex)> lock{m_my_rcv_mutex}; // <-- ATTN!  Protects x receive ops at least.
  *     ...
  *     ipc::Error_code sync_err_code;
  *     size_t sync_sz;
@@ -448,7 +448,7 @@
  *
  *       // Event is active.  sync_io wants to inform it of this.  Oblige.
  *
- *       flow::util::Lock_guard<decltype(m_my_rcv_mutex)> lock(m_my_rcv_mutex); // <-- ATTN!
+ *       flow::util::Lock_guard<decltype(m_my_rcv_mutex)> lock{m_my_rcv_mutex}; // <-- ATTN!
  *
  *       (*on_active_ev_func)();
  *       // ^-- THAT POTENTIALLY INVOKED on_msg_in()!!!
@@ -801,7 +801,7 @@ using Task_ptr = boost::shared_ptr<Task>;
  *   m_sock_stream.replace_event_wait_handles([this]() -> auto
  *   {
  *     return ipc::util::async_io::Asio_waitable_native_handle
- *              (*(m_your_single_threaded_event_loop.task_engine()));
+ *              {*(m_your_single_threaded_event_loop.task_engine())};
  *   });
  *   m_sock_stream.start_send_blob_ops(F); // F is your Event_wait_func.
  *   ~~~

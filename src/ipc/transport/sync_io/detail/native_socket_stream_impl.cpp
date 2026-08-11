@@ -17,30 +17,26 @@
 
 /// @file
 #include "ipc/transport/sync_io/detail/native_socket_stream_impl.hpp"
+#include "ipc/transport/native_socket_stream_cfg.hpp"
 #include "ipc/transport/error.hpp"
+#include <flow/error/error.hpp>
+#include <flow/util/stat/stat_set.hpp>
 #include <boost/move/make_unique.hpp>
 #include <cstddef>
 
 namespace ipc::transport::sync_io
 {
 
-// Initializers.
-
-const Native_socket_stream::Impl::low_lvl_payload_blob_length_t
-  Native_socket_stream::Impl::S_META_BLOB_LENGTH_PING_SENTINEL
-    = std::numeric_limits<low_lvl_payload_blob_length_t>::max();
-const size_t Native_socket_stream::Impl::S_MAX_META_BLOB_LENGTH
-  = S_META_BLOB_LENGTH_PING_SENTINEL - 1;
-
 // Implementations (but main methods, ::rcv_*() and ::snd_*() + APIs are in diff .cpp file).
 
 // Delegated ctor skips setting up m_peer_socket, not knowing whether we'll start in NULL or PEER state.
-Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str, std::nullptr_t) :
+Native_socket_stream_impl::Native_socket_stream_impl(flow::log::Logger* logger_ptr,
+                                                     util::String_view nickname_str, std::nullptr_t) :
   flow::log::Log_context(logger_ptr, Log_component::S_TRANSPORT),
   m_nickname(nickname_str),
   m_state(State::S_NULL),
   m_protocol_negotiator(get_logger(), nickname(),
-                        1, 1), // Initial protocol!  @todo Magic-number `const`(s), particularly if/when v2 exists.
+                        2, 2), // See class doc header "Protocol negotiation." @todo Magic-number `constexpr`(s).
   m_ev_wait_hndl_peer_socket(m_ev_hndl_task_engine_unused), // This needs to be .assign()ed still, at least.
   m_timer_worker(get_logger(),
                  // Brief-ish for use in OS thread names or some such.
@@ -55,20 +51,24 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
   // And this is its watchee mirror for outside event loop (sync_io pattern).
   m_snd_ev_wait_hndl_auto_ping_timer_fired_peer
     (m_ev_hndl_task_engine_unused,
-     Native_handle(m_snd_auto_ping_timer_fired_peer->native_handle())),
+     Native_handle{m_snd_auto_ping_timer_fired_peer->native_handle()}),
+  // See also blob_send_stats() @todo in transport::Native_socket_stream_impl (the async-I/O wrapper layer).
+  m_snd_stats(Native_socket_stream_cfg::S_MAX_META_BLOB_LENGTH),
 
   m_rcv_idle_timeout(util::Fine_duration::zero()), // idle_timer_run() not yet called.
   m_rcv_idle_timer(m_timer_worker.create_timer()), // Inactive timer (idle_timer_run() not yet called).
   m_rcv_idle_timer_fired_peer(m_timer_worker.create_timer_signal_pipe()), // Analogous to above.
   m_rcv_ev_wait_hndl_idle_timer_fired_peer // Analogous to above.
     (m_ev_hndl_task_engine_unused,
-     Native_handle(m_rcv_idle_timer_fired_peer->native_handle()))
+     Native_handle{m_rcv_idle_timer_fired_peer->native_handle()}),
+  // See also blob_receive_stats() @todo in transport::Native_socket_stream_impl (the async-I/O wrapper layer).
+  m_rcv_stats(Native_socket_stream_cfg::S_MAX_META_BLOB_LENGTH)
 {
   // m_*peer_socket essentially uninitialized for now; delegating ctor sets them up.
 }
 
-Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str) :
-  Impl(logger_ptr, nickname_str, nullptr)
+Native_socket_stream_impl::Native_socket_stream_impl(flow::log::Logger* logger_ptr, util::String_view nickname_str) :
+  Native_socket_stream_impl(logger_ptr, nickname_str, nullptr)
 {
   using util::sync_io::Asio_waitable_native_handle;
   using util::sync_io::Task_ptr;
@@ -78,10 +78,10 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
   FLOW_LOG_INFO("Socket stream [" << *this << "]: In NULL state: Started timer thread.  Otherwise inactive.");
 
   m_peer_socket
-    = boost::movelib::make_unique<asio_local_stream_socket::Peer_socket>
+    = boost::movelib::make_unique<asio_local_stream_socket::Peer_socket<Native_socket_stream_cfg::Protocol>>
         (m_nb_task_engine, // See its doc header if you're wondering about `_unused`.
          // Needs to be is_open() (hold an FD) -- see our doc header.  This arg makes it happen (omit => no FD).
-         asio_local_stream_socket::local_ns::stream_protocol());
+         Native_socket_stream_cfg::Protocol{});
   // This "needs to be .assign()ed still."
   m_ev_wait_hndl_peer_socket.assign(m_peer_socket->native_handle());
 
@@ -116,7 +116,7 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
                            Task_ptr&& on_active_ev_func)
   {
     FLOW_LOG_TRACE("Socket stream [" << *this << "]: Sync-IO connect-ops event-wait request: "
-                   "descriptor [" << Native_handle(hndl_of_interest->native_handle()) << "], "
+                   "descriptor [" << Native_handle{hndl_of_interest->native_handle()} << "], "
                    "writable-else-readable [" << ev_of_interest_snd_else_rcv << "].");
 
     // They want this async_wait().  Oblige.
@@ -137,21 +137,20 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
 
       // They want to know about completed async_wait().  Oblige.
 
-      /* Inform Impl *this of the event.  This can (indeed will for sure, in our case, since: writable socket =>
+      /* Inform Native_socket_stream_impl *this of the event.
+       * This can (indeed will for sure, in our case, since: writable socket =>
        * connect completed) synchronously invoke handler we have registered via our this->async_connect() call
        * in sync_connect(). */
 
       (*on_active_ev_func)();
     }); // hndl_of_interest->async_wait()
   }); // start_connect_ops()
-} // Native_socket_stream::Impl::Impl()
+} // Native_socket_stream_impl::Native_socket_stream_impl()
 
-Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str,
-                                 Native_handle&& native_peer_socket_moved) :
-  Impl(logger_ptr, nickname_str, nullptr)
+Native_socket_stream_impl::Native_socket_stream_impl(flow::log::Logger* logger_ptr, util::String_view nickname_str,
+                                                     Native_handle&& native_peer_socket_moved) :
+  Native_socket_stream_impl(logger_ptr, nickname_str, nullptr)
 {
-  using asio_local_stream_socket::Peer_socket;
-
   FLOW_LOG_INFO("Socket stream [" << *this << "]: Immediately in PEER state: "
                 "Taking over native peer socket [" << native_peer_socket_moved << "] which is connected "
                 "and likely either just accepted or comes from local connect_pair().");
@@ -163,32 +162,45 @@ Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_vie
    * we just .assign() ("this needs to be .assign()ed still"). */
 
   m_peer_socket
-    = boost::movelib::make_unique<asio_local_stream_socket::Peer_socket>
+    = boost::movelib::make_unique<asio_local_stream_socket::Peer_socket<Native_socket_stream_cfg::Protocol>>
         (m_nb_task_engine,
-         asio_local_stream_socket::local_ns::stream_protocol(),
+         Native_socket_stream_cfg::Protocol{},
          native_peer_socket_moved.m_native_handle);
   m_ev_wait_hndl_peer_socket.assign(native_peer_socket_moved.m_native_handle);
 
   // Clear it; we've eaten it.
-  native_peer_socket_moved = Native_handle();
+  native_peer_socket_moved = {};
 
   // m_peer_socket is connected, so do this ASAP by its contract.
   save_peer_process_creds();
-} // Native_socket_stream::Impl::Impl()
+} // Native_socket_stream_impl::Native_socket_stream_impl()
 
-Native_socket_stream::Impl::~Impl()
+Native_socket_stream_impl::~Native_socket_stream_impl()
 {
   FLOW_LOG_INFO("Socket stream [" << *this << "]: Shutting down.  Next peer socket will close if open; "
                 "and that is it.  They simply cannot advance our state machine via on_active_ev_func()s we "
                 "handed out.");
+  if ((!m_snd_pending_err_code) && m_rcv_pending_err_code)
+  {
+    log_stats("dtor/rcv pipe hosed");
+  }
+  else if ((!m_rcv_pending_err_code) && m_snd_pending_err_code)
+  {
+    log_stats("dtor/snd pipe hosed");
+  }
+  else if ((!m_snd_pending_err_code) && (!m_rcv_pending_err_code))
+  {
+    log_stats("dtor/both pipes healthy");
+  }
+  // else if (both pipes dead) { Final stats logged when the later-to-die pipe died.  Don't spam dupe stats. }
 }
 
-bool Native_socket_stream::Impl::start_connect_ops(util::sync_io::Event_wait_func&& ev_wait_func)
+bool Native_socket_stream_impl::start_connect_ops(util::sync_io::Event_wait_func&& ev_wait_func)
 {
   return start_ops<Op::S_CONN>(std::move(ev_wait_func));
 }
 
-bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
+bool Native_socket_stream_impl::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
 {
   using util::sync_io::Asio_waitable_native_handle;
   using flow::async::reset_this_thread_pinning;
@@ -234,7 +246,8 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
      * Rationale: We'd like to keep ourselves as perf-light-weight as is reasonably possible; as in particular
      * the NULL-state ctor might be being invoked from transport::[sync_io::]Native_socket_stream default ctor,
      * as (and this is a common scenario) the target of Native_socket_stream_acceptor::async_accept(), which
-     * will destroy *this Impl by move-assigning onto it via our pImpl setup.  Having a thread start+stop/join occur
+     * will destroy *this Native_socket_stream_impl by move-assigning
+     * onto it via our pImpl setup.  Having a thread start+stop/join occur
      * in an essentially blank-forever *this is unnecessarily heavy.  The trade-off is that sync_connect() is
      * framed by a thread stop/start.  However this is very confidently doable in under 1 millisecond total; and we
      * consider this a small price given the expected frequency of sync_connect()s in reality, plus the
@@ -282,13 +295,13 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
   } // else if (!*err_code)
 
   return true;
-} // Native_socket_stream::Impl::sync_connect()
+} // Native_socket_stream_impl::sync_connect()
 
-void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name, Error_code* sync_err_code_ptr,
-                                               flow::async::Task_asio_err&& on_done_func)
+void Native_socket_stream_impl::async_connect(const Shared_name& absolute_name, Error_code* sync_err_code_ptr,
+                                              flow::async::Task_asio_err&& on_done_func)
 {
-  using asio_local_stream_socket::Endpoint;
-  using asio_local_stream_socket::Peer_socket;
+  using Protocol = Native_socket_stream_cfg::Protocol;
+  using Endpoint = asio_local_stream_socket::Endpoint<Protocol>;
   using asio_local_stream_socket::endpoint_at_shared_name;
   using flow::async::Task_asio_err;
   using util::Task;
@@ -309,8 +322,8 @@ void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
 
   FLOW_LOG_INFO("Socket stream [" << *this << "]: Will attempt connect to [" << absolute_name << "].");
 
-  const auto remote_endpoint = endpoint_at_shared_name(get_logger(), absolute_name, &sync_err_code);
-  assert((remote_endpoint == Endpoint()) == bool(sync_err_code)); // (By the way it WARNs on error.)
+  const auto remote_endpoint = endpoint_at_shared_name<Protocol>(get_logger(), absolute_name, &sync_err_code);
+  assert((remote_endpoint == Endpoint{}) == bool(sync_err_code)); // (By the way it WARNs on error.)
 
   if (!sync_err_code)
   {
@@ -425,9 +438,9 @@ void Native_socket_stream::Impl::async_connect(const Shared_name& absolute_name,
 
   // If got here, sync_err_code indicates immediate success or failure of async_connect().
   m_state = sync_err_code ? State::S_NULL : State::S_PEER;
-} // Native_socket_stream::Impl::async_connect()
+} // Native_socket_stream_impl::async_connect()
 
-void Native_socket_stream::Impl::conn_on_ev_peer_socket_writable(flow::async::Task_asio_err&& on_done_func)
+void Native_socket_stream_impl::conn_on_ev_peer_socket_writable(flow::async::Task_asio_err&& on_done_func)
 {
   assert((m_state == State::S_CONNECTING) && "Only we can get out of CONNECTING state in the first place.");
 
@@ -453,11 +466,11 @@ void Native_socket_stream::Impl::conn_on_ev_peer_socket_writable(flow::async::Ta
 
   save_peer_process_creds();
 
-  on_done_func(Error_code());
+  on_done_func(Error_code{});
   FLOW_LOG_TRACE("Handler completed.");
-} // Native_socket_stream::Impl::conn_on_ev_peer_socket_writable()
+} // Native_socket_stream_impl::conn_on_ev_peer_socket_writable()
 
-bool Native_socket_stream::Impl::replace_event_wait_handles
+bool Native_socket_stream_impl::replace_event_wait_handles
        (const Function<util::sync_io::Asio_waitable_native_handle ()>& create_ev_wait_hndl_func)
 {
   if ((!m_snd_ev_wait_func.empty()) || (!m_rcv_ev_wait_func.empty()))
@@ -475,7 +488,7 @@ bool Native_socket_stream::Impl::replace_event_wait_handles
   assert(m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.is_open());
   assert(m_rcv_ev_wait_hndl_idle_timer_fired_peer.is_open());
 
-  Native_handle saved(m_ev_wait_hndl_peer_socket.release());
+  Native_handle saved{m_ev_wait_hndl_peer_socket.release()};
   m_ev_wait_hndl_peer_socket = create_ev_wait_hndl_func();
   m_ev_wait_hndl_peer_socket.assign(saved);
 
@@ -488,9 +501,9 @@ bool Native_socket_stream::Impl::replace_event_wait_handles
   m_rcv_ev_wait_hndl_idle_timer_fired_peer.assign(saved);
 
   return true;
-} // Native_socket_stream::Impl::replace_event_wait_handles()
+} // Native_socket_stream_impl::replace_event_wait_handles()
 
-void Native_socket_stream::Impl::save_peer_process_creds()
+void Native_socket_stream_impl::save_peer_process_creds()
 {
   using asio_local_stream_socket::Opt_peer_process_credentials;
   using util::Process_credentials;
@@ -524,34 +537,48 @@ void Native_socket_stream::Impl::save_peer_process_creds()
   FLOW_LOG_INFO("Socket stream [" << *this << "]: At earliest opportunity saved opposing endpoint's process info "
                 "(can be overridden via mutator): [" << m_peer_process_creds << "].  "
                 "Here are our own creds: [" << Process_credentials::own_process_credentials() << "].");
-} // Native_socket_stream::Impl::save_peer_process_creds()
+} // Native_socket_stream_impl::save_peer_process_creds()
 
-util::Process_credentials
-  Native_socket_stream::Impl::remote_peer_process_credentials(Error_code* err_code) const
+const util::Process_credentials&
+  Native_socket_stream_impl::remote_peer_process_credentials(Error_code* err_code) const
 {
   using util::Process_credentials;
+  using util::NULL_PROCESS_CREDENTIALS;
+  using flow::error::Runtime_error;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(Process_credentials, remote_peer_process_credentials, _1);
-  // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
+  const Process_credentials* ret = nullptr;
 
   if (!state_peer("remote_peer_process_credentials(1)"))
   {
-    err_code->clear(); // As promised.
-    return {};
+    ret = &NULL_PROCESS_CREDENTIALS;
   }
-  // else
-
-  if (!m_peer_socket)
+  else if (m_peer_socket)
   {
-    *err_code = error::Code::S_LOW_LVL_TRANSPORT_HOSED;
-    return {};
+    ret = &m_peer_process_creds;
+  }
+
+  if (ret)
+  {
+    if (err_code)
+    {
+      err_code->clear();
+    }
+    return *ret;
   }
   // else
 
-  return m_peer_process_creds;
-} // Native_socket_stream::Impl::remote_peer_process_credentials()
+  Error_code err_code_obj = error::Code::S_LOW_LVL_TRANSPORT_HOSED;
+  if (err_code)
+  {
+    *err_code = err_code_obj;
+    return NULL_PROCESS_CREDENTIALS;
+  }
+  // else
 
-bool Native_socket_stream::Impl::remote_peer_process_credentials(const util::Process_credentials& creds)
+  throw Runtime_error{err_code_obj, "Native_socket_stream_impl::remote_peer_process_credentials()"};
+} // Native_socket_stream_impl::remote_peer_process_credentials()
+
+bool Native_socket_stream_impl::remote_peer_process_credentials(const util::Process_credentials& creds)
 {
   using util::Process_credentials;
 
@@ -569,14 +596,26 @@ bool Native_socket_stream::Impl::remote_peer_process_credentials(const util::Pro
   m_peer_process_creds = creds;
 
   return true;
-} // Native_socket_stream::Impl::remote_peer_process_credentials()
+} // Native_socket_stream_impl::remote_peer_process_credentials()
 
-const std::string& Native_socket_stream::Impl::nickname() const
+void Native_socket_stream_impl::log_stats(util::String_view context) const
+{
+  using flow::util::stat::print;
+
+  if (m_state == State::S_PEER)
+  {
+    FLOW_LOG_INFO("Socket stream [" << *this << "]: In context [" << context << "]: Stats: "
+                  "snd[" << print(m_snd_stats) << "] rcv[" << print(m_rcv_stats) << "].");
+  }
+  // else { It'd all be zeroes anyway. }
+}
+
+const std::string& Native_socket_stream_impl::nickname() const
 {
   return m_nickname;
 }
 
-bool Native_socket_stream::Impl::state_peer(util::String_view context) const
+bool Native_socket_stream_impl::state_peer(util::String_view context) const
 {
   if (m_state != State::S_PEER)
   {
@@ -588,13 +627,13 @@ bool Native_socket_stream::Impl::state_peer(util::String_view context) const
   return true;
 }
 
-std::ostream& operator<<(std::ostream& os, const Native_socket_stream::Impl& val)
+std::ostream& operator<<(std::ostream& os, const Native_socket_stream_impl& val)
 {
   return os << "SIO[" << val.nickname() << "]@" << static_cast<const void*>(&val);
 }
 
 #if 0 // See the declaration in class { body }; explains why `if 0` yet still here.
-void Native_socket_stream::Impl::reset_sync_io_setup()
+void Native_socket_stream_impl::reset_sync_io_setup()
 {
   using util::sync_io::Asio_waitable_native_handle;
 
@@ -676,17 +715,17 @@ void Native_socket_stream::Impl::reset_sync_io_setup()
    *     - Do: Replace associated Task_engine m_ev_hndl_task_engine_unused with <user-supplied one via functor thing>.
    * So to undo it just do reverse it essentially (possibly no-op): */
   m_ev_wait_hndl_peer_socket
-    = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
-                                  m_ev_wait_hndl_peer_socket.release());
+    = Asio_waitable_native_handle{m_ev_hndl_task_engine_unused,
+                                  m_ev_wait_hndl_peer_socket.release()};
 
   m_snd_ev_wait_hndl_auto_ping_timer_fired_peer
-    = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
-                                  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release());
+    = Asio_waitable_native_handle{m_ev_hndl_task_engine_unused,
+                                  m_snd_ev_wait_hndl_auto_ping_timer_fired_peer.release()};
 
   m_rcv_ev_wait_hndl_idle_timer_fired_peer
-    = Asio_waitable_native_handle(m_ev_hndl_task_engine_unused,
-                                  m_rcv_ev_wait_hndl_idle_timer_fired_peer.release());
-} // Native_socket_stream::Impl::reset_sync_io_setup()
+    = Asio_waitable_native_handle{m_ev_hndl_task_engine_unused,
+                                  m_rcv_ev_wait_hndl_idle_timer_fired_peer.release()};
+} // Native_socket_stream_impl::reset_sync_io_setup()
 #endif
 
 } // namespace ipc::transport::sync_io

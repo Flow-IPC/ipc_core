@@ -92,7 +92,7 @@ Error_code make_error_code(Code err_code)
 {
   /* Assign Category as the category for flow::error::Code-cast error_codes;
    * this basically glues together Category::name()/message() with the Code enum. */
-  return Error_code(static_cast<int>(err_code), Category::S_CATEGORY);
+  return {static_cast<int>(err_code), Category::S_CATEGORY};
 }
 
 Category::Category() = default;
@@ -173,6 +173,10 @@ std::string Category::message(int val) const // Virtual.
   case Code::S_PROTOCOL_NEGOTIATION_OPPOSING_VER_TOO_OLD:
     return "In protocol negotiation, opposing side reported its newest protocol version is even older than the most "
            "backwards-compatible (oldest, smallest) version we speak; the comm pathway must close.";
+  case Code::S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER:
+    return "Unable to receive incoming traffic: Opposing side sent invalid internal per-message header.";
+  case Code::S_PEER_PROCESS_NO_LONGER_EXISTS:
+    return "The opposing peer process involved in an IPC channel is currently reported by the OS as no longer running.";
 
   case Code::S_END_SENTINEL:
     assert(false && "SENTINEL: Not an error.  "
@@ -230,6 +234,10 @@ util::String_view Category::code_symbol(Code code) // Static.
     return "PROTOCOL_NEGOTIATION_OPPOSING_VER_INVALID";
   case Code::S_PROTOCOL_NEGOTIATION_OPPOSING_VER_TOO_OLD:
     return "PROTOCOL_NEGOTIATION_OPPOSING_VER_TOO_OLD";
+  case Code::S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER:
+    return "LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER";
+  case Code::S_PEER_PROCESS_NO_LONGER_EXISTS:
+    return "PEER_PROCESS_NO_LONGER_EXISTS";
 
   case Code::S_END_SENTINEL:
     return "END_SENTINEL";

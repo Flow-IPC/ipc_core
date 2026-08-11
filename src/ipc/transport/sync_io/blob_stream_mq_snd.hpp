@@ -72,19 +72,28 @@ namespace ipc::transport::sync_io
 template<typename Persistent_mq_handle>
 class Blob_stream_mq_sender : public Blob_stream_mq_base<Persistent_mq_handle>
 {
+private:
+  // Types.
+
+  /// Short-hand for the impl type we're wrapping.  Cannot simply forward-declare as in pImpl; we do pImpl-lite.
+  using Impl = Blob_stream_mq_sender_impl<Persistent_mq_handle>;
+
 public:
   // Types.
 
-  /// Short-hand for our base with `static` goodies at least.
-  using Base = Blob_stream_mq_base<Persistent_mq_handle>;
-
   /// Short-hand for template arg for underlying MQ handle type.
-  using Mq = typename Blob_stream_mq_sender_impl<Persistent_mq_handle>::Mq;
+  using Mq = typename Impl::Mq;
+
+  /// Short-hand for our base with `static` goodies at least.
+  using Base = Blob_stream_mq_base<Mq>;
 
   /// Useful for generic programming, the async-I/O-pattern counterpart to `*this` type.
   using Async_io_obj = transport::Blob_stream_mq_sender<Mq>;
   /// You may disregard.
   using Sync_io_obj = Null_peer;
+
+  /// Implements sync_io::Blob_sender concept API.
+  using Blob_snd_stats = transport::stat::Blob_snd_stats;
 
   // Constants.
 
@@ -113,13 +122,11 @@ public:
    *        See above.
    */
   explicit Blob_stream_mq_sender(flow::log::Logger* logger_ptr, util::String_view nickname_str,
-                                 Mq&& mq_moved, Error_code* err_code = 0);
+                                 Mq&& mq_moved, Error_code* err_code = nullptr);
 
   /**
    * Implements Blob_sender API, per its concept contract.
    * All the notes for that concept's default ctor apply.
-   *
-   * @see Blob_sender::Blob_sender(): implemented concept.
    */
   Blob_stream_mq_sender();
 
@@ -129,8 +136,6 @@ public:
    *
    * @param src
    *        See above.
-   *
-   * @see Blob_sender::Blob_sender(): implemented concept.
    */
   Blob_stream_mq_sender(Blob_stream_mq_sender&& src);
 
@@ -139,8 +144,6 @@ public:
 
   /**
    * Implements Blob_sender API.  All notes from `transport::` counterpart apply.
-   *
-   * @see Blob_sender::~Blob_sender(): implemented concept.
    */
   ~Blob_stream_mq_sender();
 
@@ -156,8 +159,6 @@ public:
    * @param src
    *        See above.
    * @return `*this` (see concept API).
-   *
-   * @see Blob_sender move assignment: implemented concept.
    */
   Blob_stream_mq_sender& operator=(Blob_stream_mq_sender&& src);
 
@@ -176,8 +177,6 @@ public:
    * @param create_ev_wait_hndl_func
    *        See above.
    * @return See above.  See above.
-   *
-   * @see Blob_sender::replace_event_wait_handles(): implemented concept.
    */
   template<typename Create_ev_wait_hndl_func>
   bool replace_event_wait_handles(const Create_ev_wait_hndl_func& create_ev_wait_hndl_func);
@@ -190,8 +189,6 @@ public:
    * @param ev_wait_func
    *        See above.
    * @return See above.
-   *
-   * @see Blob_sender::start_send_blob_ops(): implemented concept.
    */
   template<typename Event_wait_func_t>
   bool start_send_blob_ops(Event_wait_func_t&& ev_wait_func);
@@ -201,14 +198,12 @@ public:
    * at any given time which is *not* a concept requirement and may be untrue of other concept co-implementing classes.
    *
    * @return See above.
-   *
-   * @see Blob_sender::send_blob_max_size(): implemented concept.
    */
   size_t send_blob_max_size() const;
 
   /**
    * Implements Blob_sender API per contract.  Reminder: It's not thread-safe
-   * to call this concurrently with other transmission methods or destructor on the same `*this`.
+   * to call this concurrently with other transmission methods on the same `*this`.
    *
    * Reminder: `blob.size() == 0` results in undefined behavior (assertion may trip).
    *
@@ -220,18 +215,17 @@ public:
    *        detected during handling of a *preceding* send_blob() call but after it returned.
    *        #Error_code generated: See #Async_io_obj counterpart doc header.
    * @return See above.
-   *
-   * @see Blob_sender::send_blob(): implemented concept.
    */
-  bool send_blob(const util::Blob_const& blob, Error_code* err_code = 0);
+  bool send_blob(const util::Blob_const& blob, Error_code* err_code = nullptr);
 
   /**
    * Implements Blob_sender API per contract.
-   * Reminder: It's not thread-safe to call this concurrently with other transmission methods or destructor on
+   * Reminder: It's not thread-safe to call this concurrently with other transmission methods on
    * the same `*this`.
    *
    * #Error_code generated and passed to `on_done_func()` or emitted synchronously:
-   * See #Async_io_obj counterpart doc header (but not `S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER`).
+   * See #Async_io_obj counterpart doc header
+   * (but not `S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER`; and add `S_SYNC_IO_WOULD_BLOCK`).
    *
    * Reminder: In rare circumstances, an error emitted there may represent something
    * detected during handling of a preceding send_blob() call but after it returned.
@@ -244,8 +238,6 @@ public:
    *        See above.
    * @return See above.  Reminder: If and only if it returns `false`, we're in NULL state, or `*end_sending()` has
    *         already been called; and `on_done_func()` will never be called, nor will an error be emitted.
-   *
-   * @see Blob_sender::async_end_sending(): implemented concept.
    */
   template<typename Task_err>
   bool async_end_sending(Error_code* sync_err_code, Task_err&& on_done_func);
@@ -256,8 +248,6 @@ public:
    *
    * @return See above.  Reminder: If and only if it returns `false`, we're in NULL state, or `*end_sending()` has
    *         already been called.
-   *
-   * @see Blob_sender::end_sending(): implemented concept.
    */
   bool end_sending();
 
@@ -267,10 +257,17 @@ public:
    * @param period
    *        See above.
    * @return See above.
-   *
-   * @see Blob_sender::auto_ping(): implemented concept.
    */
-  bool auto_ping(util::Fine_duration period = boost::chrono::seconds(2));
+  bool auto_ping(util::Fine_duration period = boost::chrono::seconds{2});
+
+  /**
+   * Implements sync_io::Blob_sender API per contract.
+   * @return See above.
+   */
+  Blob_snd_stats blob_send_stats() const;
+
+  /// Implements sync_io::Blob_sender API per contract.
+  void blob_send_stats_reset();
 
   /**
    * Returns nickname, a brief string suitable for logging.  This is included in the output by the `ostream<<`
@@ -294,8 +291,8 @@ public:
 private:
   // Types.
 
-  /// Short-hand for `const`-respecting wrapper around Blob_stream_mq_sender_impl for the pImpl idiom.
-  using Impl_ptr = std::experimental::propagate_const<boost::movelib::unique_ptr<Blob_stream_mq_sender_impl<Mq>>>;
+  /// Short-hand for `const`-respecting wrapper around #Impl for the pImpl-lite idiom.
+  using Impl_ptr = std::experimental::propagate_const<boost::movelib::unique_ptr<Impl>>;
 
   // Friends.
 
@@ -335,7 +332,7 @@ Blob_stream_mq_sender<Persistent_mq_handle>::Blob_stream_mq_sender() = default;
 template<typename Persistent_mq_handle>
 Blob_stream_mq_sender<Persistent_mq_handle>::Blob_stream_mq_sender
   (flow::log::Logger* logger_ptr, util::String_view nickname_str, Mq&& mq, Error_code* err_code) :
-  m_impl(boost::movelib::make_unique<Blob_stream_mq_sender_impl<Mq>>
+  m_impl(boost::movelib::make_unique<Impl>
            (logger_ptr, nickname_str, std::move(mq), err_code))
 {
   // Yay.
@@ -391,6 +388,21 @@ template<typename Persistent_mq_handle>
 bool Blob_stream_mq_sender<Persistent_mq_handle>::auto_ping(util::Fine_duration period)
 {
   return m_impl ? m_impl->auto_ping(period) : false;
+}
+
+template<typename Persistent_mq_handle>
+stat::Blob_snd_stats Blob_stream_mq_sender<Persistent_mq_handle>::blob_send_stats() const
+{
+  return m_impl ? m_impl->blob_send_stats()
+                  /* The histogram's structure will be based on a silly msg max size, and that is okay.
+                   * Contract is struct is filled with zeroes, and that will hold. */
+                : Blob_snd_stats{1};
+}
+
+template<typename Persistent_mq_handle>
+void Blob_stream_mq_sender<Persistent_mq_handle>::blob_send_stats_reset()
+{
+  if (m_impl) { m_impl->blob_send_stats_reset(); }
 }
 
 template<typename Persistent_mq_handle>

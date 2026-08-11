@@ -44,8 +44,8 @@ set(SRCS
     ipc/common.cpp
     ipc/transport/asio_local_stream_socket.cpp
     ipc/transport/bipc_mq_handle.cpp
+    ipc/transport/blob_transport_stats.cpp
     ipc/transport/channel.cpp
-    ipc/transport/detail/asio_local_stream_socket.cpp
     ipc/transport/detail/native_socket_stream_impl.cpp
     ipc/transport/error.cpp
     ipc/transport/native_socket_stream.cpp
@@ -71,34 +71,42 @@ set(HDRS
     ipc/detail/macros/log_component_enum_declare.macros.hpp
     ipc/transport/asio_local_stream_socket.hpp
     ipc/transport/asio_local_stream_socket_fwd.hpp
+    ipc/transport/batch.hpp
     ipc/transport/bipc_mq_handle.hpp
     ipc/transport/blob_stream_mq.hpp
     ipc/transport/blob_stream_mq_rcv.hpp
     ipc/transport/blob_stream_mq_snd.hpp
     # ipc/transport/blob_transport.hpp <-- Not an actual source file (concept/docs only).
+    ipc/transport/blob_transport_stats.hpp
     ipc/transport/channel.hpp
     ipc/transport/detail/asio_local_stream_socket.hpp
     ipc/transport/detail/asio_local_stream_socket_fwd.hpp
     ipc/transport/detail/blob_stream_mq_impl.hpp
     ipc/transport/detail/blob_stream_mq_rcv_impl.hpp
     ipc/transport/detail/blob_stream_mq_snd_impl.hpp
+    ipc/transport/detail/native_socket_stream_batch.hpp
     ipc/transport/detail/native_socket_stream_impl.hpp
     ipc/transport/detail/transport_fwd.hpp
     ipc/transport/error.hpp
     # ipc/transport/native_handle_transport.hpp <-- Not an actual source file (concept/docs only).
     ipc/transport/native_socket_stream.hpp
     ipc/transport/native_socket_stream_acceptor.hpp
+    ipc/transport/native_socket_stream_batch.hpp
+    ipc/transport/native_socket_stream_cfg.hpp
     # ipc/transport/persistent_mq_handle.hpp <-- Not an actual source file (concept/docs only).
     ipc/transport/posix_mq_handle.hpp
     ipc/transport/protocol_negotiator.hpp
+    ipc/transport/sync_io/async_adapter_rcv.hpp
+    ipc/transport/sync_io/async_adapter_snd.hpp
+    ipc/transport/sync_io/batch.hpp
     ipc/transport/sync_io/blob_stream_mq_rcv.hpp
     ipc/transport/sync_io/blob_stream_mq_snd.hpp
     # ipc/transport/sync_io/blob_transport.hpp <-- Not an actual source file (concept/docs only).
-    ipc/transport/sync_io/detail/async_adapter_rcv.hpp
-    ipc/transport/sync_io/detail/async_adapter_snd.hpp
+    ipc/transport/sync_io/detail/batch.hpp
     ipc/transport/sync_io/detail/blob_stream_mq_rcv_impl.hpp
     ipc/transport/sync_io/detail/blob_stream_mq_snd_impl.hpp
     ipc/transport/sync_io/detail/native_socket_stream_impl.hpp
+    ipc/transport/sync_io/detail/native_socket_stream_impl_rcv.hpp
     # ipc/transport/sync_io/native_handle_transport.hpp <-- Not an actual source file (concept/docs only).
     ipc/transport/sync_io/native_socket_stream.hpp
     ipc/transport/sync_io/native_socket_stream_acceptor.hpp
@@ -115,6 +123,7 @@ set(HDRS
     ipc/util/sync_io/detail/timer_ev_emitter.hpp
     ipc/util/sync_io/sync_io_fwd.hpp
     ipc/util/use_counted_object.hpp
-    ipc/util/util_fwd.hpp)
+    ipc/util/util_fwd.hpp
+    ipc/util/util.hpp)
 
 include("${FLOW_LIKE_TOOLS}/FlowLikeLib.cmake")

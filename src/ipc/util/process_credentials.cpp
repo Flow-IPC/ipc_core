@@ -23,6 +23,10 @@
 namespace ipc::util
 {
 
+// Global initializations.
+
+const Process_credentials NULL_PROCESS_CREDENTIALS;
+
 // Process_credentials implementations.
 
 Process_credentials::Process_credentials() :
@@ -76,7 +80,7 @@ std::string Process_credentials::process_invoked_as(Error_code* err_code) const
   static_assert(false, "process_invoked_as() depends on Linux /proc semantics.");
 #endif
 
-  path cmd_line_path("/proc");
+  path cmd_line_path{"/proc"};
   cmd_line_path /= lexical_cast<path>(process_id());
   cmd_line_path /= "cmdline";
 
@@ -86,8 +90,8 @@ std::string Process_credentials::process_invoked_as(Error_code* err_code) const
   ifstream cmd_line_file(cmd_line_path, ios_base::binary);
   if (!cmd_line_file.good())
   {
-    *err_code = Error_code(errno, system_category());
-    return string();
+    *err_code = {errno, system_category()};
+    return {};
   }
   // else
 
@@ -115,8 +119,8 @@ std::string Process_credentials::process_invoked_as(Error_code* err_code) const
   if ((!cmd_line_file.good()) && (!cmd_line_file.eof()))
   {
     assert((errno != 0) && "There had to be *some* reason file reading failed, and it wasn't EOF.");
-    *err_code = Error_code(errno, system_category());
-    return string();
+    *err_code = {errno, system_category()};
+    return {};
   }
   // else
 
@@ -156,7 +160,19 @@ bool operator!=(const Process_credentials& val1, const Process_credentials& val2
 
 std::ostream& operator<<(std::ostream& os, const Process_credentials& val)
 {
-  return os << "pid[" << val.process_id() << "], user[" << val.user_id() << ':' << val.group_id() << ']';
+  const auto pid = val.process_id();
+  const auto uid = val.user_id();
+  const auto gid = val.group_id();
+  if ((pid == 0) && (uid == 0) && (gid == 0))
+  {
+    return os << "null";
+    /* Note, we've intentionally not added `operator bool` or `.empty()` (etc.) to Process_credentials as a logical
+     * convention; it's deliberately minimal/low-level; user can worry about exact interpretation of the individual
+     * values.  However, for pithy output -- and that thing only -- we've allowed ourselves the convention to represent
+     * an object that is as-if-default-cted as "null" as a string. */
+  }
+  // else
+  return os << "pid[" << pid << "], user[" << uid << ':' << gid << ']';
 }
 
 } // namespace ipc::util

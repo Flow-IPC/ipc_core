@@ -75,7 +75,7 @@ void set_resource_permissions(flow::log::Logger* logger_ptr, const fs::path& pat
   int native_handle = open(path.c_str(), O_RDONLY); // Read-only is sufficient for ::fchmod().
   if (native_handle == -1)
   {
-    *err_code = Error_code(errno, system_category());
+    *err_code = {errno, system_category()};
     FLOW_LOG_WARNING("Tried to set permissions of resource at [" << path << "] but while obtaining info-only handle "
                      "encountered error [" << *err_code << "] [" << err_code->message() << "]; unable to proceed.");
     return;
@@ -119,7 +119,7 @@ void set_resource_permissions(flow::log::Logger* logger_ptr, Native_handle handl
   const auto rc = fchmod(handle.m_native_handle, perms.get_permissions());
   if (rc == -1)
   {
-    *err_code = Error_code(errno, system_category());
+    *err_code = {errno, system_category()};
     FLOW_LOG_WARNING("Tried to set permissions of resources via descriptor/handle [" << handle << "] but encountered "
                      "error [" << *err_code << "] [" << err_code->message() << "]; unable to check.");
   }
@@ -146,12 +146,23 @@ bool process_running(process_id_t process_id)
 
   if (kill(process_id, 0) == 0)
   {
-    return true;
+    return true; // Caveat: It might be a zombie though.  Allowed by our contract.
   }
   // else
-  assert((Error_code(errno, system_category()) == boost::system::errc::no_such_process)
-         && "The fake signal zero is valid and is not actually sent so no permission problem possible; hence "
-              "ESRCH or equivalent must be the only possible error.");
+
+  Error_code err_code{errno, system_category()};
+  if (err_code == boost::system::errc::operation_not_permitted)
+  {
+    return true; // Caveat: ditto.
+  }
+  // else
+
+  assert((err_code == boost::system::errc::no_such_process)
+         && "At least in Linux, nothing but ESRCH or EPERM is documented or makes sense.");
+
+  /* Caveat: Certain ultra-high-security implementations (not standard Linux) may return ESRCH instead of EPERM
+   * to prevent process existence from being used as a covert channel.  This is extremely rare in practice
+   * and not something to worry about in typical Linux deployments. */
   return false;
 } // process_running()
 

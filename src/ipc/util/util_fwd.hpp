@@ -22,12 +22,13 @@
 #include "ipc/common.hpp"
 #include <flow/log/log.hpp>
 #include <flow/async/util.hpp>
+#include <flow/util/util_fwd.hpp>
 #include <boost/asio.hpp>
 #include <boost/interprocess/permissions.hpp>
 #include <boost/interprocess/creation_tags.hpp>
 
 /**
- * Flow-IPC module containing miscellaneous general-use facilities that ubiquitously used by ~all Flow-IPC modules
+ * Flow-IPC module containing miscellaneous general-use facilities that are ubiquitously used by ~all Flow-IPC modules
  * and/or do not fit into any other Flow-IPC module.
  *
  * Each symbol therein is typically used by at least 1 other Flow-IPC module; but all public symbols (except ones
@@ -110,6 +111,33 @@ enum class Permissions_level : size_t
   /// Sentinel: not a valid value.  May be used to, e.g., size an `array<>` mapping from Permissions_level.
   S_END_SENTINEL
 }; // enum class Permissions_level
+
+/// Caller into a given API `F()` is providing information on whether `F()` is safe or not at this time.
+enum class Call_timing
+{
+  /**
+   * Means `F()` is always safe; e.g., the software version or compilation environment is such that there is
+   * no need for the caller to actively specify `Call_timing`.
+   *
+   * `F()` shall treat this the same as `S_CALLER_ENSURES_SAFE`.  By convention:
+   *   - Declaration `F(Call_timing c = Call_timing::S_ALWAYS_SAFE)` means coder of `F()` prefers to by-default
+   *     assume the call is safe.
+   *   - If `F()` caller guarantees the environment is such that this can never be unsafe, they omit `c` arg.
+   *   - If `F()` caller *cannot* make that guarantee but *can* make it in a *specific* invocation, then they
+   *     specify `c = Call_timing::S_CALLER_ENSURES_SAFE`.
+   */
+  S_ALWAYS_SAFE,
+
+  /**
+   * Means `F()` may or many not be always safe; but the caller is vouching that it is safe *this* time.
+   *
+   * @see Call_timing::S_ALWAYS_SAFE doc header.
+   */
+  S_CALLER_ENSURES_SAFE,
+
+  /// Means `F()` may or many not be always safe; and the caller *cannot* vouch that it is safe *this* time.
+  S_POSSIBLY_UNSAFE
+}; // enum class Call_timing
 
 /// Short-hand for Flow's `String_view`.
 using String_view = flow::util::String_view;
@@ -227,7 +255,7 @@ Permissions shared_resource_permissions(Permissions_level permissions_lvl);
  *        arguably the likeliest).
  */
 void set_resource_permissions(flow::log::Logger* logger_ptr, const fs::path& path,
-                              const Permissions& perms, Error_code* err_code = 0);
+                              const Permissions& perms, Error_code* err_code = nullptr);
 
 /**
  * Identical to the other set_resource_permissions() overload but operates on a pre-opened Native_handle
@@ -245,15 +273,17 @@ void set_resource_permissions(flow::log::Logger* logger_ptr, const fs::path& pat
  *        system error codes if permissions cannot be set (invalid descriptor, un-opened descriptor, etc.).
  */
 void set_resource_permissions(flow::log::Logger* logger_ptr, Native_handle handle,
-                              const Permissions& perms, Error_code* err_code = 0);
+                              const Permissions& perms, Error_code* err_code = nullptr);
 
 /**
  * Returns `true` if and only if the given process (by PID) is reported as running by the OS.
  * Caution: It may be running, but it may be a zombie; and/or it may be running now but dead shortly after
  * this function returns.  Use defensively.
  *
- * Implementation: It invokes POSIX `kill()` with the fake zero signal; this indicates the process *can*
- * be signaled and therefore exists.
+ * Implementation (normally avoided in contract docs, but we'd like to be as useful as we can here):
+ * It invokes POSIX `kill()` with the fake zero "signal"; success or failure-due-to-identity/permissions indicates
+ * the process *can* be signaled (by someone with proper identity/permissions anyway) and therefore exists.  Otherwise
+ * it does not exist.
  *
  * @param process_id
  *        The process ID of the process in question.
@@ -279,4 +309,33 @@ const uint8_t* blob_data(const Blob_const& blob);
  */
 uint8_t* blob_data(const Blob_mutable& blob);
 
+/**
+ * `std::construct_at()` equivalent; unavailable until C++20, so here it is.  Placement-constructs a `T`
+ * at the given location with the given ctor args, using the expression used by C++20's `construct_at()` per
+ * cppreference.com.
+ *
+ * @tparam T
+ *         Object type.
+ * @tparam Ctor_args
+ *         `T` ctor arg types.
+ * @param obj
+ *        Pointer to uninitialized `T`.
+ * @param ctor_args
+ *        Ctor args for `T::T()`.
+ */
+template<typename T, typename... Ctor_args>
+void construct_at(T* obj, Ctor_args&&... ctor_args);
+
 } // namespace ipc::util
+
+/// Stats-related sub-namespace of ipc::util, for general organization (and ADL segregation if needed).
+namespace ipc::util::stat
+{
+
+// Types.
+
+// Find doc headers near the bodies of these compound types.
+
+struct Info_dump_format;
+
+} // namespace ipc::util::stat

@@ -20,6 +20,8 @@
 
 #include "ipc/util/shared_name_fwd.hpp"
 #include "ipc/util/native_handle.hpp"
+#include <ostream>
+#include <string>
 
 /**
  * Flow-IPC module providing transmission of structured messages and/or low-level blobs (and more)
@@ -53,8 +55,11 @@ namespace ipc::transport
 
 // Find doc headers near the bodies of these compound types.
 
+class Native_socket_stream_cfg;
 class Native_socket_stream;
 class Native_socket_stream_acceptor;
+template<typename Msg_resource_t>
+class Native_socket_stream_msg_batch_in;
 class Posix_mq_handle;
 class Bipc_mq_handle;
 template<typename Persistent_mq_handle>
@@ -62,7 +67,8 @@ class Blob_stream_mq_sender;
 template<typename Persistent_mq_handle>
 class Blob_stream_mq_receiver;
 class Null_peer;
-template<typename Blob_sender, typename Blob_receiver, typename Native_handle_sender, typename Native_handle_receiver>
+template<typename Blob_sender_t, typename Blob_receiver_t,
+         typename Native_handle_sender_t, typename Native_handle_receiver_t>
 class Channel;
 template<bool SIO>
 class Socket_stream_channel;
@@ -70,12 +76,14 @@ template<bool SIO>
 class Socket_stream_channel_of_blobs;
 template<bool SIO,
          typename Persistent_mq_handle,
-         typename Native_handle_sender = Null_peer, typename Native_handle_receiver = Null_peer>
+         typename Native_handle_sender_t = Null_peer, typename Native_handle_receiver_t = Null_peer>
 class Mqs_channel;
 template<bool SIO,
          typename Persistent_mq_handle>
 class Mqs_socket_stream_channel;
 class Protocol_negotiator;
+template<typename Msg_resource_t, bool NO_HNDLS = true>
+class Generic_msg_batch_in;
 
 /// Convenience alias for the commonly used type util::Native_handle.
 using Native_handle = util::Native_handle;
@@ -163,6 +171,20 @@ using Bipc_mqs_socket_stream_channel = Mqs_socket_stream_channel<false, Bipc_mq_
 std::ostream& operator<<(std::ostream& os, const Native_socket_stream& val);
 
 /**
+ * Prints string representation of the given `Native_socket_stream_msg_batch_in` to the given `ostream`.
+ *
+ * @relatesalso Native_socket_stream_msg_batch_in
+ *
+ * @param os
+ *        Stream to which to write.
+ * @param val
+ *        Object to serialize.
+ * @return `os`.
+ */
+template<typename Msg_resource_t>
+std::ostream& operator<<(std::ostream& os, const Native_socket_stream_msg_batch_in<Msg_resource_t>& val);
+
+/**
  * Prints string representation of the given `Native_socket_stream_acceptor` to the given `ostream`.
  *
  * @relatesalso Native_socket_stream_acceptor
@@ -244,9 +266,11 @@ std::ostream& operator<<(std::ostream& os, const Posix_mq_handle& val);
  *        Object to serialize.
  * @return `os`.
  */
-template<typename Blob_sender, typename Blob_receiver, typename Native_handle_sender, typename Native_handle_receiver>
+template<typename Blob_sender_t, typename Blob_receiver_t,
+         typename Native_handle_sender_t, typename Native_handle_receiver_t>
 std::ostream& operator<<(std::ostream& os,
-                         const Channel<Blob_sender, Blob_receiver, Native_handle_sender, Native_handle_receiver>& val);
+                         const Channel<Blob_sender_t, Blob_receiver_t,
+                                       Native_handle_sender_t, Native_handle_receiver_t>& val);
 
 /**
  * Dummy that is never invoked.  It must still exist in order for Channel to build successfully with at least 1
@@ -263,6 +287,20 @@ std::ostream& operator<<(std::ostream& os,
  * @return `os`.
  */
 std::ostream& operator<<(std::ostream& os, const Null_peer& val);
+
+/**
+ * Prints string representation of the given `Generic_msg_batch_in` to the given `ostream`.
+ *
+ * @relatesalso Generic_msg_batch_in
+ *
+ * @param os
+ *        Stream to which to write.
+ * @param val
+ *        Object to serialize.
+ * @return `os`.
+ */
+template<typename Msg_resource_t, bool NO_HNDLS>
+std::ostream& operator<<(std::ostream& os, const Generic_msg_batch_in<Msg_resource_t, NO_HNDLS>& val);
 
 /**
  * Implements Persistent_mq_handle related concept: Swaps two objects.
@@ -289,6 +327,129 @@ void swap(Bipc_mq_handle& val1, Bipc_mq_handle& val2);
 void swap(Posix_mq_handle& val1, Posix_mq_handle& val2);
 
 } // namespace ipc::transport
+
+/// Stats-related sub-namespace, for ADL segregation and general organization.
+namespace ipc::transport::stat
+{
+
+// Types.
+
+// Find doc headers near the bodies of these compound types.
+
+struct Blob_snd_stats;
+struct Blob_rcv_stats;
+
+// Free functions.
+
+/**
+ * Declares the stats for Blob_snd_stats.  Not invoked directly except by `flow::util::stat` internals,
+ * or when composing this stat-set into another.
+ * @see `flow::util::stat` namespace doc header for background on the declare/visit mechanism.
+ *
+ * @tparam Visitor
+ *         See above.
+ * @param name_prefix
+ *        See above.
+ * @param src_stats
+ *        See above.
+ * @param target_stats
+ *        See above.
+ * @param visitor
+ *        See above.
+ */
+template<typename Visitor>
+void declare_stats(std::string name_prefix, const Blob_snd_stats* src_stats, Blob_snd_stats* target_stats,
+                   Visitor&& visitor);
+
+/**
+ * Maps a stats `struct` type to its core Blob_snd_stats; identity for Blob_snd_stats itself.
+ * See Blob_sender::Blob_snd_stats and Native_handle_sender::Native_handle_snd_stats concept doc headers
+ * for context.  Both concepts require this same function (the core send-stats type is shared).
+ *
+ * Generic use with proper ADL (let `Cool_sender` be a Blob_sender or Native_handle_sender impl instance).
+ *   ~~~
+ *   using ipc::transport::stat::blob_snd_stats;
+ *   Cool_sender::Blob_snd_stats total_stats = ...;
+ *   const auto& core_stats = blob_snd_stats(total_stats);
+ *   // core_stats has type Blob_snd_stats.
+ *   // If Cool_sender::Blob_snd_stats is Blob_snd_stats, then the present free function was invoked.
+ *   // Otherwise an actual mapping function in `Cool_sender`s namespace was invoked via ADL.
+ *   ~~~
+ *
+ * @param stats
+ *        Thing.
+ * @return `stats`.
+ */
+const Blob_snd_stats& blob_snd_stats(const Blob_snd_stats& stats);
+
+/**
+ * Non-`const` wrapper around blob_snd_stats().  Safe because the input is non-`const`, so the
+ * `const_cast` merely undoes the `const` added by delegating to the `const` overload.
+ *
+ * @tparam Stats_t
+ *         `Blob_snd_stats`, or an extended stats type with a `blob_snd_stats(const Stats_t&)` ADL overload.
+ * @param stats
+ *        Stats to map.
+ * @return See blob_snd_stats(); but non-`const`.
+ */
+template<typename Stats_t>
+Blob_snd_stats& blob_snd_stats_mutable(Stats_t& stats);
+
+/**
+ * Declares the stats for Blob_rcv_stats.  Not invoked directly except by `flow::util::stat` internals,
+ * or when composing this stat-set into another.
+ * @see `flow::util::stat` namespace doc header for background on the declare/visit mechanism.
+ *
+ * @tparam Visitor
+ *         See above.
+ * @param name_prefix
+ *        See above.
+ * @param src_stats
+ *        See above.
+ * @param target_stats
+ *        See above.
+ * @param visitor
+ *        See above.
+ */
+template<typename Visitor>
+void declare_stats(std::string name_prefix, const Blob_rcv_stats* src_stats, Blob_rcv_stats* target_stats,
+                   Visitor&& visitor);
+
+/**
+ * Maps a stats `struct` type to its core Blob_rcv_stats; identity for Blob_rcv_stats itself.
+ * See Blob_receiver::Blob_rcv_stats and Native_handle_receiver::Native_handle_rcv_stats concept doc headers
+ * for context.  Both concepts require this same function (the core receive-stats type is shared).
+ *
+ * Generic use with proper ADL (let `Cool_receiver` be a Blob_receiver or Native_handle_receiver impl instance).
+ *   ~~~
+ *   using ipc::transport::stat::blob_rcv_stats;
+ *   Cool_receiver::Blob_rcv_stats total_stats = ...;
+ *   const auto& core_stats = blob_rcv_stats(total_stats);
+ *   // core_stats has type Blob_rcv_stats.
+ *   // If Cool_receiver::Blob_rcv_stats is Blob_rcv_stats, then the present free function was invoked.
+ *   // Otherwise an actual mapping function in `Cool_receiver`s namespace was invoked via ADL.
+ *   ~~~
+ *
+ * @param stats
+ *        Thing.
+ * @return `stats`.
+ */
+const Blob_rcv_stats& blob_rcv_stats(const Blob_rcv_stats& stats);
+
+/**
+ * Non-`const` wrapper around blob_rcv_stats().  Safe because the input is non-`const`, so the
+ * `const_cast` merely undoes the `const` added by delegating to the `const` overload.
+ *
+ * @tparam Stats_t
+ *         `Blob_rcv_stats`, or an extended stats type with a `blob_rcv_stats(const Stats_t&)` ADL overload.
+ * @param stats
+ *        Stats to map.
+ * @return See blob_rcv_stats(); but non-`const`.
+ */
+template<typename Stats_t>
+Blob_rcv_stats& blob_rcv_stats_mutable(Stats_t& stats);
+
+} // namespace ipc::transport::stat
 
 /**
  * `sync_io`-pattern counterparts to async-I/O-pattern object types in parent namespace ipc::transport.
@@ -347,6 +508,148 @@ using Posix_mqs_socket_stream_channel = Mqs_socket_stream_channel<true, Posix_mq
 using Bipc_mqs_socket_stream_channel = Mqs_socket_stream_channel<true, Bipc_mq_handle>;
 
 // Free functions.
+
+/**
+ * Implements `{Native_handle|Blob}_receiver::async_receive_*_batch()` by emulating batch-receiving as a
+ * series of single-message receive-ops.
+ *
+ * ### How to use ###
+ * Just call us; we'll do it.  The main requirement is to provide a proper `async_rcv_impl_func()` which shall
+ * perform a regular one-message receive.
+ *
+ * The formal requirements for `async_rcv_impl_func()` are as follows.  It shall be called in a `void` context
+ * and have the following arguments, in order:
+ *   - (If and only if `NO_HNDLS == false`) `Native_handle*`: Target handle object.
+ *   - `bool`: If `true`, your function may assume the pipe is in would-block state already
+ *     which may help it be more efficient in doing its ask; otherwise it must make no such assumption.
+ *     (This will *not* simply always equal the eponymous argument to async_receive_batch_emulation()!)
+ *   - util::Blob_mutable: Target memory area for the async-read.
+ *   - `Error_code*`: The error-code object for the op.  This shall *not* be null (you do *not* need to throw
+ *     an exception to emit an error).
+ *   - `size_t*`: Set the pointee to the received in-blob's size, unless an error is emitted.
+ *   - Function-object of the specific type: `Function<void (Error_code* err_code, size_t n_rcvd)>`.
+ *     Attention!  This may, or may not, be `.empty()`.  See below.
+ *
+ * It shall act as-if `{Native_handle|Blob}_receiver::async_receive_{native_handle|blob}()` was called, except:
+ *   - Which one it is: it must act consistently with `NO_HNDLS`.
+ *     - It shall take the extra leading `Native_handle*` arg (see above) if `NO_HNDLS == false`.
+ *   - It may assume the following checks have all passed: in PEER state, `start_*_ops()` has been called, no
+ *     pipe-hosing error recorded yet from prior ops, no `async_receive_*()` already outstanding,
+ *     `batch->initialized() && (!batch->full())`.
+ *   - May act differently (probably for perf savings) depending on the `bool` arg (assume-would-block; see above).
+ *   - If it emits non-success, non-would-block (in-pipe-hosing) error `E`, *and* the desired outcome *if* 1+
+ *     in-messages have already been received successfully into `*batch` is *delayed error* (emit no error for this
+ *     batch-receive, but next async-receive on that in-pipe shall instantly yield `E`), then `E` *must* be one of the
+ *     following:
+ *       - error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE,
+ *       - `boost::asio::error::eof`.
+ *       - Any other `E` in that situation will cause the batch-receive to emit `E` (and therefore leave
+ *         `batch->n_used()` unchanged); 1+ in-messages shall be eaten.
+ *   - The on-done handler may be non-empty (as required for normal user-triggered calls) or `.empty()`.
+ *     If it's non-empty, act normally.  If it's empty, and no would-block is encountered, act normally; which is
+ *     to say synchronously emit the result, and that's that (on-done handler ignored).  If it's empty, and
+ *     would-block *is* encountered then there are 2 possibilities.
+ *     - If would-block is encountered immediately (no partial message is read/non-steady state reached):
+ *       Emit would-block as normal; but *end the async-receive op*.  Do not issue an async-wait for readability;
+ *       do not save on-done handler (which is empty anyway).
+ *     - If would-block is encountered after receiving part of an in-message/a non-steady state is reached:
+ *       Do the same; plus:
+ *       - Memorize the partial-message payload/non-steady state, so that if another
+ *         async-receive is issued by something/someone later, your state machine starts from the point as-if
+ *         the partial-message payload/state had already been received/reached.  (After all: it *had* already been
+ *         received/reached -- it just ended up irrelevant to the previous async-receive; namely us.)
+ *
+ * Unfortunately that last bullet point can be tricky to implement (or even understand what it means),
+ * so we must discuss.  Firstly the (potential) good news: If your protocol
+ * combined with the underlying transport is such that reading a partial in-message
+ * is impossible, and (non-hosed) pipe state is the same regardless of where a would-block occurs,
+ * then the bullet point cannot apply, and things (your code) remain simple.
+ *
+ * Example: Native_socket_stream, when operating (and this is determined at compile-time, not run-time) in
+ * datagram mode (asio_local_stream_socket::Protocol_pkt_stream, not `Protocol_byte_stream`; a/k/a
+ * in Linux `SOCK_SEQPACKET`, not `SOCK_STREAM`) can (and in our impl as of this writing does) map each in-message
+ * to one in-datagram, and the pipe is always in the same state (barring being hosed) upon receiving any in-dgram.
+ *
+ * However if it possible to read a payload which encodes (potentially) part of an in-message/non-steady state,
+ * then the bullet point may apply, and you must code for it.
+ *
+ * Example: Blob_stream_mq_receiver is essentially dgram-based too, so each in-message maps to one lower-level
+ * dgram (MQ message), *but* as of this writing our internal protocol is (for certain boring logical/technical reasons)
+ * such that some (non-user-in-message) messages are represented by 2 dgrams (MQ messages), not 1: a CONTROL
+ * message like an auto-ping is represented by an empty in-message (enters CONTROL state) and then a particular
+ * enumeration-value-encoding message (indicates auto-ping; goes back to normal state).  So, the start of
+ * async-receive cannot assume normal state; it might be in CONTROL state because of the above.  Of course this
+ * is pretty easy to handle; just keep a CONTROL-or-not state flag; and resume the state machine based on its value.
+ * There's no need to store any user payload copy.
+ *
+ * Example: Native_socket_stream, when operating in stream mode (asio_local_stream_socket::Protocol_byte_stream
+ * a/k/a `SOCK_STREAM` unlike the earlier example) might hit would-block after any given byte whatsoever; right down
+ * to the "worst case" of, say, reading all of a 60K-long payload except for the very last expected byte.  Then you'd
+ * have to copy it from the would-be user buffer; and feed that part to the next async-receive's user buffer (another
+ * copy).  Fortunately this eventuality should not be frequent enough to affect overall perf.
+ *
+ * In that case you'll need to do somehow save any partial-read results and apply them to the next async-read
+ * *of any type* at the start of that async-read, before reading any further potential low-level data.  Usually
+ * this isn't a matter of performance, as at worst it's part of only 1 in-message, but you'll need some extra code,
+ * and the support for emulated batch-receiving will impact code not-itself-necessarily-related to batch-receiving.
+ *
+ * @warning It is important that `async_rcv_impl_func()` cache any new pipe-hosing error it encounters
+ *          (and therefore emits via `Error_code*` -- but note it may emit non-pipe-hosing error(s) too, most notably
+ *          would-block; that is different); so that if an async-receive is attempted subsequently, it knows to
+ *          immediately emit it.  We mention this, because async_receive_batch_emulation() will -- in the case of
+ *          encountering 1+ in-messages followed by error (e.g., graceful close
+ *          error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE) -- *only* emit the 1+ messages and not any error; it will
+ *          stop but ignore the error itself.  `{Native_handle|Blob}_receiver::async_receive_*()`
+ *          contract is to emit the error next time in that
+ *          case -- and async_receive_batch_emulation() shall take no steps of its own to make that happen.
+ *          Your `async_rcv_impl_func()` must take care of that.
+ *
+ * ### Rationale / use-cases ###
+ * @see Native_handle_receive concept doc header "Batch-receiving" section for background.
+ *
+ * As of this writing Native_socket_stream and Blob_stream_mq_receiver use it internally.  The latter does so, since
+ * (as of now anyway) there is no built-in batch-receiving OS support for POSIX MQs (nor bipc MQs).  The former does
+ * so if and only if Native_socket_stream_cfg::S_USE_OS_DGRAM_BATCH_SUPPORT is `false`.  In English -- in both
+ * cases there's no low-level batch-receiving, so to provide that higher-level interface it has to be emulated
+ * based on normal receiving.
+ *
+ * The same task would be faced by any potential Blob_receiver or Native_handle_receiver concept implementer,
+ * including when a Flow-IPC user wants to do so; an advanced type of work but entirely supported.  Therefore it would
+ * be relatively rare that a user would call this... but definitely possible.  Hence it is public.
+ *
+ * @tparam NO_HNDLS
+ *         `true` if implementing Blob_receiver::async_receive_blob_batch().
+ *         `false` if Native_handle_receiver::async_receive_native_handle_batch().
+ * @tparam Batch
+ *         Blob_receiver::Blob_batch_in or Native_handle_receiver::Native_handle_batch_in (see `NO_HNDLS`).
+ *         In addition, it must have the APIs with identical names/semantics to
+ *         `Generic_msg_batch_in::clear_used(size_t)`, Generic_msg_batch_in::emulate_result(),
+ *         Generic_msg_batch_in::next_target_blob(), and -- if `NO_HNDLS == false` --
+ *         Generic_msg_batch_in::next_target_hndl().  (Rationale: We could have instead simply required that
+ *         `Batch` be an instance of `Generic_msg_batch_in<Msg_resource, NO_HNDLS>`.  Decided to formally allow
+ *         any type, as long as it has the required behavior -- for freedom in custom scenarios.)
+ * @tparam Task_err
+ *         As for `{Native_handle|Blob}_receiver::async_receive_*_batch()`.
+ * @tparam Async_rcv_impl_func
+ *         See above.
+ * @param logger_ptr
+ *        Logger to use for logging in this op, including its async-continuation if applicable.
+ * @param batch
+ *        As for `{Native_handle|Blob}_receiver::async_receive_*_batch()`.
+ * @param assume_would_block
+ *        As for `{Native_handle|Blob}_receiver::async_receive_*_batch()`.
+ * @param sync_err_code
+ *        As for `{Native_handle|Blob}_receiver::async_receive_*_batch()`.
+ * @param on_done_func
+ *        As for `{Native_handle|Blob}_receiver::async_receive_*_batch()`.
+ * @param async_rcv_impl_func
+ *        Your `*_receiver`'s single-message receive op.  See above.
+ */
+template<bool NO_HNDLS, typename Batch, typename Task_err, typename Async_rcv_impl_func>
+void async_receive_batch_emulation(flow::log::Logger* logger_ptr,
+                                   Batch* batch, bool assume_would_block,
+                                   Error_code* sync_err_code, Task_err&& on_done_func,
+                                   Async_rcv_impl_func&& async_rcv_impl_func);
 
 /**
  * Prints string representation of the given `Native_socket_stream` to the given `ostream`.

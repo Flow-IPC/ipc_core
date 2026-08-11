@@ -17,8 +17,7 @@
 
 /// @file
 
-// Include Native_socket_stream::Impl class body to complete that type and enable pImpl forwarding.
-#include "ipc/transport/sync_io/detail/native_socket_stream_impl.hpp"
+#include "ipc/transport/sync_io/native_socket_stream.hpp"
 #include <boost/move/make_unique.hpp>
 
 namespace ipc::transport::sync_io
@@ -27,7 +26,6 @@ namespace ipc::transport::sync_io
 // Initializers.
 
 const Shared_name Native_socket_stream::S_RESOURCE_TYPE_ID = Shared_name::ct("lclSock");
-const size_t& Native_socket_stream::S_MAX_META_BLOB_LENGTH = Impl::S_MAX_META_BLOB_LENGTH;
 
 // Implementations (strict pImpl-idiom style).
 
@@ -40,14 +38,8 @@ Native_socket_stream& Native_socket_stream::operator=(Native_socket_stream&&) = 
 
 Native_socket_stream::Impl_ptr& Native_socket_stream::impl() const
 {
-  using boost::movelib::make_unique;
-
-  if (!m_impl)
-  {
-    m_impl = make_unique<Impl>(nullptr, "");
-  }
-
-  return m_impl;
+  return m_impl ? m_impl
+                : (m_impl = boost::movelib::make_unique<Impl>(nullptr, ""));
 }
 
 // Provide specific default ctor for documentation elegance:
@@ -94,7 +86,7 @@ Native_socket_stream Native_socket_stream::release()
 }
 #endif
 
-util::Process_credentials Native_socket_stream::remote_peer_process_credentials(Error_code* err_code) const
+const util::Process_credentials& Native_socket_stream::remote_peer_process_credentials(Error_code* err_code) const
 {
   return impl()->remote_peer_process_credentials(err_code);
 }
@@ -135,6 +127,26 @@ bool Native_socket_stream::auto_ping(util::Fine_duration period)
   return impl()->auto_ping(period);
 }
 
+stat::Blob_snd_stats Native_socket_stream::blob_send_stats() const
+{
+  return impl()->blob_send_stats();
+}
+
+void Native_socket_stream::blob_send_stats_reset()
+{
+  impl()->blob_send_stats_reset();
+}
+
+stat::Blob_snd_stats Native_socket_stream::native_handle_send_stats() const
+{
+  return impl()->native_handle_send_stats();
+}
+
+void Native_socket_stream::native_handle_send_stats_reset()
+{
+  impl()->native_handle_send_stats_reset();
+}
+
 size_t Native_socket_stream::receive_meta_blob_max_size() const
 {
   return impl()->receive_meta_blob_max_size();
@@ -150,6 +162,26 @@ bool Native_socket_stream::idle_timer_run(util::Fine_duration timeout)
   return impl()->idle_timer_run(timeout);
 }
 
+stat::Blob_rcv_stats Native_socket_stream::blob_receive_stats() const
+{
+  return impl()->blob_receive_stats();
+}
+
+void Native_socket_stream::blob_receive_stats_reset()
+{
+  impl()->blob_receive_stats_reset();
+}
+
+stat::Blob_rcv_stats Native_socket_stream::native_handle_receive_stats() const
+{
+  return impl()->native_handle_receive_stats();
+}
+
+void Native_socket_stream::native_handle_receive_stats_reset()
+{
+  impl()->native_handle_receive_stats_reset();
+}
+
 flow::log::Logger* Native_socket_stream::get_logger() const
 {
   return impl()->get_logger();
@@ -160,55 +192,6 @@ flow::log::Logger* Native_socket_stream::get_logger() const
 std::ostream& operator<<(std::ostream& os, const Native_socket_stream& val)
 {
   return os << *(val.impl());
-}
-
-// Though, some of them (the templates) had to be written as _fwd() non-templated helpers that take various Function<>s.
-
-bool Native_socket_stream::replace_event_wait_handles_fwd
-       (const Function<util::sync_io::Asio_waitable_native_handle ()>& create_ev_wait_hndl_func)
-{
-  return impl()->replace_event_wait_handles(create_ev_wait_hndl_func);
-}
-
-bool Native_socket_stream::start_send_native_handle_ops_fwd(util::sync_io::Event_wait_func&& ev_wait_func)
-{
-  return impl()->start_send_native_handle_ops(std::move(ev_wait_func));
-}
-
-bool Native_socket_stream::start_send_blob_ops_fwd(util::sync_io::Event_wait_func&& ev_wait_func)
-{
-  return impl()->start_send_blob_ops(std::move(ev_wait_func));
-}
-
-bool Native_socket_stream::async_end_sending_fwd(Error_code* sync_err_code, flow::async::Task_asio_err&& on_done_func)
-{
-  return impl()->async_end_sending(sync_err_code, std::move(on_done_func));
-}
-
-bool Native_socket_stream::start_receive_native_handle_ops_fwd(util::sync_io::Event_wait_func&& ev_wait_func)
-{
-  return impl()->start_receive_native_handle_ops(std::move(ev_wait_func));
-}
-
-bool Native_socket_stream::start_receive_blob_ops_fwd(util::sync_io::Event_wait_func&& ev_wait_func)
-{
-  return impl()->start_receive_blob_ops(std::move(ev_wait_func));
-}
-
-bool Native_socket_stream::async_receive_native_handle_fwd(Native_handle* target_hndl,
-                                                           const util::Blob_mutable& target_meta_blob,
-                                                           Error_code* sync_err_code, size_t* sync_sz,
-                                                           flow::async::Task_asio_err_sz&& on_done_func)
-{
-  return impl()->async_receive_native_handle(target_hndl, target_meta_blob, sync_err_code, sync_sz,
-                                             std::move(on_done_func));
-}
-
-bool Native_socket_stream::async_receive_blob_fwd(const util::Blob_mutable& target_blob,
-                                                  Error_code* sync_err_code, size_t* sync_sz,
-                                                  flow::async::Task_asio_err_sz&& on_done_func)
-{
-  return impl()->async_receive_blob(target_blob, sync_err_code, sync_sz, std::move(on_done_func));
 }
 
 } // namespace ipc::transport::sync_io

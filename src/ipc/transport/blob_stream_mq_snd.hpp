@@ -134,22 +134,16 @@ namespace ipc::transport
  *
  * @internal
  * ### Implementation design/rationale ###
- * Internally this class template uses uses the pImpl idiom (see https://en.cppreference.com/w/cpp/language/pimpl
+ * Internally this class template uses the pImpl idiom (see https://en.cppreference.com/w/cpp/language/pimpl
  * for an excellent overview), except it is what I (ygoldfel) term "pImpl-lite".  That is: it is pImpl that achieves
  * performant and easily-coded move-semantics -- in the face of fairly complex async impl details --
  * but does *not* achieve a stable ABI (the thing where one can change impl method bodies without recompiling
  * the code/changing the binary signature of the class).  Long story short:
- *   - See Native_socket_stream's "Implementation design/rationale" for why they chose pImpl.  The same applies here.
- *   - However, we are a template, and this template-ness is not reasonably possible to elide (via type erasure or
- *     something) into a non-template impl class.  Therefore, simply, there is the non-movable
- *     Blob_stream_mq_sender_impl class *template* which is in detail/ and not to be `#include`d by the user;
- *     but *we* simply `#include` it above this doc header; and then write Blob_stream_mq_sender in terms of it.
- *   - So we get the quick/easy move-semantics that pImpl gives; but we don't get the binary separation between
- *     interface and implementation.
- *     - Also, stylistically, I (ygoldfel) did not bother to make Blob_stream_mq_sender_impl an inner class.
- *       It's in detail/ which means user must not instantiate it; this is a common pattern.
- *       I did not bother vaguely because it's not full pImpl anyway, and the circular reference nonsense would
- *       be annoying.
+ *
+ * See Native_socket_stream's "Implementation design/rationale" for why they chose pImpl-lite.  The same applies here.
+ * (Historically that guy originally used strict-pImpl, but with the later introduction of a required function
+ * *template* API, not conducive to elision via `Function<>`, it was converted to pImpl-lite, same as we always
+ * had to be due to our innate templateness.)
  *
  * @see Blob_stream_mq_sender_impl doc header.
  *
@@ -163,19 +157,28 @@ namespace ipc::transport
 template<typename Persistent_mq_handle>
 class Blob_stream_mq_sender : public Blob_stream_mq_base<Persistent_mq_handle>
 {
+private:
+  // Types.
+
+  /// Short-hand for the impl type we're wrapping.  Cannot simply forward-declare as in pImpl; we do pImpl-lite.
+  using Impl = Blob_stream_mq_sender_impl<Persistent_mq_handle>;
+
 public:
   // Types.
 
-  /// Short-hand for our base with `static` goodies at least.
-  using Base = Blob_stream_mq_base<Persistent_mq_handle>;
-
   /// Short-hand for template arg for underlying MQ handle type.
-  using Mq = typename Blob_stream_mq_sender_impl<Persistent_mq_handle>::Mq;
+  using Mq = typename Impl::Mq;
+
+  /// Short-hand for our base with `static` goodies at least.
+  using Base = Blob_stream_mq_base<Mq>;
 
   /// Useful for generic programming, the `sync_io`-pattern counterpart to `*this` type.
   using Sync_io_obj = sync_io::Blob_stream_mq_sender<Mq>;
   /// You may disregard.
   using Async_io_obj = Null_peer;
+
+  /// Implements Blob_sender concept API.
+  using Blob_snd_stats = transport::stat::Blob_snd_stats;
 
   // Constants.
 
@@ -232,7 +235,7 @@ public:
    *        used to prevent duplicate Blob_stream_mq_sender in the system).
    */
   explicit Blob_stream_mq_sender(flow::log::Logger* logger_ptr, util::String_view nickname_str,
-                                 Mq&& mq_moved, Error_code* err_code = 0);
+                                 Mq&& mq_moved, Error_code* err_code = nullptr);
 
   /**
    * Implements Blob_sender API, per its concept contract.
@@ -240,16 +243,12 @@ public:
    *
    * @param sync_io_core_in_peer_state_moved
    *        See above.
-   *
-   * @see Blob_sender::Blob_sender(): implemented concept.
    */
   explicit Blob_stream_mq_sender(Sync_io_obj&& sync_io_core_in_peer_state_moved);
 
   /**
    * Implements Blob_sender API, per its concept contract.
    * All the notes for that concept's default ctor apply.
-   *
-   * @see Blob_sender::Blob_sender(): implemented concept.
    */
   Blob_stream_mq_sender();
 
@@ -259,8 +258,6 @@ public:
    *
    * @param src
    *        See above.
-   *
-   * @see Blob_sender::Blob_sender(): implemented concept.
    */
   Blob_stream_mq_sender(Blob_stream_mq_sender&& src);
 
@@ -292,8 +289,6 @@ public:
    *     Otherwise the later of the 2 will delete the new underlying MQ too: probably not what you want.
    *   - Even having accomplished that, it is still best not to reuse names if possible, at least not anytime soon.
    *     See class doc header for brief discussion.
-   *
-   * @see Blob_sender::~Blob_sender(): implemented concept.
    */
   ~Blob_stream_mq_sender();
 
@@ -309,8 +304,6 @@ public:
    * @param src
    *        See above.
    * @return See above.
-   *
-   * @see Blob_sender move assignment: implemented concept.
    */
   Blob_stream_mq_sender& operator=(Blob_stream_mq_sender&& src);
 
@@ -322,14 +315,12 @@ public:
    * at any given time which is *not* a concept requirement and may be untrue of other concept co-implementing classes.
    *
    * @return See above.
-   *
-   * @see Blob_sender::send_blob_max_size(): implemented concept.
    */
   size_t send_blob_max_size() const;
 
   /**
    * Implements Blob_sender API per contract.  Reminder: It's not thread-safe
-   * to call this concurrently with other transmission methods or destructor on the same `*this`.
+   * to call this concurrently with other transmission methods on the same `*this`.
    *
    * Reminder: `blob.size() == 0` results in undefined behavior (assertion may trip).
    *
@@ -345,14 +336,12 @@ public:
    *        system codes (but never would-block), indicating the underlying transport is hosed for that
    *        specific reason, as detected during outgoing-direction processing.
    * @return See above.
-   *
-   * @see Native_handle_sender::send_native_handle(): implemented concept.
    */
-  bool send_blob(const util::Blob_const& blob, Error_code* err_code = 0);
+  bool send_blob(const util::Blob_const& blob, Error_code* err_code = nullptr);
 
   /**
    * Implements Blob_sender API per contract.
-   * Reminder: It's not thread-safe to call this concurrently with other transmission methods or destructor on
+   * Reminder: It's not thread-safe to call this concurrently with other transmission methods on
    * the same `*this`.
    *
    * #Error_code generated and passed to `on_done_func()`:
@@ -370,8 +359,6 @@ public:
    *        be freed soon after it returns.
    * @return See above.  Reminder: If and only if it returns `false`, we're in NULL state, or `*end_sending()` has
    *         already been called; and `on_done_func()` will never be called.
-   *
-   * @see Blob_sender::async_end_sending(): implemented concept.
    */
   template<typename Task_err>
   bool async_end_sending(Task_err&& on_done_func);
@@ -382,8 +369,6 @@ public:
    *
    * @return See above.  Reminder: If and only if it returns `false`, we're in NULL state, or `*end_sending()` has
    *         already been called.
-   *
-   * @see Blob_sender::end_sending(): implemented concept.
    */
   bool end_sending();
 
@@ -393,10 +378,25 @@ public:
    * @param period
    *        See above.
    * @return See above.
-   *
-   * @see Blob_sender::auto_ping(): implemented concept.
    */
-  bool auto_ping(util::Fine_duration period = boost::chrono::seconds(2));
+  bool auto_ping(util::Fine_duration period = boost::chrono::seconds{2});
+
+  /**
+   * Implements Blob_sender API per contract.
+   *
+   * Thread-safe: can be called concurrently with any other method including `send_*()`.
+   * The returned copy is a consistent snapshot.
+   *
+   * @return Stats snapshot by value.
+   */
+  Blob_snd_stats blob_send_stats() const;
+
+  /**
+   * Implements Blob_sender API per contract.
+   *
+   * Thread-safe: can be called concurrently with any other method including `send_*()`.
+   */
+  void blob_send_stats_reset();
 
   /**
    * Returns nickname, a brief string suitable for logging.  This is included in the output by the `ostream<<`
@@ -420,8 +420,8 @@ public:
 private:
   // Types.
 
-  /// Short-hand for `const`-respecting wrapper around Blob_stream_mq_sender_impl for the pImpl idiom.
-  using Impl_ptr = std::experimental::propagate_const<boost::movelib::unique_ptr<Blob_stream_mq_sender_impl<Mq>>>;
+  /// Short-hand for `const`-respecting wrapper around #Impl for the pImpl idiom.
+  using Impl_ptr = std::experimental::propagate_const<boost::movelib::unique_ptr<Impl>>;
 
   // Friends.
 
@@ -461,7 +461,7 @@ Blob_stream_mq_sender<Persistent_mq_handle>::Blob_stream_mq_sender() = default;
 template<typename Persistent_mq_handle>
 Blob_stream_mq_sender<Persistent_mq_handle>::Blob_stream_mq_sender
   (flow::log::Logger* logger_ptr, util::String_view nickname_str, Mq&& mq, Error_code* err_code) :
-  m_impl(boost::movelib::make_unique<Blob_stream_mq_sender_impl<Mq>>
+  m_impl(boost::movelib::make_unique<Impl>
            (logger_ptr, nickname_str, std::move(mq), err_code))
 {
   // Yay.
@@ -471,7 +471,7 @@ template<typename Persistent_mq_handle>
 Blob_stream_mq_sender<Persistent_mq_handle>::Blob_stream_mq_sender
   (Sync_io_obj&& sync_io_core_in_peer_state_moved) :
 
-  m_impl(boost::movelib::make_unique<Blob_stream_mq_sender_impl<Mq>>
+  m_impl(boost::movelib::make_unique<Impl>
            (std::move(sync_io_core_in_peer_state_moved)))
 {
   // Yay.
@@ -514,6 +514,21 @@ bool Blob_stream_mq_sender<Persistent_mq_handle>::auto_ping(util::Fine_duration 
 }
 
 template<typename Persistent_mq_handle>
+stat::Blob_snd_stats Blob_stream_mq_sender<Persistent_mq_handle>::blob_send_stats() const
+{
+  return m_impl ? m_impl->blob_send_stats()
+                /* The histogram's structure will be based on a silly msg max size, and that is okay.
+                 * Contract is struct is filled with zeroes, and that will hold. */
+                : Blob_snd_stats{1};
+}
+
+template<typename Persistent_mq_handle>
+void Blob_stream_mq_sender<Persistent_mq_handle>::blob_send_stats_reset()
+{
+  if (m_impl) { m_impl->blob_send_stats_reset(); }
+}
+
+template<typename Persistent_mq_handle>
 const Shared_name& Blob_stream_mq_sender<Persistent_mq_handle>::absolute_name() const
 {
   return m_impl ? m_impl->absolute_name() : Shared_name::S_EMPTY;
@@ -530,12 +545,7 @@ const std::string& Blob_stream_mq_sender<Persistent_mq_handle>::nickname() const
 template<typename Persistent_mq_handle>
 std::ostream& operator<<(std::ostream& os, const Blob_stream_mq_sender<Persistent_mq_handle>& val)
 {
-  if (val.m_impl)
-  {
-    return os << *val.m_impl;
-  }
-  // else
-  return os << "null";
+  return val.m_impl ? (os << *val.m_impl) : (os << "null");
 }
 
 } // namespace ipc::transport

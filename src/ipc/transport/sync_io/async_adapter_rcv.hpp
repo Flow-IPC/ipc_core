@@ -19,11 +19,13 @@
 #pragma once
 
 #include "ipc/transport/detail/transport_fwd.hpp"
+#include "ipc/transport/blob_transport_stats.hpp"
 #include "ipc/transport/error.hpp"
 #include <flow/log/log.hpp>
 #include <flow/async/single_thread_task_loop.hpp>
 #include <boost/move/make_unique.hpp>
 #include <queue>
+#include <variant>
 
 namespace ipc::transport::sync_io
 {
@@ -31,20 +33,30 @@ namespace ipc::transport::sync_io
 // Types.
 
 /**
- * Internal-use type that adapts a given PEER-state sync_io::Native_handle_receiver or sync_io::Blob_receiver *core*
+ * Type that adapts a given PEER-state sync_io::Native_handle_receiver or sync_io::Blob_receiver *core*
  * into the async-I/O-pattern Native_handle_receiver or Blob_receiver.  State-mutating logic of the latter is forwarded
  * to a `*this`; while trivial `const` (in PEER state) things like `.receive_blob_max_size()` are forwarded directly to
  * the core `sync_io::X`.
  *
- * @see transport::Native_socket_stream::Impl uses this for 99% of its incoming-direction
+ * Flow-IPC uses a `*this` to implement each of transport::Native_socket_stream (in-direction) and
+ * transport::Blob_stream_mq_receiver; but this is a public API, as one can implement any custom
+ * transport::Blob_receiver (et al) in terms of the corresponding custom sync_io::Blob_receiver (et al) impl.
+ * It would be an advanced task but nevertheless fully supported/intended.
+ *
+ * @internal
+ * @see transport::Native_socket_stream_impl uses this for 99% of its incoming-direction
  *      (PEER-state by definition) logic.
  * @see transport::Blob_stream_mq_receiver_impl uses this for 99% of its logic.
+ * @endinternal
  *
- * @see Async_adapter_sender for the opposite-direction thing.  E.g., transport::Native_socket_stream::Impl
+ * @see Async_adapter_sender for the opposite-direction thing.  E.g., transport::Native_socket_stream_impl
  *      uses that for 99% of its outgoing-direction logic.
  *
+ * @internal
+ * Impl
+ * ----
  * ### Threads and thread nomenclature; locking ###
- * Thread U, thread W... locking... just see those sections in transport::Native_socket_stream::Impl class doc header.
+ * Thread U, thread W... locking... just see those sections in transport::Native_socket_stream_impl class doc header.
  * We adopt that nomenclature and logic.  However, as we are concerned with only one direction (op-type),
  * we only deal with code in either thread U or W concerned with that.  The other-direction code -- if applicable
  * (e.g., applicable for `Native_socket_stream` which deals with both over 1 socket connection; N/A
@@ -73,12 +85,24 @@ namespace ipc::transport::sync_io
  *     `User_request m_user_request`.  The queued-up subsequent ones are stored in queue with that
  *     same element type, `m_pending_user_requests_q`.
  *   - When the ongoing (single) `m_sync_io.async_receive_*()` does complete -- which occurs in thread W --
- *     we emit the result (`Error_code`, `sz`) to the `"User_request::m_on_done_func"` (the completion
+ *     we emit the result (`Error_code`, `sz`) to the `User_request`-stored `m_on_done_func` (the completion
  *     handler from the user).  Then we pop `m_pending_user_requests_q` (unless empty -- no further "deficit")
  *     into `m_user_request` and service *that* one via `m_sync_io.async_receive_*()`.  Rinse/repeat.
  *
  * If the destructor is invoked before `m_user_request` can get serviced, then in the dtor
  * we execute `on_done_func(E)`, where E is operation-aborted.  Once that's done the dtor can finish.
+ *
+ * Update: The above remains quite accurate; but we added batch-receiving APIs to the `*_receiver` concepts and
+ * therefore impls and therefore `*this`.  These are async_receive_native_handle_batch() and
+ * async_receive_blob_batch().  All that changes is that a given user-request can now be either a single-message
+ * receive request, or a batch receive request.  So #User_request can encode one or the other; so it is a
+ * `variant` to that effect.  Hence when processing a #User_request in #m_user_request (or the queue, if we need
+ * to look in there directly), we check which one it is and then invoke the appropriate #Core API
+ * (e.g., `async_receive_blob()` versus `async_receive_blob_batch()`).
+ * @endinternal
+ *
+ * @tparam Core_t
+ *         The `sync_io::X` type being adapted into async-I/O-pattern `X`.
  */
 template<typename Core_t>
 class Async_adapter_receiver :
@@ -115,8 +139,8 @@ public:
    * To be invoked after `->stop()`ping `*worker` (from ctor), as well as flushing any still-queued
    * tasks in its `Task_engine` (via `.restart()` and `.poll()`), this satisfies the customer adapter
    * dtor's contract which is to invoke any not-yet-fired completion handlers with special
-   * operation-aborted error code.  In our case that is either nothing or 1 `async_end_sending()` completion
-   * handler.  If applicable the dtor returns once that handler has completed in an unspecified thread
+   * operation-aborted error code.  In our case that is either nothing or 1+ `async_receive_*()` completion
+   * handler(s).  If applicable the dtor returns once such handler(s) has/have completed in an unspecified thread
    * that is not the calling thread.
    */
   ~Async_adapter_receiver();
@@ -124,59 +148,106 @@ public:
   // Methods.
 
   /**
-   * See Native_handle_sender counterpart.  However, this one is `void`, as there is no way `*this` is not in PEER state
-   * (by definition).
+   * See transport::Native_handle_receiver counterpart.  However, this one is `void`, as there is no way `*this` is not
+   * in PEER state (by definition).
    *
    * @param target_hndl
-   *        See Native_handle_sender counterpart.
+   *        See above.
    * @param target_meta_blob
-   *        See Native_handle_sender counterpart.
+   *        See above.
    * @param on_done_func
-   *        See Native_handle_sender counterpart.
+   *        See above.
    */
   void async_receive_native_handle(Native_handle* target_hndl,
                                    const util::Blob_mutable& target_meta_blob,
                                    flow::async::Task_asio_err_sz&& on_done_func);
 
   /**
-   * See Blob_receiver counterpart.  However, this one is `void`, as there is no way `*this` is not in PEER state
-   * (by definition).
+   * See transport::Blob_receiver counterpart.  However, this one is `void`, as there is no way `*this` is not in PEER
+   * state (by definition).
    *
    * @param target_blob
-   *        See Blob_receiver counterpart.
+   *        See above.
    * @param on_done_func
-   *        See Blob_receiver counterpart.
+   *        See above.
    */
   void async_receive_blob(const util::Blob_mutable& target_blob,
                           flow::async::Task_asio_err_sz&& on_done_func);
 
   /**
-   * See Native_handle_receiver counterpart.
+   * See transport::Native_handle_receiver counterpart.  However, this one is `void`, as there is no way `*this` is not
+   * in PEER state (by definition).
+   *
+   * @tparam Batch
+   *         `Core::Native_handle_batch_in<Msg_resource>` for some type `Msg_resource` which... see above.
+   * @param batch
+   *        See above.
+   * @param assume_would_block
+   *        See above.
+   * @param on_done_func
+   *        See above.
+   */
+  template<typename Batch>
+  void async_receive_native_handle_batch(Batch* batch, bool assume_would_block,
+                                         flow::async::Task_asio_err&& on_done_func);
+
+  /**
+   * See transport::Blob_receiver counterpart.  However, this one is `void`, as there is no way `*this` is not
+   * in PEER state (by definition).
+   *
+   * @tparam Batch
+   *         `Core::Blob_batch_in<Msg_resource>` for some type `Msg_resource` which... see above.
+   * @param batch
+   *        See above.
+   * @param assume_would_block
+   *        See above.
+   * @param on_done_func
+   *        See above.
+   */
+  template<typename Batch>
+  void async_receive_blob_batch(Batch* batch, bool assume_would_block,
+                                flow::async::Task_asio_err&& on_done_func);
+
+  /**
+   * See transport::Native_handle_receiver counterpart.
    *
    * @param timeout
-   *        See Native_handle_receiver counterpart.
-   * @return See Native_handle_receiver counterpart.
+   *        See above.
+   * @return See above.
    */
   bool idle_timer_run(util::Fine_duration timeout);
+
+  /**
+   * See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
+  stat::Blob_rcv_stats blob_receive_stats() const;
+
+  /// See Native_socket_stream counterpart.
+  void blob_receive_stats_reset();
+
+  /**
+   * See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
+  stat::Blob_rcv_stats native_handle_receive_stats() const;
+
+  /// See Native_socket_stream counterpart.
+  void native_handle_receive_stats_reset();
 
 private:
   // Types.
 
   /**
-   * Data store representing a deficit user async-receive request: either one being currently handled
+   * Data store representing a deficit user single-message async-receive request: either one being currently handled
    * by `m_sync_io` -- which can handle one `m_sync_io.async_receive_*()` at a time, no more -- or
    * one queued up behind it, if `async_receive_*()` was called before the current one could complete.
    *
    * Essentially this stores args to async_receive_native_handle() (or degenerate version, async_receive_blob())
-   * which is an async-operating method.  We store them in queue via #Ptr.
+   * which is an async-operating method.  We store them in queue via #User_req_ptr.
    */
-  struct User_request
+  struct User_request_one
   {
-    // Types.
-
-    /// Short-hand for `unique_ptr` to this.
-    using Ptr = boost::movelib::unique_ptr<User_request>;
-
     // Data.
 
     /// See async_receive_native_handle() `target_hndl`.  Null for `async_receive_blob()`.
@@ -187,7 +258,74 @@ private:
 
     /// See async_receive_native_handle() or async_receive_blob() `on_done_func`.
     flow::async::Task_asio_err_sz m_on_done_func;
-  }; // struct User_request
+  }; // struct User_request_one
+
+  /**
+   * Analogous to User_request_one but for a batch async-receive request as opposed to single-message request.
+   *
+   * Essentially this stores args to async_receive_native_handle_batch() or async_receive_blob_batch().
+   * We store them in queue via #User_req_ptr.
+   *
+   * ### Impl design ###
+   * Conceptually this is straightforward; much like User_request_one this basically stores the args from the user
+   * to `async_receive_*_batch()`.  The impl, however, is somewhat less straightforward than in User_request_one.
+   * Specifically, consider these bits of info:
+   *   - (Easy) Whether it was `async_receive_native_handle_batch()` or `async_receive_blob_batch()`; determines
+   *     which of the two eponymous methods of #m_sync_io we shall forward-to (call).
+   *   - (Harder) The `batch` argument.
+   *
+   * The latter is really the crux (the former we save using the same mechanism opportunistically; but in and of itself
+   * it could have just been a `bool` flag or similar; e.g., User_request_one encodes it in `bool(m_target_hndl_ptr)`.)
+   * The problem with `batch` is its type is template-parameterized `Batch*`, where
+   * `Batch` is a `typename` template parameter.  We have to save this info in #m_user_request and/or
+   * #m_pending_user_requests_q, and when forwarding-to `m_sync_io.async_receive_*_batch()` we must
+   * give it a value of type `Batch*`.  So it's a standard type-erasure
+   * situation.  As such we use a typical technique in solving it: use `Function<T>`,
+   * where `T` is a signature spec that is parameterized on `Batch`.  That is we
+   * have #m_sync_rcv_batch_func which captures `batch` of whichever type (code generated at compile-time) and invokes
+   * the appropriate method, either the `_native_handle_` one or the `_blob_` one, thus compactly (code-wise anyway)
+   * encoding both the would-be flag (bullet point 1) and the `batch` value of the proper type (bullet point 2).
+   *
+   * The code is fairly slick, but there's a cost which is to some extent performance; `Function<>` does the
+   * type erasure leg-work for us, but it is *somewhat* heavyweight, and calling it involves some `virtual` overhead.
+   * The RAM weight doesn't much matter (overall it is small, and we move these around via `User_req_ptr`),
+   * and we consider the `virtual` overhead to be acceptable.  (If profiling shows otherwise, we can revisit.)
+   */
+  struct User_request_batch
+  {
+    // Types.
+
+    /**
+     * Short-hand for polymorphic type of function which is the batch-receive equivalent of
+     * Async_adapter_receiver::sync_receive().  See "Impl design" in `struct` doc header please.
+     *
+     * The following info is captured or encoded in the function body:
+     *   - (Opportunistic/for convenience) Our daddy's `m_sync_io` ref and its appropriate method:
+     *     either `async_receive_native_handle_batch()` or `async_receive_blob_batch()`.
+     *   - (Opportunistic/for convenience) Value of arg `bool assume_would_block`.
+     *   - (Required/couldn't be done another way) The type `Batch` (template parameter to the above method;
+     *     part of the type of `batch` argument to the above method).
+     *     - (Required/couldn't be done another way) `batch` arg itself.
+     *
+     * The following are the args to it:
+     *   - `Error_code* sync_err_code` arg to pass to the above method.
+     */
+    using Rcv_batch_func = Function<void (Error_code*)>;
+
+    // Data.
+
+    /// See #Rcv_batch_func doc header.  Again though: This is the equivalent of `sync_receive()` for batch-receives.
+    Rcv_batch_func m_sync_rcv_batch_func;
+
+    /// See async_receive_native_handle_batch() or async_receive_blob_batch() `on_done_func`.
+    flow::async::Task_asio_err m_on_done_func;
+  }; // struct User_request_batch
+
+  /// An async-receive request made by user, to be stored in #m_user_request and/or #m_pending_user_requests_q.
+  using User_request = std::variant<User_request_one, User_request_batch>;
+
+  /// Short-hand for smart-pointer handle to #User_request.
+  using User_req_ptr = boost::movelib::unique_ptr<User_request>;
 
   // Methods.
 
@@ -203,9 +341,48 @@ private:
    * @param on_done_func
    *        See async_receive_native_handle().
    */
-  void async_receive_native_handle_impl(Native_handle* target_hndl_or_null,
-                                        const util::Blob_mutable& target_meta_blob,
-                                        flow::async::Task_asio_err_sz&& on_done_func);
+  void async_receive_impl(Native_handle* target_hndl_or_null, const util::Blob_mutable& target_meta_blob,
+                          flow::async::Task_asio_err_sz&& on_done_func);
+
+  /**
+   * With the pre-condition that #m_user_request is of type User_request_one (that is originating from
+   * a single-message async-receive user request as opposed to batch-receive), executes the core synchronous
+   * call to single-message `m_sync_io.async_receive_{native_handle|blob}()`.  If it succeeds synchronously,
+   * the result is indicated via the out-args.  If it encounters would-block, `*sync_err_code` indicates this
+   * on return, and async-wait is issued, and when/if user reports the completion of that wait,
+   * our on_sync_io_rcv_done() shall execute.
+   *
+   * @note User_request_batch::m_sync_rcv_batch_func is the equivalent of us for batch-receives.
+   *
+   * @param req
+   *        `get<User_request_one>(*m_user_request)()`.  It is an arg for perf only, as (as of this writing anyway)
+   *        the caller would already have this.
+   * @param sync_err_code
+   *        See above.
+   * @param sz
+   *        See above; if `*sync_err_code` ends up falsy, `*sz` is set to 1+, the number of bytes received;
+   *        else to 0.
+   */
+  void sync_receive(const User_request_one& req, Error_code* sync_err_code, size_t* sz);
+
+  /**
+   * Body of async_receive_native_handle_batch() and async_receive_blob_batch(); with t-param `HNDL_ELSE_BLOB`
+   * `true` or `false` depending on whether it's the latter as opposed to the former.
+   *
+   * @tparam HNDL_ELSE_BLOB
+   *         `true` if implementing async_receive_native_handle_batch();
+   *         `false` if async_receive_blob_batch().
+   * @tparam Batch
+   *         See async_receive_native_handle_batch() or async_receive_blob_batch().
+   * @param batch
+   *        See async_receive_native_handle_batch() or async_receive_blob_batch().
+   * @param assume_would_block
+   *        See async_receive_native_handle_batch() or async_receive_blob_batch().
+   * @param on_done_func
+   *        See async_receive_native_handle_batch() or async_receive_blob_batch().
+   */
+  template<typename Batch, bool HNDL_ELSE_BLOB>
+  void async_receive_batch_impl(Batch* batch, bool assume_would_block, flow::async::Task_asio_err&& on_done_func);
 
   /**
    * Invoked via active-event API, handles the async completion
@@ -218,20 +395,21 @@ private:
    * or would-block.  In the latter case another async-wait is initiated by this method synchronously.
    *
    * The first action, before those potential further reads, is to process_msg_or_error() the just-received
-   * (or pipe-hosing would-be) message.  Then for each further in-message process_msg_or_error() is again
-   * invoked.
+   * (or pipe-hosing would-be) single-message or batch (sized 1+ messages).  Then for each further
+   * in-message/in-batch process_msg_or_error() is again invoked.
    *
    * For each request satisfied, a separate user handler is posted onto thread W to execute in order.
    *
    * @param err_code
    *        Result to pass to user (if truthy, all pending requests; else to #m_user_request only).
-   * @param sz
-   *        Result to pass to user (ditto).
+   * @param sz_if_applicable
+   *        Result to pass to user (ditto); ignored/zero if #m_user_request encodes a User_request_batch;
+   *        used/applicable (if `!err_code` and) if `m_user_request` encodes a User_request_one.
    */
-  void on_sync_io_rcv_done(const Error_code& err_code, size_t sz);
+  void on_sync_io_rcv_done(const Error_code& err_code, size_t sz_if_applicable);
 
   /**
-   * Invoked from thread U/W (async_receive_native_handle_impl()) or thread W (active-event API), handles
+   * Invoked from thread U/W (async_receive_impl() or async_receive_batch_impl()) or W (active-event API), handles
    * a completed `m_sync_io.async_receive_*()` -- whose results are to be given as args -- by (1) updating
    * #m_user_request and #m_pending_user_requests_q and (2) posting any appropriate handlers onto thread W.
    *
@@ -239,10 +417,10 @@ private:
    *
    * @param err_code
    *        See on_sync_io_rcv_done().
-   * @param sz
+   * @param sz_if_applicable
    *        See on_sync_io_rcv_done().
    */
-  void process_msg_or_error(const Error_code& err_code, size_t sz);
+  void process_msg_or_error(const Error_code& err_code, size_t sz_if_applicable);
 
   // Data.
 
@@ -250,8 +428,8 @@ private:
   const std::string m_log_pfx;
 
   /**
-   * The *head slot* containing the currently-being-serviced "deficit" async-receive request, with a meta-blob
-   * *potentially* being async-written to; null if there is no pending async_receive_native_handle().
+   * The *head slot* containing the currently-being-serviced "deficit" async-receive request, with meta-blob(s)
+   * *potentially* being async-written to; null if there is no pending `async_receive_*()`.
    * It is the "fulcrum" of the consumer-producer state machine described in doc header impl section's design
    * discussion: If null there is no deficit; if not null there is an *overall deficit*.  In the former case,
    * at steady state, `m_pending_user_requests_q.empty() == true`.
@@ -260,7 +438,7 @@ private:
    *
    * @see #m_pending_user_requests_q
    */
-  typename User_request::Ptr m_user_request;
+  User_req_ptr m_user_request;
 
   /**
    * Queue storing deficit async-receive requests queued up due to #m_user_request being not null while
@@ -276,7 +454,7 @@ private:
    * never any of the subsequently queued requests; in my (ygoldfel) view it is clearer to express it as always
    * targeting #m_user_request rather than `*(m_pending_user_requests_q.front())`.
    */
-  std::queue<typename User_request::Ptr> m_pending_user_requests_q;
+  std::queue<User_req_ptr> m_pending_user_requests_q;
 
   /// Protects #m_user_request, #m_pending_user_requests_q, and receive-ops data of #m_sync_io.
   mutable flow::util::Mutex_non_recursive m_mutex;
@@ -357,16 +535,15 @@ Async_adapter_receiver<Core_t>::Async_adapter_receiver(flow::log::Logger* logger
       // They want to know about completed async_wait().  Oblige.
 
       // Protect m_sync_io and non-const non-ref m_* against receive-ops (async_receive_*(), ...).
-      Lock_guard<decltype(m_mutex)> lock(m_mutex);
+      Lock_guard<decltype(m_mutex)> lock{m_mutex};
 
       /* Inform m_sync_io of the event.  This can synchronously invoke handler we have registered via m_sync_io
-       * API (e.g., `send_*()`, auto_ping()).  In our case -- if indeed it triggers a handler -- it will
-       * have to do with async_end_sending() completion. */
+       * API (e.g., `async_receive_*()`). */
 
       (*on_active_ev_func)();
       // (That would have logged sufficiently inside m_sync_io; let's not spam further.)
 
-      // Lock_guard<decltype(m_mutex)> lock(m_mutex): unlocks here.
+      // Lock_guard<decltype(m_mutex)> lock{m_mutex}: unlocks here.
     }); // hndl_of_interest->async_wait()
   }); // m_sync_io.start_receive_blob_ops()
   assert(ok);
@@ -378,31 +555,49 @@ Async_adapter_receiver<Core_t>::~Async_adapter_receiver()
   using flow::async::Single_thread_task_loop;
   using flow::async::reset_thread_pinning;
   using flow::util::ostream_op_string;
+  using std::get_if;
+  using std::get;
 
   /* Pre-condition: m_worker is stop()ed, and any pending tasks on it have been executed.
    * Our promised job is to invoke any pending handlers with operation-aborted.
-   * The decision to do it from a one-off thread is explained in transport::Native_socket_stream::Impl::~Impl()
+   * The decision to do it from a one-off thread is explained in transport::Native_socket_stream_impl::~dtor()
    * and used in a few places; so see that.  Let's just do it.
    * @todo It would be cool, I guess, to do it all in one one-off thread instead of potentially starting, like,
    * 3 for some of our customers.  Well, whatever. */
 
   if (m_user_request)
   {
-    Single_thread_task_loop one_thread(get_logger(),
-                                       ostream_op_string("ARcDeinit-", m_log_pfx));
+    Single_thread_task_loop one_thread{get_logger(),
+                                       ostream_op_string("ARcDeinit-", m_log_pfx)};
     one_thread.start([&]()
     {
       reset_thread_pinning(get_logger()); // Don't inherit any strange core-affinity.  Float free.
 
       FLOW_LOG_TRACE("Running head slot async-receive completion handler.");
-      m_user_request->m_on_done_func(error::Code::S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER, 0);
+      auto& req = *m_user_request;
+      if (auto req1 = get_if<User_request_one>(&req))
+      {
+        req1->m_on_done_func(error::Code::S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER, 0);
+      }
+      else
+      {
+        get<User_request_batch>(req).m_on_done_func(error::Code::S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER);
+      }
       FLOW_LOG_TRACE("User receive handler finished.");
 
       while (!m_pending_user_requests_q.empty())
       {
         FLOW_LOG_TRACE("Running a queued async-receive completion handler.");
-        m_pending_user_requests_q.front()
-          ->m_on_done_func(error::Code::S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER, 0);
+        auto& req = *(m_pending_user_requests_q.front());
+        if (auto req1 = get_if<User_request_one>(&req))
+        {
+          req1->m_on_done_func(error::Code::S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER, 0);
+        }
+        else
+        {
+          get<User_request_batch>(req).m_on_done_func(error::Code::S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER);
+        }
+
         m_pending_user_requests_q.pop();
         FLOW_LOG_TRACE("User receive handler finished.  Popped from user request deficit queue.");
       } // while (!m_pending_user_requests_q.empty())
@@ -420,7 +615,7 @@ void Async_adapter_receiver<Core_t>::async_receive_native_handle(Native_handle* 
                                                                  flow::async::Task_asio_err_sz&& on_done_func)
 {
   assert(target_hndl && "Native_socket_stream::async_receive_native_handle() must take non-null Native_handle ptr.");
-  async_receive_native_handle_impl(target_hndl, target_meta_blob, std::move(on_done_func));
+  async_receive_impl(target_hndl, target_meta_blob, std::move(on_done_func));
 
   /* Note, if our customer lacks async_receive_native_handle(), then they'll forward to (call) this method;
    * therefore it (*this being a template instance) will never be compiled; therefore target_hndl_or_null will never
@@ -432,23 +627,19 @@ template<typename Core_t>
 void Async_adapter_receiver<Core_t>::async_receive_blob(const util::Blob_mutable& target_blob,
                                                         flow::async::Task_asio_err_sz&& on_done_func)
 {
-  async_receive_native_handle_impl(nullptr, target_blob, std::move(on_done_func));
+  async_receive_impl(nullptr, target_blob, std::move(on_done_func));
 }
 
 template<typename Core_t>
-void Async_adapter_receiver<Core_t>::async_receive_native_handle_impl(Native_handle* target_hndl_or_null,
-                                                                      const util::Blob_mutable& target_meta_blob,
-                                                                      flow::async::Task_asio_err_sz&& on_done_func)
+void Async_adapter_receiver<Core_t>::async_receive_impl(Native_handle* target_hndl_or_null,
+                                                        const util::Blob_mutable& target_meta_blob,
+                                                        flow::async::Task_asio_err_sz&& on_done_func)
 {
   using flow::util::Lock_guard;
-  using boost::movelib::make_unique;
+  using std::in_place_type;
+  using std::get;
 
   // We are in thread U (or thread W in a completion handler, but not concurrently).
-
-  /* We will be accessing m_user_request, m_pending_user_requests_q, and possibly m_sync_io receive-ops
-   * sub-API -- while ctor's ev-wait function's async_wait() handler will be accessing them too from thread W -- so: */
-
-  Lock_guard<decltype(m_mutex)> lock(m_mutex);
 
   /* This is essentially the only place in *this where we're more than a mere forwarder of the core m_sync_io
    * sync_io::*_receiver (which is synchronous) into an async *_receiver.  I.e., in this
@@ -483,10 +674,17 @@ void Async_adapter_receiver<Core_t>::async_receive_native_handle_impl(Native_han
                  "possible native handle and meta-blob (located @ [" << target_meta_blob.data() << "] of "
                  "max size [" << target_meta_blob.size() << "]).  In worker now? = [" << m_worker.in_thread() << "].");
 
-  auto new_user_request = make_unique<User_request>();
-  new_user_request->m_target_hndl_ptr = target_hndl_or_null;
-  new_user_request->m_target_meta_blob = target_meta_blob;
-  new_user_request->m_on_done_func = std::move(on_done_func);
+  auto new_user_request = boost::movelib::make_unique<User_request>(in_place_type<User_request_one>);
+  auto& req1 = get<User_request_one>(*new_user_request);
+
+  req1.m_target_hndl_ptr = target_hndl_or_null;
+  req1.m_target_meta_blob = target_meta_blob;
+  req1.m_on_done_func = std::move(on_done_func);
+
+  /* We will be accessing m_user_request, m_pending_user_requests_q, and possibly m_sync_io receive-ops
+   * sub-API -- while ctor's ev-wait function's async_wait() handler will be accessing them too from thread W -- so: */
+
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
 
   if (m_user_request)
   {
@@ -495,7 +693,7 @@ void Async_adapter_receiver<Core_t>::async_receive_native_handle_impl(Native_han
                    "After registering the new async-receive request: Head slot is non-empty; and "
                    "subsequently-pending deficit queue has size [" << m_pending_user_requests_q.size() << "].  "
                    "Will sync-IO-receive to handle this request once it reaches the front of that queue.");
-    return;
+    return; // Lock_guard<decltype(m_mutex)> lock{m_mutex}: unlocks here.
   }
   // else if (!m_user_request):
 
@@ -509,18 +707,43 @@ void Async_adapter_receiver<Core_t>::async_receive_native_handle_impl(Native_han
   Error_code sync_err_code;
   size_t sync_sz;
 
+  sync_receive(req1, &sync_err_code, &sync_sz);
+
+  if (sync_err_code == error::Code::S_SYNC_IO_WOULD_BLOCK)
+  {
+    // Async-wait started by m_sync_io.  It logged plenty.  We live to fight another day.
+    return; // Lock_guard<decltype(m_mutex)> lock{m_mutex}: unlocks here.
+  }
+  // else:
+
+  /* Process the message and nullify m_user_request.  (It would also promote any m_pending_user_requests_q head
+   * to m_user_request; but in our case that is not possible.  We are still in the user async-receive API!) */
+  process_msg_or_error(sync_err_code, sync_sz);
+
+  FLOW_LOG_TRACE("Message was immediately available; synchronously returned to user; handler posted onto "
+                 "async worker thread.  Done until next request.");
+
+  // Lock_guard<decltype(m_mutex)> lock{m_mutex}: unlocks here.
+} // Async_adapter_receiver::async_receive_impl()
+
+template<typename Core_t>
+void Async_adapter_receiver<Core_t>::sync_receive(const User_request_one& req, Error_code* sync_err_code, size_t* sz)
+{
+  using std::get;
+
 #ifndef NDEBUG
   bool ok;
 #endif
-  if (m_user_request->m_target_hndl_ptr)
+
+  if (req.m_target_hndl_ptr)
   {
     if constexpr(Core::S_TRANSMIT_NATIVE_HANDLES) // Prevent compile error from code that could never be reached.
     {
 #ifndef NDEBUG
       ok =
 #endif
-      m_sync_io.async_receive_native_handle(m_user_request->m_target_hndl_ptr, m_user_request->m_target_meta_blob,
-                                            &sync_err_code, &sync_sz,
+      m_sync_io.async_receive_native_handle(req.m_target_hndl_ptr, req.m_target_meta_blob,
+                                            sync_err_code, sz,
                                             [this](const Error_code& err_code, size_t sz)
       {
         // We are in thread W.  m_mutex is locked.
@@ -531,41 +754,149 @@ void Async_adapter_receiver<Core_t>::async_receive_native_handle_impl(Native_han
     {
       assert(false && "This code should never be reached.");
     }
-  } // if (m_user_request->m_target_hndl_ptr)
+  } // if (req.m_target_hndl_ptr)
   else // Same deal/keeping comments light.
   {
 #ifndef NDEBUG
     ok =
 #endif
-    m_sync_io.async_receive_blob(m_user_request->m_target_meta_blob, &sync_err_code, &sync_sz,
+    m_sync_io.async_receive_blob(req.m_target_meta_blob, sync_err_code, sz,
                                  [this](const Error_code& err_code, size_t sz)
-      { on_sync_io_rcv_done(err_code, sz); });
-  } // else if (!m_user_request->m_target_hndl_ptr)
+                                   { on_sync_io_rcv_done(err_code, sz); });
+  } // else if (!req.m_target_hndl_ptr)
 
   assert(ok && "We are by definition in PEER state, and ctor starts receive-ops, and we never start a "
                "sync_io async-receive before ensuring previous one has executed; so that should never "
                "return false.  Bug somewhere?");
+} // Async_adapter_receiver::sync_receive()
+
+template<typename Core_t>
+template<typename Batch>
+void Async_adapter_receiver<Core_t>::async_receive_native_handle_batch(Batch* batch, bool assume_would_block,
+                                                                       flow::async::Task_asio_err&& on_done_func)
+{
+  async_receive_batch_impl<Batch, true>(batch, assume_would_block, std::move(on_done_func));
+}
+
+template<typename Core_t>
+template<typename Batch>
+void Async_adapter_receiver<Core_t>::async_receive_blob_batch(Batch* batch, bool assume_would_block,
+                                                              flow::async::Task_asio_err&& on_done_func)
+{
+  async_receive_batch_impl<Batch, false>(batch, assume_would_block, std::move(on_done_func));
+}
+
+template<typename Core_t>
+template<typename Batch, bool HNDL_ELSE_BLOB>
+void Async_adapter_receiver<Core_t>::async_receive_batch_impl(Batch* batch,
+                                                              bool assume_would_block,
+                                                              flow::async::Task_asio_err&& on_done_func)
+{
+  using flow::async::Task_asio_err;
+  using flow::util::Lock_guard;
+  using std::in_place_type;
+  using std::get;
+
+  // We are in thread U (or thread W in a completion handler, but not concurrently).
+
+  /* This is mainly the equivalent of async_receive_impl(), except:
+   *   - it handles receive-batch request instead of receive-one-message request; and
+   *   - batch-receiving has certain technicalities (see User_request_batch doc header) which cause us to
+   *     (instead of simply being able to call sync_receive() (as for single-message case)) prepare its equivalent
+   *     and save it inside the User_request as a polymorphic Function<>.
+   *
+   * Other than that the same comments, including especially the big one at the top of
+   * async_receive_impl(), apply.  Keeping comments light. */
+
+  FLOW_LOG_TRACE(m_log_pfx << ": Incoming user async-receive-batch (with handles: no) request on "
+                 "batch [" << *batch << "] with assume-would-block? = [" << assume_would_block << "]; "
+                 "HNDL_ELSE_BLOB = [" << HNDL_ELSE_BLOB << "].  "
+                 "In worker now? = [" << m_worker.in_thread() << "].");
+
+  auto new_user_request = boost::movelib::make_unique<User_request>(in_place_type<User_request_batch>);
+  auto& req_batch = get<User_request_batch>(*new_user_request);
+
+  req_batch.m_on_done_func = std::move(on_done_func);
+  // Note the type-erasure achieved by `batch` capture.
+  req_batch.m_sync_rcv_batch_func = [this, assume_would_block, batch]
+                                      (Error_code* sync_err_code)
+  {
+#ifndef NDEBUG
+    bool ok;
+#endif
+
+    if constexpr(HNDL_ELSE_BLOB)
+    {
+#ifndef NDEBUG
+      ok =
+#endif
+      m_sync_io.template async_receive_native_handle_batch<typename Batch::Msg_resource>
+        (batch, assume_would_block, sync_err_code,
+         [this](const Error_code& err_code)
+      {
+        // We are in thread W.  m_mutex is locked.
+        on_sync_io_rcv_done(err_code, 0); // Emit to handler; possibly pop queue and continue chain.
+        // Pass zero for sz_if_applicable ^-- (it is not applicable to batch-receiving).
+      });
+    }
+    else // if constexpr(!HNDL_ELSE_BLOB)
+    {
+#ifndef NDEBUG
+      ok =
+#endif
+      m_sync_io.template async_receive_blob_batch<typename Batch::Msg_resource>
+        (batch, assume_would_block, sync_err_code,
+         [this](const Error_code& err_code) { on_sync_io_rcv_done(err_code, 0); });
+    } // else // if constexpr(!HNDL_ELSE_BLOB)
+
+    assert(ok && "We are by definition in PEER state, and ctor starts receive-ops, and we never start a "
+                 "sync_io async-receive before ensuring previous one has executed; so that should never "
+                 "return false.  Bug somewhere?");
+  }; // req_batch.m_sync_rcv_batch_func =
+
+  // Accessing m_user_request, m_pending_user_requests_q, and possibly m_sync_io receive-ops => lock.
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
+
+  if (m_user_request)
+  {
+    m_pending_user_requests_q.emplace(std::move(new_user_request));
+    FLOW_LOG_TRACE("At least 1 async-receive request is already in progress.  "
+                   "After registering the new async-receive request: Head slot is non-empty; and "
+                   "subsequently-pending deficit queue has size [" << m_pending_user_requests_q.size() << "].  "
+                   "Will sync-IO-receive to handle this request once it reaches the front of that queue.");
+
+    return; // Lock_guard<decltype(m_mutex)> lock{m_mutex}: unlocks here.
+  }
+  // else if (!m_user_request):
+
+  FLOW_LOG_TRACE("No async-receive request is currently in progress.  Starting sync-IO-receive chain to service the "
+                 "new request and any further-queued requests that might appear in the meantime.");
+  m_user_request = std::move(new_user_request);
+  // new_user_request is now hosed.
+
+  Error_code sync_err_code;
+  req_batch.m_sync_rcv_batch_func(&sync_err_code);
 
   if (sync_err_code == error::Code::S_SYNC_IO_WOULD_BLOCK)
   {
-    // Async-wait started by m_sync_io.  It logged plenty.  We live to fight another day.
-    return;
+    return; // Lock_guard<decltype(m_mutex)> lock{m_mutex}: unlocks here.
   }
   // else:
 
-  /* Process the message and nullify m_user_request.  (It would also promote any m_pending_user_requests_q head
-   * to m_user_request; but in our case that is not possible.  We are still in the user async-receive API!) */
-  process_msg_or_error(sync_err_code, sync_sz);
+  // Process the message and nullify m_user_request.
+  process_msg_or_error(sync_err_code, 0); // Pass zero for sz_if_applicable (it is not applicable to batches).
 
-  FLOW_LOG_TRACE("Message was immediately available; synchronously returned to user; handler posted onto "
+  FLOW_LOG_TRACE("In-batch was immediately available; synchronously returned to user; handler posted onto "
                  "async worker thread.  Done until next request.");
-} // Async_adapter_receiver::async_receive_native_handle_impl()
+
+  // Lock_guard<decltype(m_mutex)> lock{m_mutex}: unlocks here.
+} // Async_adapter_receiver::async_receive_batch_impl()
 
 template<typename Core_t>
-void Async_adapter_receiver<Core_t>::process_msg_or_error(const Error_code& err_code, size_t sz)
+void Async_adapter_receiver<Core_t>::process_msg_or_error(const Error_code& err_code, size_t sz_if_applicable)
 {
-  using flow::util::Lock_guard;
-  using std::queue;
+  using std::get_if;
+  using std::get;
 
   // We are in thread U or W.  m_mutex is locked.
 
@@ -578,7 +909,7 @@ void Async_adapter_receiver<Core_t>::process_msg_or_error(const Error_code& err_
 
   /* As noted in our doc header, we have roughly two items on the agenda.
    *
-   * 1, we need to invoke m_user_request->m_on_done_func, passing it the results (which are our args).
+   * 1, we need to invoke m_user_request->m_on_done_func, passing it the results (which ise/are our arg(s)).
    *
    * 2, we need to update our m_* structures, such as popping stuff off m_pending_user_requests_q
    * and starting the next m_sync_io.async_receive_*() if any -- and so on.
@@ -596,7 +927,7 @@ void Async_adapter_receiver<Core_t>::process_msg_or_error(const Error_code& err_
    *       then we can bundle them all together into one thread-W task; no need for the churn of post()ing
    *       each one individually.)
    *   - However for 2, there's no need to post() anything.  The mutex is already locked, so even if we're in thread
-   *     U (m_sync_io.async_receive_*() succeeded synchronously, and this->async_receive_native_handle_impl()
+   *     U (m_sync_io.async_receive_*() succeeded synchronously, and this->async_receive[_*]_impl()
    *     therefore invoked us synchronously, from thread U) we are within
    *     our rights to just finish the job here synchronously as well.  In fact, that's great!  It means
    *     data were waiting to be read right away, and we did everything we could synchronously in the
@@ -609,10 +940,10 @@ void Async_adapter_receiver<Core_t>::process_msg_or_error(const Error_code& err_
   // Okay, so first deal with m_*, here and now as discussed.  In so doing prepare the stuff to call in thread W.
 
   assert(m_user_request);
-  typename User_request::Ptr ex_user_request(std::move(m_user_request));
+  User_req_ptr ex_user_request{std::move(m_user_request)};
   assert(!m_user_request);
 
-  queue<typename User_request::Ptr> ex_pending_user_requests_q_or_none;
+  decltype(m_pending_user_requests_q) ex_pending_user_requests_q_or_none;
   if (err_code)
   {
     FLOW_LOG_TRACE("Error emitted by sync-IO => all [" << m_pending_user_requests_q.size() << "] pending "
@@ -637,30 +968,51 @@ void Async_adapter_receiver<Core_t>::process_msg_or_error(const Error_code& err_
   }
 
   // Second: Post the completion handlers as discussed.
-  m_worker.post([this, err_code, sz,
+  m_worker.post([this, err_code, sz_if_applicable,
                  /* Have to upgrade to shared_ptr<>s due to capturing requiring copyability (even though copying is not
                   * actually invoked by us).  unique_ptr and queue<unique_ptr> = not copyable. */
-                 ex_user_request = boost::shared_ptr<User_request>(std::move(ex_user_request)),
+                 ex_user_request = boost::shared_ptr<User_request>{std::move(ex_user_request)},
                  ex_pending_user_requests_q_or_none
                    = boost::make_shared<decltype(ex_pending_user_requests_q_or_none)>
                        (std::move(ex_pending_user_requests_q_or_none))]()
+                  mutable
   {
     // We are in thread W.  Nothing is locked.
 
     assert(ex_user_request);
     FLOW_LOG_TRACE(m_log_pfx << ": Invoking head handler.");
-    (ex_user_request->m_on_done_func)(err_code, sz);
+
+    auto& req = *ex_user_request;
+    if (auto req1 = get_if<User_request_one>(&req))
+    {
+      req1->m_on_done_func(err_code, sz_if_applicable);
+    }
+    else
+    {
+      assert((sz_if_applicable == 0) && "sz_if_applicable is not applicable to batches; should have been passed as 0.");
+      get<User_request_batch>(req).m_on_done_func(err_code);
+    }
+
     FLOW_LOG_TRACE("Handler completed.");
     if (!ex_pending_user_requests_q_or_none->empty())
     {
       assert(err_code);
-      assert(sz == 0);
+      assert(sz_if_applicable == 0);
 
       FLOW_LOG_TRACE(m_log_pfx << ": Invoking [" << ex_pending_user_requests_q_or_none->size() << "] "
                      "pending handlers in one shot (due to error).");
       while (!ex_pending_user_requests_q_or_none->empty())
       {
-        ex_pending_user_requests_q_or_none->front()->m_on_done_func(err_code, 0);
+        auto& req = *(ex_pending_user_requests_q_or_none->front());
+        if (auto req1 = get_if<User_request_one>(&req))
+        {
+          req1->m_on_done_func(err_code, 0);
+        }
+        else
+        {
+          get<User_request_batch>(req).m_on_done_func(err_code);
+        }
+
         ex_pending_user_requests_q_or_none->pop();
         FLOW_LOG_TRACE("In-queue handler finished.");
       }
@@ -673,10 +1025,11 @@ void Async_adapter_receiver<Core_t>::process_msg_or_error(const Error_code& err_
 } // Async_adapter_receiver::process_msg_or_error()
 
 template<typename Core_t>
-void Async_adapter_receiver<Core_t>::on_sync_io_rcv_done(const Error_code& err_code, size_t sz)
+void Async_adapter_receiver<Core_t>::on_sync_io_rcv_done(const Error_code& err_code, size_t sz_if_applicable)
 {
-  using flow::util::Lock_guard;
   using std::queue;
+  using std::get_if;
+  using std::get;
 
   // We are in thread W.  m_mutex is locked.
 
@@ -687,74 +1040,49 @@ void Async_adapter_receiver<Core_t>::on_sync_io_rcv_done(const Error_code& err_c
                  "on-active-event-func => sync_io module => here (on-rcv-done handler).");
 
   /* This is not *too* different from thread-U (or thread-W if invoked from our own handler)
-   * async_receive_native_handle_impl()... except that in our case more requests may have been queued (as summarized
+   * async_receive[_*]_impl()... except that in our case more requests may have been queued (as summarized
    * in top comment in that method) during our async-wait that just finished.  And, of course, we need
-   * to process the ready message first-thing.  But let's say that's taken care of.  After that: we can't just
-   * stop; there may be queued request.  We shall process them as synchronously as possible in a do-while()
+   * to process the ready message/batch first-thing.  But let's say that's taken care of.  After that: we can't just
+   * stop; there may be queued requests.  We shall process them as synchronously as possible in a do-while()
    * loop.  That's the executive summary. */
 
-  /* So handle the message or error -- W-post any relevant handlers; update m_user_request and
+  /* So handle the message/batch or error -- W-post any relevant handlers; update m_user_request and
    * m_pending_user_requests_q. */
-  process_msg_or_error(err_code, sz);
+  process_msg_or_error(err_code, sz_if_applicable);
 
   Error_code sync_err_code;
-  auto& sync_sz = sz; // (Might as well reuse the arg.)
+  auto& sync_sz = sz_if_applicable; // (Might as well reuse the arg.)
 
   /* First iteration: sync_err_code is definitely not would-block; m_user_request may be null.
    * Subsequent iterations: sync_err_code may be would-block. */
   while (m_user_request && (sync_err_code != error::Code::S_SYNC_IO_WOULD_BLOCK))
   {
-    // @todo Code reuse with async_receive_native_handle_impl()?  For now keeping comments light.
-#ifndef NDEBUG
-    bool ok;
-#endif
-    if (m_user_request->m_target_hndl_ptr)
+    auto& req = *m_user_request;
+    if (auto req1 = get_if<User_request_one>(&req))
     {
-      if constexpr(Core::S_TRANSMIT_NATIVE_HANDLES)
-      {
-#ifndef NDEBUG
-        ok =
-#endif
-        m_sync_io.async_receive_native_handle(m_user_request->m_target_hndl_ptr, m_user_request->m_target_meta_blob,
-                                              &sync_err_code, &sync_sz,
-                                              [this](const Error_code& err_code, size_t sz)
-        {
-          on_sync_io_rcv_done(err_code, sz); // Back to us (async path).
-        });
-      }
-      else // if constexpr(!S_TRANSMIT_NATIVE_HANDLES)
-      {
-        assert(false && "This code should never be reached.");
-      }
-    } // if (m_user_request->m_target_hndl_ptr)
+      sync_receive(*req1, &sync_err_code, &sync_sz);
+    }
     else
     {
-#ifndef NDEBUG
-      ok =
-#endif
-      m_sync_io.async_receive_blob(m_user_request->m_target_meta_blob, &sync_err_code, &sync_sz,
-                                   [this](const Error_code& err_code, size_t sz)
-        { on_sync_io_rcv_done(err_code, sz); });
-    } // else if (!m_user_request->m_target_hndl_ptr)
-    assert(ok && "We are by definition in PEER state, and ctor starts receive-ops, and we never start a "
-                 "sync_io async-receive before ensuring previous one has executed; so that should never "
-                 "return false.  Bug somewhere?");
+      get<User_request_batch>(req).m_sync_rcv_batch_func(&sync_err_code);
 
-    if (sync_err_code == error::Code::S_SYNC_IO_WOULD_BLOCK)
-    {
-      continue; // Loop will end.
+      // sync_sz not applicable; for cleanliness (as of this writing process_msg_or_error() can trip assert otherwise):
+      sync_sz = 0;
     }
-    // else
 
-    /* Remaining outcomes: sync_err_code truthy => process_msg_or_error() will do the right thing.
-     *                     sync_err_code is falsy => ditto. */
+    if (sync_err_code != error::Code::S_SYNC_IO_WOULD_BLOCK)
+    {
+      /* Remaining outcomes: sync_err_code truthy => process_msg_or_error() will do the right thing.
+       *                     sync_err_code is falsy => ditto. */
 
-    process_msg_or_error(sync_err_code, sync_sz);
+      process_msg_or_error(sync_err_code, sync_sz);
 
-    /* Outcomes: Error => m_user_request is null, m_pending_user_requests_q is null.  No req to service.  Loop end.
-     *           Success => m_user_request is null, m_pending_user_requests_q is null.  No req to service.  Loop end.
-     *           Success => m_user_request is NOT null, m_pending_user_requests_q is ???.  Req needs service.
-     * In no case is sync_err_code (at this point) would-block.  Hence: time to check loop condition. */
+      /* Outcomes: Error => m_user_request is null, m_pending_user_requests_q is null.  No req to service.  Loop end.
+       *           Success => m_user_request is null, m_pending_user_requests_q is null.  No req to service.  Loop end.
+       *           Success => m_user_request is NOT null, m_pending_user_requests_q is ???.  Req needs service.
+       * In no case is sync_err_code (at this point) would-block.  Hence: time to check loop condition. */
+    }
+    // else if (sync_err_code == SYNC_IO_WOULD_BLOCK) { Loop will end. }
   } // while (m_user_request && (sync_err_code != error::Code::S_SYNC_IO_WOULD_BLOCK));
 } // Async_adapter_receiver::on_sync_io_rcv_done()
 
@@ -765,8 +1093,44 @@ bool Async_adapter_receiver<Core_t>::idle_timer_run(util::Fine_duration timeout)
 
   // Like Async_adapter_sender::send_native_handle() and others (keeping comments light).
 
-  Lock_guard<decltype(m_mutex)> lock(m_mutex);
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
   return m_sync_io.idle_timer_run(timeout);
+}
+
+template<typename Core_t>
+stat::Blob_rcv_stats Async_adapter_receiver<Core_t>::blob_receive_stats() const
+{
+  using flow::util::Lock_guard;
+
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
+  return m_sync_io.blob_receive_stats();
+}
+
+template<typename Core_t>
+void Async_adapter_receiver<Core_t>::blob_receive_stats_reset()
+{
+  using flow::util::Lock_guard;
+
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
+  m_sync_io.blob_receive_stats_reset();
+}
+
+template<typename Core_t>
+stat::Blob_rcv_stats Async_adapter_receiver<Core_t>::native_handle_receive_stats() const
+{
+  using flow::util::Lock_guard;
+
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
+  return m_sync_io.native_handle_receive_stats();
+}
+
+template<typename Core_t>
+void Async_adapter_receiver<Core_t>::native_handle_receive_stats_reset()
+{
+  using flow::util::Lock_guard;
+
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
+  m_sync_io.native_handle_receive_stats_reset();
 }
 
 } // namespace ipc::transport::sync_io

@@ -19,6 +19,8 @@
 #pragma once
 
 #include "ipc/transport/detail/blob_stream_mq_rcv_impl.hpp"
+#include "ipc/transport/blob_stream_mq.hpp"
+#include "ipc/transport/sync_io/blob_stream_mq_rcv.hpp"
 #include <boost/move/make_unique.hpp>
 #include <experimental/propagate_const>
 
@@ -66,18 +68,33 @@ namespace ipc::transport
  * @see Blob_receiver: implemented concept.
  */
 template<typename Persistent_mq_handle>
-class Blob_stream_mq_receiver : public Blob_stream_mq_base<Persistent_mq_handle>
+class Blob_stream_mq_receiver :
+  public Blob_stream_mq_base<Persistent_mq_handle>,
+  public Blob_stream_mq_receiver_base
 {
+private:
+  // Types.
+
+  /// Short-hand for the impl type we're wrapping.  Cannot simply forward-declare as in pImpl; we do pImpl-lite.
+  using Impl = Blob_stream_mq_receiver_impl<Persistent_mq_handle>;
+
 public:
   // Types.
 
   /// Short-hand for template arg for underlying MQ handle type.
-  using Mq = typename Blob_stream_mq_receiver_impl<Persistent_mq_handle>::Mq;
+  using Mq = typename Impl::Mq;
 
   /// Useful for generic programming, the `sync_io`-pattern counterpart to `*this` type.
   using Sync_io_obj = sync_io::Blob_stream_mq_receiver<Mq>;
   /// You may disregard.
   using Async_io_obj = Null_peer;
+
+  /// Implements Blob_receiver concept API.
+  template<typename Msg_resource>
+  using Blob_batch_in = Blob_stream_mq_receiver_base::Blob_batch_in<Msg_resource>;
+
+  /// Implements Blob_receiver concept API.
+  using Blob_rcv_stats = transport::stat::Blob_rcv_stats;
 
   // Constants.
 
@@ -85,12 +102,19 @@ public:
   static const Shared_name S_RESOURCE_TYPE_ID;
 
   /**
-   * Implements concept API; namely it is `true`.  Notes for transport::Native_socket_stream apply.
+   * Implements concept API; namely it is `false`.
    *
    * @see Native_handle_receiver::S_BLOB_UNDERFLOW_ALLOWED: implemented concept.  Accordingly also see
    *      "Blob underflow semantics" in transport::Native_handle_receiver doc header.
    */
   static constexpr bool S_BLOB_UNDERFLOW_ALLOWED = false;
+
+  /**
+   * Implements concept API; namely it is `1` as of this writing (no native batch-receiving in
+   * Persistent_mq_handle concept or known impls' OS facilities => little to no
+   * benefit from batching; possibly slight cost instead).
+   */
+  static constexpr size_t S_RCV_BLOB_BATCH_SZ_RECOMMENDATION = Sync_io_obj::S_RCV_BLOB_BATCH_SZ_RECOMMENDATION;
 
   // Constructors/destructor.
 
@@ -139,7 +163,7 @@ public:
    *        used to prevent duplicate Blob_stream_mq_receiver in the system).
    */
   explicit Blob_stream_mq_receiver(flow::log::Logger* logger_ptr, util::String_view nickname_str,
-                                   Mq&& mq_moved, Error_code* err_code = 0);
+                                   Mq&& mq_moved, Error_code* err_code = nullptr);
 
   /**
    * Implements Blob_receiver API, per its concept contract.
@@ -147,16 +171,12 @@ public:
    *
    * @param sync_io_core_in_peer_state_moved
    *        See above.
-   *
-   * @see Blob_receiver::Blob_receiver(): implemented concept.
    */
   explicit Blob_stream_mq_receiver(Sync_io_obj&& sync_io_core_in_peer_state_moved);
 
   /**
    * Implements Blob_receiver API, per its concept contract.
    * All the notes for that concept's default ctor apply.
-   *
-   * @see Blob_receiver::Blob_receiver(): implemented concept.
    */
   Blob_stream_mq_receiver();
 
@@ -166,8 +186,6 @@ public:
    *
    * @param src
    *        See above.
-   *
-   * @see Blob_receiver::Blob_receiver(): implemented concept.
    */
   Blob_stream_mq_receiver(Blob_stream_mq_receiver&& src);
 
@@ -182,8 +200,6 @@ public:
    *
    * ### Fate of underlying MQ and its `.absolute_name()` ###
    * Notes from Blob_stream_mq_sender dtor doc header apply here symmetrically.
-   *
-   * @see Blob_receiver::~Blob_receiver(): implemented concept.
    */
   ~Blob_stream_mq_receiver();
 
@@ -199,8 +215,6 @@ public:
    * @param src
    *        See above.
    * @return `*this`.
-   *
-   * @see Blob_receiver move assignment: implemented concept.
    */
   Blob_stream_mq_receiver& operator=(Blob_stream_mq_receiver&& src);
 
@@ -211,15 +225,13 @@ public:
    * Implements Blob_receiver API per contract.
    *
    * @return See above.
-   *
-   * @see Blob_receiver::receive_blob_max_size(): implemented concept.
    */
   size_t receive_blob_max_size() const;
 
   /**
    * Implements Blob_receiver API per contract.  Reminder: You may call this directly from within a
-   * completion handler you supplied to an earlier async_receive_blob().  Reminder: It's not thread-safe
-   * to call this concurrently with other transmission methods or destructor on the same `*this`.
+   * completion handler you supplied to an earlier async_receive_*().  Reminder: It's not thread-safe
+   * to call this concurrently with other transmission methods on the same `*this`.
    *
    * #Error_code generated and passed to `on_done_func()`:
    * error::Code::S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER (destructor called, canceling all pending ops;
@@ -242,12 +254,33 @@ public:
    *        See above.  Reminder: any moved/copied version of this callback's associated captured state will
    *        be freed soon after it returns.
    * @return See above.
-   *
-   * @see Blob_receiver::async_receive_blob(): implemented concept.
    */
   template<typename Task_err_sz>
-  bool async_receive_blob(const util::Blob_mutable& target_blob,
-                          Task_err_sz&& on_done_func);
+  bool async_receive_blob(const util::Blob_mutable& target_blob, Task_err_sz&& on_done_func);
+
+  /**
+   * Implements Blob_receiver API per contract.  Reminder: You may call this directly from within a
+   * completion handler you supplied to an earlier `async_receive_*()`.  Reminder: It's not thread-safe
+   * to call this concurrently with other transmission methods on the same `*this`.
+   *
+   * #Error_code generated and passed to `on_done_func()`: see async_receive_blob(),
+   * except error::Code::S_INVALID_ARGUMENT applies to `batch->target_payload_size()` instead of `target_blob.size()`;
+   * and also emitted if `!batch->initialized()` or `batch->full()`.
+   *
+   * @tparam Msg_resource
+   *         See above.
+   * @tparam Task_err
+   *         See above.
+   * @param batch
+   *        See above.
+   * @param assume_would_block
+   *        See above.
+   * @param on_done_func
+   *        See above.
+   * @return See above.
+   */
+  template<typename Msg_resource, typename Task_err>
+  bool async_receive_blob_batch(Blob_batch_in<Msg_resource>* batch, bool assume_would_block, Task_err&& on_done_func);
 
   /**
    * Implements Blob_receiver API per contract.  Reminder: You may call this directly from within a
@@ -256,10 +289,25 @@ public:
    * @param timeout
    *        See above.
    * @return See above.
-   *
-   * @see Blob_receiver::idle_timer_run(): implemented concept.
    */
-  bool idle_timer_run(util::Fine_duration timeout = boost::chrono::seconds(5));
+  bool idle_timer_run(util::Fine_duration timeout = boost::chrono::seconds{5});
+
+  /**
+   * Implements Blob_receiver API per contract.
+   *
+   * Thread-safe: can be called concurrently with any other method including `async_receive_*()`.
+   * The returned copy is a consistent snapshot.
+   *
+   * @return Stats snapshot by value.
+   */
+  Blob_rcv_stats blob_receive_stats() const;
+
+  /**
+   * Implements Blob_receiver API per contract.
+   *
+   * Thread-safe: can be called concurrently with any other method including `async_receive_*()`.
+   */
+  void blob_receive_stats_reset();
 
   /**
    * Returns nickname, a brief string suitable for logging.  This is included in the output by the `ostream<<`
@@ -283,8 +331,8 @@ public:
 private:
   // Types.
 
-  /// Short-hand for `const`-respecting wrapper around Blob_stream_mq_sender_impl for the pImpl idiom.
-  using Impl_ptr = std::experimental::propagate_const<boost::movelib::unique_ptr<Blob_stream_mq_receiver_impl<Mq>>>;
+  /// Short-hand for `const`-respecting wrapper around #Impl for the pImpl idiom.
+  using Impl_ptr = std::experimental::propagate_const<boost::movelib::unique_ptr<Impl>>;
 
   // Friends.
 
@@ -326,7 +374,7 @@ Blob_stream_mq_receiver<Persistent_mq_handle>::Blob_stream_mq_receiver() = defau
 template<typename Persistent_mq_handle>
 Blob_stream_mq_receiver<Persistent_mq_handle>::Blob_stream_mq_receiver
   (flow::log::Logger* logger_ptr, util::String_view nickname_str, Mq&& mq, Error_code* err_code) :
-  m_impl(boost::movelib::make_unique<Blob_stream_mq_receiver_impl<Mq>>
+  m_impl(boost::movelib::make_unique<Impl>
            (logger_ptr, nickname_str, std::move(mq), err_code))
 {
   // Yay.
@@ -335,7 +383,7 @@ Blob_stream_mq_receiver<Persistent_mq_handle>::Blob_stream_mq_receiver
 template<typename Persistent_mq_handle>
 Blob_stream_mq_receiver<Persistent_mq_handle>::Blob_stream_mq_receiver(Sync_io_obj&& sync_io_core_in_peer_state_moved) :
 
-  m_impl(boost::movelib::make_unique<Blob_stream_mq_receiver_impl<Mq>>
+  m_impl(boost::movelib::make_unique<Impl>
            (std::move(sync_io_core_in_peer_state_moved)))
 {
   // Yay.
@@ -361,10 +409,37 @@ bool Blob_stream_mq_receiver<Persistent_mq_handle>::async_receive_blob
 }
 
 template<typename Persistent_mq_handle>
+template<typename Msg_resource, typename Task_err>
+bool Blob_stream_mq_receiver<Persistent_mq_handle>::async_receive_blob_batch
+       (Blob_batch_in<Msg_resource>* batch, bool assume_would_block, Task_err&& on_done_func)
+{
+  return m_impl ? (m_impl->template async_receive_blob_batch<Msg_resource>
+                     (batch, assume_would_block, std::move(on_done_func)),
+                   true)
+                : false;
+}
+
+
+template<typename Persistent_mq_handle>
 bool Blob_stream_mq_receiver<Persistent_mq_handle>::idle_timer_run(util::Fine_duration timeout)
 {
   return m_impl ? m_impl->idle_timer_run(timeout)
                 : false;
+}
+
+template<typename Persistent_mq_handle>
+stat::Blob_rcv_stats Blob_stream_mq_receiver<Persistent_mq_handle>::blob_receive_stats() const
+{
+  return m_impl ? m_impl->blob_receive_stats()
+                /* The histogram's structure will be based on a silly msg max size, and that is okay.
+                 * Contract is struct is filled with zeroes, and that will hold. */
+                : Blob_rcv_stats{1};
+}
+
+template<typename Persistent_mq_handle>
+void Blob_stream_mq_receiver<Persistent_mq_handle>::blob_receive_stats_reset()
+{
+  if (m_impl) { m_impl->blob_receive_stats_reset(); }
 }
 
 template<typename Persistent_mq_handle>
@@ -384,12 +459,7 @@ const std::string& Blob_stream_mq_receiver<Persistent_mq_handle>::nickname() con
 template<typename Persistent_mq_handle>
 std::ostream& operator<<(std::ostream& os, const Blob_stream_mq_receiver<Persistent_mq_handle>& val)
 {
-  if (val.m_impl)
-  {
-    return os << *val.m_impl;
-  }
-  // else
-  return os << "null";
+  return val.m_impl ? (os << *val.m_impl) : (os << "null");
 }
 
 } // namespace ipc::transport

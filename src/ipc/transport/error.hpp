@@ -87,7 +87,7 @@ enum class Code
   /// Will not send message: local user already ended sending via API marking this.
   S_SENDS_FINISHED_CANNOT_SEND = S_CODE_LOWEST_INT_VALUE,
 
-  /// Will not receive message: either opposing user sent graceful-close via API.
+  /// Will not receive message: opposing user sent graceful-close via API.
   S_RECEIVES_FINISHED_CANNOT_RECEIVE,
 
   /**
@@ -166,6 +166,12 @@ enum class Code
   /// A sync_io operation could not immediately complete; it will complete contingent on active async-wait event(s).
   S_SYNC_IO_WOULD_BLOCK,
 
+  /// Unable to receive incoming traffic: Opposing side sent invalid internal per-message header.
+  S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER,
+
+  /// The opposing peer process involved in an IPC channel is currently reported by the OS as no longer running.
+  S_PEER_PROCESS_NO_LONGER_EXISTS,
+
   /// SENTINEL: Not an error.  This Code must never be issued by an error/success-emitting API; I/O use only.
   S_END_SENTINEL
 }; // enum class Code
@@ -202,7 +208,7 @@ Error_code make_error_code(Code err_code);
  * @return `is`.
  */
 std::istream& operator>>(std::istream& is, Code& val);
-// @todo - `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
+// @todo `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
 
 /**
  * Serializes a transport::error::Code to a standard output stream.  The output string is compatible with the reverse
@@ -231,7 +237,7 @@ std::istream& operator>>(std::istream& is, Code& val);
  * @return `os`.
  */
 std::ostream& operator<<(std::ostream& os, Code val);
-// @todo - `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
+// @todo `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
 
 } // namespace ipc::transport::error
 

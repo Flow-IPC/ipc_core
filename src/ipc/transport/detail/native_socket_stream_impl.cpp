@@ -30,15 +30,14 @@ namespace ipc::transport
 // General + connect-ops.
 
 // Delegated-to ctor (note the tag arg).
-Native_socket_stream::Impl::Impl(sync_io::Native_socket_stream&& sync_io_core_moved, std::nullptr_t) :
+Native_socket_stream_impl::Native_socket_stream_impl(sync_io::Native_socket_stream&& sync_io_core_moved, std::nullptr_t) :
   flow::log::Log_context(sync_io_core_moved.get_logger(), Log_component::S_TRANSPORT),
 
-  m_worker(boost::movelib::make_unique<flow::async::Single_thread_task_loop>
-             (get_logger(),
-              /* (Linux) OS thread name will truncate .nickname() to 15-4=11 chars here; high chance that'll include
-               * something decently useful; probably not everything though; depends on nickname.
-               * It's a decent attempt. */
-              flow::util::ostream_op_string("Sck-", sync_io_core_moved.nickname()))),
+  m_worker(get_logger(),
+           /* (Linux) OS thread name will truncate .nickname() to 15-4=11 chars here; high chance that'll include
+            * something decently useful; probably not everything though; depends on nickname.
+            * It's a decent attempt. */
+           flow::util::ostream_op_string("Sck-", sync_io_core_moved.nickname())),
   // Adopt the just-cted, idle sync_io::Native_socket_stream.  It may be in NULL state or PEER state.
   m_sync_io(std::move(sync_io_core_moved))
 {
@@ -46,62 +45,64 @@ Native_socket_stream::Impl::Impl(sync_io::Native_socket_stream&& sync_io_core_mo
   using util::sync_io::Task_ptr;
   using flow::async::reset_this_thread_pinning;
 
-  m_worker->start(reset_this_thread_pinning); // Don't inherit any strange core-affinity!  Worker must float free.
+  m_worker.start(reset_this_thread_pinning); // Don't inherit any strange core-affinity!  Worker must float free.
 
   // We're using a boost.asio event loop, so we need to base the async-waited-on handles on our Task_engine.
 #ifndef NDEBUG
   bool ok =
 #endif
-  m_sync_io.replace_event_wait_handles([this]() -> Asio_waitable_native_handle
-                                         { return Asio_waitable_native_handle(*(m_worker->task_engine())); });
+  m_sync_io.replace_event_wait_handles([this]() -> auto
+                                         { return Asio_waitable_native_handle{*(m_worker.task_engine())}; });
   assert(ok && "Did you break contract by passing-in a non-fresh sync_io core object to ctor?");
 
   /* Delegating PEER-state ctor shall deal with m_snd_sync_io_adapter/rcv.
    * Otherwise NULL-state ctor shall do no such thing, but a successful sync_connect() will do just that. */
 
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: Created (NULL state).");
-} // Native_socket_stream::Impl::Impl()
+} // Native_socket_stream_impl::Native_socket_stream_impl()
 
-Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str) :
+Native_socket_stream_impl::Native_socket_stream_impl(flow::log::Logger* logger_ptr, util::String_view nickname_str) :
   // Create core ourselves (NULL state); then delegate to other ctor.
-  Impl(sync_io::Native_socket_stream(logger_ptr, nickname_str), nullptr)
+  Native_socket_stream_impl(sync_io::Native_socket_stream{logger_ptr, nickname_str}, nullptr)
 {
   // Done.
 }
 
-Native_socket_stream::Impl::Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str,
-                                 Native_handle&& native_peer_socket_moved) :
+Native_socket_stream_impl::Native_socket_stream_impl(flow::log::Logger* logger_ptr, util::String_view nickname_str,
+                                                     Native_handle&& native_peer_socket_moved) :
   // Create core ourselves (in PEER state); then delegate to other ctor.
-  Impl(sync_io::Native_socket_stream(logger_ptr, nickname_str, std::move(native_peer_socket_moved)), nullptr)
+  Native_socket_stream_impl(sync_io::Native_socket_stream{logger_ptr, nickname_str,
+                                                          std::move(native_peer_socket_moved)},
+                            nullptr)
 {
   using flow::util::ostream_op_string;
 
   // Lastly, as we're in PEER state, set up send-ops and receive-ops state machines.
 
   const auto log_pfx = ostream_op_string("Sck-", nickname()); // Brief-ish for use in OS thread names or some such.
-  m_snd_sync_io_adapter.emplace(get_logger(), log_pfx, m_worker.get(), &m_sync_io);
-  m_rcv_sync_io_adapter.emplace(get_logger(), log_pfx, m_worker.get(), &m_sync_io);
+  m_snd_sync_io_adapter.emplace(get_logger(), log_pfx, &m_worker, &m_sync_io);
+  m_rcv_sync_io_adapter.emplace(get_logger(), log_pfx, &m_worker, &m_sync_io);
 
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: Created (PEER state) directly from pre-opened native handle.");
-} // Native_socket_stream::Impl::Impl()
+} // Native_socket_stream_impl::Native_socket_stream_impl()
 
-Native_socket_stream::Impl::Impl(sync_io::Native_socket_stream&& sync_io_core_in_peer_state_moved) :
+Native_socket_stream_impl::Native_socket_stream_impl(sync_io::Native_socket_stream&& sync_io_core_in_peer_state_moved) :
   // Adopt the PEER-state core given to us by user.
-  Impl(std::move(sync_io_core_in_peer_state_moved), nullptr)
+  Native_socket_stream_impl(std::move(sync_io_core_in_peer_state_moved), nullptr)
 {
   using flow::util::ostream_op_string;
 
   // Lastly, as we're in PEER state, set up send-ops and receive-ops state machines.
 
   const auto log_pfx = ostream_op_string("Socket stream [", *this, ']');
-  m_snd_sync_io_adapter.emplace(get_logger(), log_pfx, m_worker.get(), &m_sync_io);
-  m_rcv_sync_io_adapter.emplace(get_logger(), log_pfx, m_worker.get(), &m_sync_io);
+  m_snd_sync_io_adapter.emplace(get_logger(), log_pfx, &m_worker, &m_sync_io);
+  m_rcv_sync_io_adapter.emplace(get_logger(), log_pfx, &m_worker, &m_sync_io);
 
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: "
                  "Created (PEER state) by adopting fresh sync_io::Native_socket_stream core.");
 }
 
-Native_socket_stream::Impl::~Impl()
+Native_socket_stream_impl::~Native_socket_stream_impl()
 {
   using flow::async::Single_thread_task_loop;
   using flow::async::reset_thread_pinning;
@@ -116,7 +117,7 @@ Native_socket_stream::Impl::~Impl()
    * preventing any more handlers from running at all (any handler possibly running now is the last one to run); (2)
    * at that point Task_engine::run() exits, hence thread W exits; (3) joins thread W (waits for it to
    * exit); (4) returns.  That's a lot, but it's non-blocking. */
-  m_worker->stop();
+  m_worker.stop();
   // Thread W is (synchronously!) no more.
 
   /* As we promised in doc header(s), the destruction of *this shall cause any registered completion
@@ -161,7 +162,7 @@ Native_socket_stream::Impl::~Impl()
   FLOW_LOG_INFO("Socket stream [" << *this << "]: Continuing shutdown.  Next we will run pending handlers from some "
                 "other thread.  In this user thread we will await those handlers' completion and then return.");
 
-  Single_thread_task_loop one_thread(get_logger(), ostream_op_string("SckDeinit-", nickname()));
+  Single_thread_task_loop one_thread{get_logger(), ostream_op_string("SckDeinit-", nickname())};
   one_thread.start([&]()
   {
     reset_thread_pinning(get_logger()); // Don't inherit any strange core-affinity.  Float free.
@@ -169,7 +170,7 @@ Native_socket_stream::Impl::~Impl()
     FLOW_LOG_INFO("Socket stream [" << *this << "]: "
                   "In transient finisher thread: Shall run all pending internal handlers (typically none).");
 
-    const auto task_engine = m_worker->task_engine();
+    const auto task_engine = m_worker.task_engine();
     task_engine->restart();
     const auto count = task_engine->poll();
     if (count != 0)
@@ -184,9 +185,9 @@ Native_socket_stream::Impl::~Impl()
     FLOW_LOG_INFO("Transient finisher exiting.  (Send-ops and receive-ops de-init may follow.)");
   }); // one_thread.start()
   // Here thread exits/joins synchronously.  (But the adapters might run their own similar ones.)
-} // Native_socket_stream::Impl::~Impl()
+} // Native_socket_stream_impl::~Native_socket_stream_impl()
 
-bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
+bool Native_socket_stream_impl::sync_connect(const Shared_name& absolute_name, Error_code* err_code)
 {
   using flow::util::ostream_op_string;
 
@@ -203,88 +204,119 @@ bool Native_socket_stream::Impl::sync_connect(const Shared_name& absolute_name, 
   {
     // PEER state!  Yay!  Do the thing PEER-state ctor would have done.
     const auto log_pfx = ostream_op_string("Socket stream [", *this, ']');
-    m_snd_sync_io_adapter.emplace(get_logger(), log_pfx, m_worker.get(), &m_sync_io);
-    m_rcv_sync_io_adapter.emplace(get_logger(), log_pfx, m_worker.get(), &m_sync_io);
+    m_snd_sync_io_adapter.emplace(get_logger(), log_pfx, &m_worker, &m_sync_io);
+    m_rcv_sync_io_adapter.emplace(get_logger(), log_pfx, &m_worker, &m_sync_io);
   }
   // else { Back in NULL state.  Perhaps they'll sync_connect() again later. }
 
   return true;
-} // Native_socket_stream::Impl::sync_connect()
+} // Native_socket_stream_impl::sync_connect()
 
-util::Process_credentials
-  Native_socket_stream::Impl::remote_peer_process_credentials(Error_code* err_code) const
+const util::Process_credentials&
+  Native_socket_stream_impl::remote_peer_process_credentials(Error_code* err_code) const
 {
   return m_sync_io.remote_peer_process_credentials(err_code);
 }
 
-bool Native_socket_stream::Impl::remote_peer_process_credentials(const util::Process_credentials& creds)
+bool Native_socket_stream_impl::remote_peer_process_credentials(const util::Process_credentials& creds)
 {
   return m_sync_io.remote_peer_process_credentials(creds);
 }
 
-const std::string& Native_socket_stream::Impl::nickname() const
+const std::string& Native_socket_stream_impl::nickname() const
 {
   return m_sync_io.nickname();
 }
 
-std::ostream& operator<<(std::ostream& os, const Native_socket_stream::Impl& val)
+std::ostream& operator<<(std::ostream& os, const Native_socket_stream_impl& val)
 {
   return os << '[' << val.nickname() << "]@" << static_cast<const void*>(&val);
 }
 
 // Send-ops.
 
-bool Native_socket_stream::Impl::send_blob(const util::Blob_const& blob, Error_code* err_code)
+bool Native_socket_stream_impl::send_blob(const util::Blob_const& blob, Error_code* err_code)
 {
   return m_snd_sync_io_adapter
            ? (m_snd_sync_io_adapter->send_blob(blob, err_code), true) // It's void.
            : false; // Not in PEER state (ditto all over the place below).
 }
 
-bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl, const util::Blob_const& meta_blob,
-                                                    Error_code* err_code)
+bool Native_socket_stream_impl::send_native_handle(Native_handle hndl, const util::Blob_const& meta_blob,
+                                                   Error_code* err_code)
 {
   return m_snd_sync_io_adapter
            ? (m_snd_sync_io_adapter->send_native_handle(hndl, meta_blob, err_code), true) // It's void.
            : false;
 }
 
-bool Native_socket_stream::Impl::end_sending()
+bool Native_socket_stream_impl::end_sending()
 {
-  using flow::async::Task_asio_err;
-
-  return async_end_sending(Task_asio_err());
+  return async_end_sending({});
 }
 
-bool Native_socket_stream::Impl::async_end_sending(flow::async::Task_asio_err&& on_done_func)
+bool Native_socket_stream_impl::async_end_sending(flow::async::Task_asio_err&& on_done_func)
 {
   return m_snd_sync_io_adapter
            ? m_snd_sync_io_adapter->async_end_sending(std::move(on_done_func))
            : false;
 }
 
-bool Native_socket_stream::Impl::auto_ping(util::Fine_duration period)
+bool Native_socket_stream_impl::auto_ping(util::Fine_duration period)
 {
   return m_snd_sync_io_adapter
            ? m_snd_sync_io_adapter->auto_ping(period)
            : false;
 }
 
-size_t Native_socket_stream::Impl::send_meta_blob_max_size() const
+stat::Blob_snd_stats Native_socket_stream_impl::blob_send_stats() const
+{
+  /* @todo This repeats the inner-layer (sync_io core) knowledge of which max-blob-size to use;
+   * consider having sync_io::Native_socket_stream_impl expose a default-stats constant or static factory.
+   * See also blob_receive_stats() in this file. */
+  return m_snd_sync_io_adapter
+           ? m_snd_sync_io_adapter->blob_send_stats()
+           : Blob_snd_stats{Native_socket_stream_cfg::S_MAX_META_BLOB_LENGTH};
+}
+
+void Native_socket_stream_impl::blob_send_stats_reset()
+{
+  if (m_snd_sync_io_adapter)
+  {
+    m_snd_sync_io_adapter->blob_send_stats_reset();
+  }
+}
+
+stat::Blob_snd_stats Native_socket_stream_impl::native_handle_send_stats() const
+{
+  return m_snd_sync_io_adapter
+           ? m_snd_sync_io_adapter->native_handle_send_stats()
+           : Blob_snd_stats{Native_socket_stream_cfg::S_MAX_META_BLOB_LENGTH};
+}
+
+void Native_socket_stream_impl::native_handle_send_stats_reset()
+{
+  if (m_snd_sync_io_adapter)
+  {
+    m_snd_sync_io_adapter->native_handle_send_stats_reset();
+  }
+}
+
+size_t Native_socket_stream_impl::send_meta_blob_max_size() const
 {
   return send_blob_max_size();
 }
 
-size_t Native_socket_stream::Impl::send_blob_max_size() const
+size_t Native_socket_stream_impl::send_blob_max_size() const
 {
   return m_sync_io.send_blob_max_size();
 }
 
 // Receive-ops.
 
-bool Native_socket_stream::Impl::async_receive_native_handle(Native_handle* target_hndl,
-                                                             const util::Blob_mutable& target_meta_blob,
-                                                             flow::async::Task_asio_err_sz&& on_done_func)
+bool Native_socket_stream_impl::async_receive_native_handle(Native_handle* target_hndl,
+                                                            const util::Blob_mutable& target_meta_blob,
+                                                            flow::async::Task_asio_err_sz&& on_done_func)
 {
   return m_rcv_sync_io_adapter
            ? (m_rcv_sync_io_adapter->async_receive_native_handle
@@ -293,33 +325,64 @@ bool Native_socket_stream::Impl::async_receive_native_handle(Native_handle* targ
            : false;
 }
 
-bool Native_socket_stream::Impl::async_receive_blob(const util::Blob_mutable& target_blob,
-                                                    flow::async::Task_asio_err_sz&& on_done_func)
+bool Native_socket_stream_impl::async_receive_blob(const util::Blob_mutable& target_blob,
+                                                   flow::async::Task_asio_err_sz&& on_done_func)
 {
   return m_rcv_sync_io_adapter
            ? (m_rcv_sync_io_adapter->async_receive_blob(target_blob, std::move(on_done_func)), true) // It's void.
            : false;
 }
 
-bool Native_socket_stream::Impl::idle_timer_run(util::Fine_duration timeout)
+bool Native_socket_stream_impl::idle_timer_run(util::Fine_duration timeout)
 {
   return m_rcv_sync_io_adapter
            ? m_rcv_sync_io_adapter->idle_timer_run(timeout)
            : false;
 }
 
-size_t Native_socket_stream::Impl::receive_meta_blob_max_size() const
+stat::Blob_rcv_stats Native_socket_stream_impl::blob_receive_stats() const
+{
+  // @todo Same as blob_send_stats() @todo in this file.
+  return m_rcv_sync_io_adapter
+           ? m_rcv_sync_io_adapter->blob_receive_stats()
+           : Blob_rcv_stats{Native_socket_stream_cfg::S_MAX_META_BLOB_LENGTH};
+}
+
+void Native_socket_stream_impl::blob_receive_stats_reset()
+{
+  if (m_rcv_sync_io_adapter)
+  {
+    m_rcv_sync_io_adapter->blob_receive_stats_reset();
+  }
+}
+
+stat::Blob_rcv_stats Native_socket_stream_impl::native_handle_receive_stats() const
+{
+  return m_rcv_sync_io_adapter
+           ? m_rcv_sync_io_adapter->native_handle_receive_stats()
+           : Blob_rcv_stats{Native_socket_stream_cfg::S_MAX_META_BLOB_LENGTH};
+}
+
+void Native_socket_stream_impl::native_handle_receive_stats_reset()
+{
+  if (m_rcv_sync_io_adapter)
+  {
+    m_rcv_sync_io_adapter->native_handle_receive_stats_reset();
+  }
+}
+
+size_t Native_socket_stream_impl::receive_meta_blob_max_size() const
 {
   return receive_blob_max_size();
 }
 
-size_t Native_socket_stream::Impl::receive_blob_max_size() const
+size_t Native_socket_stream_impl::receive_blob_max_size() const
 {
   return m_sync_io.receive_blob_max_size();
 }
 
 #if 0 // See the declaration in class { body }; explains why `if 0` yet still here.
-sync_io::Native_socket_stream Native_socket_stream::Impl::release()
+sync_io::Native_socket_stream Native_socket_stream_impl::release()
 {
   using util::sync_io::Asio_waitable_native_handle;
   using util::sync_io::Task_ptr;
@@ -356,8 +419,8 @@ sync_io::Native_socket_stream Native_socket_stream::Impl::release()
 #ifndef NDEBUG
   bool ok =
 #endif
-  m_sync_io.replace_event_wait_handles([this]() -> Asio_waitable_native_handle
-                                         { return Asio_waitable_native_handle(*(m_worker->task_engine())); });
+  m_sync_io.replace_event_wait_handles([this]() -> auto
+                                         { return Asio_waitable_native_handle{*(m_worker->task_engine())}; });
   assert(ok && "Should work if m_sync_io.release() worked as advertised.");
 
   /* Lastly do what (NULL-state) ctor does regarding m_*_sync_io_adapter... namely leaves them null.
@@ -371,7 +434,7 @@ sync_io::Native_socket_stream Native_socket_stream::Impl::release()
   m_snd_sync_io_adapter.reset();
 
   return core;
-} // Native_socket_stream::Impl::release()
+} // Native_socket_stream_impl::release()
 #endif
 
 } // namespace ipc::transport

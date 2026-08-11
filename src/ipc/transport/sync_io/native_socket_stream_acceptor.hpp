@@ -93,7 +93,7 @@ public:
    *        See #Async_io_obj API.
    */
   explicit Native_socket_stream_acceptor(flow::log::Logger* logger_ptr, const Shared_name& absolute_name,
-                                         Error_code* err_code = 0);
+                                         Error_code* err_code = nullptr);
 
   /**
    * All notes from #Async_io_obj API counterpart API apply, except that no completion handler(s) are fired,
@@ -322,11 +322,11 @@ bool Native_socket_stream_acceptor::replace_event_wait_handles(const Create_ev_w
 
   assert(m_ev_wait_hndl.is_open());
 
-  Native_handle saved(m_ev_wait_hndl.release());
+  Native_handle saved{m_ev_wait_hndl.release()};
   m_ev_wait_hndl = create_ev_wait_hndl_func();
   m_ev_wait_hndl.assign(saved);
 
   return true;
-} // Native_socket_stream::Impl::replace_event_wait_handles()
+} // Native_socket_stream_acceptor::replace_event_wait_handles()
 
 } // namespace ipc::transport::sync_io

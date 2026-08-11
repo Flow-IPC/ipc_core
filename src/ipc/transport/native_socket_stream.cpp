@@ -17,8 +17,7 @@
 
 /// @file
 
-// Include Native_socket_stream::Impl class body to complete that type and enable pImpl forwarding.
-#include "ipc/transport/detail/native_socket_stream_impl.hpp"
+#include "ipc/transport/native_socket_stream.hpp"
 #include "ipc/transport/sync_io/native_socket_stream.hpp"
 #include <boost/move/make_unique.hpp>
 
@@ -29,28 +28,16 @@ namespace ipc::transport
 
 const Shared_name& Native_socket_stream::S_RESOURCE_TYPE_ID = Sync_io_obj::S_RESOURCE_TYPE_ID;
 
-// Implementations (strict pImpl-idiom style).
+// Implementations.
 
-// The performant move semantics we get delightfully free with pImpl; they'll just move-to/from the unique_ptr m_impl.
-
-Native_socket_stream::Native_socket_stream(Native_socket_stream&&) = default;
-Native_socket_stream& Native_socket_stream::operator=(Native_socket_stream&&) = default;
-
-// Oh and this helper is needed; just see its doc header for rationale.
+Native_socket_stream::Native_socket_stream(Native_socket_stream&&) = default; // Nice and performant: ptr exchange.
+Native_socket_stream& Native_socket_stream::operator=(Native_socket_stream&&) = default; // Ditto.
 
 Native_socket_stream::Impl_ptr& Native_socket_stream::impl() const
 {
-  using boost::movelib::make_unique;
-
-  if (!m_impl)
-  {
-    m_impl = make_unique<Impl>(nullptr, "");
-  }
-
-  return m_impl;
+  return m_impl ? m_impl
+                : (m_impl = boost::movelib::make_unique<Impl>(nullptr, ""));
 }
-
-// Provide specific default ctor for documentation elegance:
 
 Native_socket_stream::Native_socket_stream() :
   Native_socket_stream(nullptr, "")
@@ -58,7 +45,7 @@ Native_socket_stream::Native_socket_stream() :
   // Yay.
 }
 
-// The rest is strict forwarding to impl() (essentially m_impl).
+// The rest is forwarding to impl() (essentially m_impl) a-la pImpl.
 
 Native_socket_stream::Native_socket_stream(flow::log::Logger* logger_ptr, util::String_view nickname_str) :
   m_impl(boost::movelib::make_unique<Impl>(logger_ptr, nickname_str))
@@ -91,7 +78,7 @@ bool Native_socket_stream::sync_connect(const Shared_name& absolute_name, Error_
   return impl()->sync_connect(absolute_name, err_code);
 }
 
-util::Process_credentials Native_socket_stream::remote_peer_process_credentials(Error_code* err_code) const
+const util::Process_credentials& Native_socket_stream::remote_peer_process_credentials(Error_code* err_code) const
 {
   return impl()->remote_peer_process_credentials(err_code);
 }
@@ -132,6 +119,26 @@ bool Native_socket_stream::auto_ping(util::Fine_duration period)
   return impl()->auto_ping(period);
 }
 
+stat::Blob_snd_stats Native_socket_stream::blob_send_stats() const
+{
+  return impl()->blob_send_stats();
+}
+
+void Native_socket_stream::blob_send_stats_reset()
+{
+  impl()->blob_send_stats_reset();
+}
+
+stat::Blob_snd_stats Native_socket_stream::native_handle_send_stats() const
+{
+  return impl()->native_handle_send_stats();
+}
+
+void Native_socket_stream::native_handle_send_stats_reset()
+{
+  impl()->native_handle_send_stats_reset();
+}
+
 size_t Native_socket_stream::receive_meta_blob_max_size() const
 {
   return impl()->receive_meta_blob_max_size();
@@ -147,31 +154,31 @@ bool Native_socket_stream::idle_timer_run(util::Fine_duration timeout)
   return impl()->idle_timer_run(timeout);
 }
 
+stat::Blob_rcv_stats Native_socket_stream::blob_receive_stats() const
+{
+  return impl()->blob_receive_stats();
+}
+
+void Native_socket_stream::blob_receive_stats_reset()
+{
+  impl()->blob_receive_stats_reset();
+}
+
+stat::Blob_rcv_stats Native_socket_stream::native_handle_receive_stats() const
+{
+  return impl()->native_handle_receive_stats();
+}
+
+void Native_socket_stream::native_handle_receive_stats_reset()
+{
+  impl()->native_handle_receive_stats_reset();
+}
+
 // `friend`ship needed for this "non-method method":
 
 std::ostream& operator<<(std::ostream& os, const Native_socket_stream& val)
 {
   return os << *(val.impl());
-}
-
-// Though, some of them (the templates) had to be written as _fwd() non-templated helpers that take various Function<>s.
-
-bool Native_socket_stream::async_end_sending_fwd(flow::async::Task_asio_err&& on_done_func)
-{
-  return impl()->async_end_sending(std::move(on_done_func));
-}
-
-bool Native_socket_stream::async_receive_native_handle_fwd(Native_handle* target_hndl,
-                                                           const util::Blob_mutable& target_meta_blob,
-                                                           flow::async::Task_asio_err_sz&& on_done_func)
-{
-  return impl()->async_receive_native_handle(target_hndl, target_meta_blob, std::move(on_done_func));
-}
-
-bool Native_socket_stream::async_receive_blob_fwd(const util::Blob_mutable& target_blob,
-                                                  flow::async::Task_asio_err_sz&& on_done_func)
-{
-  return impl()->async_receive_blob(target_blob, std::move(on_done_func));
 }
 
 } // namespace ipc::transport

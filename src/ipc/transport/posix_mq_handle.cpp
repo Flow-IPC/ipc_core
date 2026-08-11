@@ -157,12 +157,12 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
       }
       if (raw != -1)
       {
-        m_mq = Native_handle(raw);
+        m_mq = Native_handle{raw};
       }
 
       if (m_mq.null())
       {
-        sys_err_code = Error_code(errno, system_category());
+        sys_err_code = {errno, system_category()};
         return false;
       }
       // else
@@ -249,7 +249,7 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
 
       // Disregard any error.  In Linux, by the way, only EBADF is possible apparently; should be fine.
       mq_close(m_mq.m_native_handle);
-      m_mq = Native_handle();
+      m_mq = {};
     }
 
     if (!sys_err_code)
@@ -279,7 +279,7 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
     }
     else
     {
-      throw Runtime_error(sys_err_code, FLOW_UTIL_WHERE_AM_I_STR());
+      throw Runtime_error{sys_err_code, FLOW_UTIL_WHERE_AM_I_STR()};
     }
   } // if (sys_err_code)
   // else { Cool! }
@@ -332,7 +332,7 @@ Posix_mq_handle::Posix_mq_handle(flow::log::Logger* logger_ptr, const Shared_nam
     const auto raw = mq_open(shared_name_to_mq_name(absolute_name()).c_str(), O_RDWR);
     if (raw != -1)
     {
-      m_mq = Native_handle(raw);
+      m_mq = Native_handle{raw};
     }
 
     if (m_mq.null())
@@ -340,7 +340,7 @@ Posix_mq_handle::Posix_mq_handle(flow::log::Logger* logger_ptr, const Shared_nam
       FLOW_LOG_WARNING
         ("Posix_mq_handle [" << *this << "]: mq_open() error (error details follow) while "
          "constructing MQ handle to MQ at name [" << absolute_name() << "] in open-only mode.");
-      sys_err_code = Error_code(errno, system_category());
+      sys_err_code = {errno, system_category()};
     }
     else
     {
@@ -353,7 +353,7 @@ Posix_mq_handle::Posix_mq_handle(flow::log::Logger* logger_ptr, const Shared_nam
 
         // Disregard any error.  In Linux, by the way, only EBADF is possible apparently; it's fine.
         mq_close(m_mq.m_native_handle);
-        m_mq = Native_handle();
+        m_mq = {};
       }
       else
       {
@@ -372,7 +372,7 @@ Posix_mq_handle::Posix_mq_handle(flow::log::Logger* logger_ptr, const Shared_nam
     }
     else
     {
-      throw Runtime_error(sys_err_code, FLOW_UTIL_WHERE_AM_I_STR());
+      throw Runtime_error{sys_err_code, FLOW_UTIL_WHERE_AM_I_STR()};
     }
   }
   // else { Cool! }
@@ -432,16 +432,16 @@ Error_code Posix_mq_handle::epoll_setup()
     auto& epoll_hndl = *epoll_hndl_ptr;
     auto& interrupt_detector = snd_else_rcv ? m_interrupt_detector_snd : m_interrupt_detector_rcv;
 
-    epoll_hndl = Native_handle(epoll_create1(0));
+    epoll_hndl = Native_handle{epoll_create1(0)};
     if (epoll_hndl.m_native_handle == -1)
     {
       FLOW_LOG_WARNING("Posix_mq_handle [" << *this << "]: Created MQ handle fine, but epoll_create1() failed; "
                        "details follow.");
-      sys_err_code = Error_code(errno, system_category());
+      sys_err_code = {errno, system_category()};
 
       // Clean up.
 
-      epoll_hndl = Native_handle(); // No-op as of this writing, but just to keep it maintainable do it anyway.
+      epoll_hndl = {}; // No-op as of this writing, but just to keep it maintainable do it anyway.
 
       Error_code sink;
       m_interrupt_detector_snd.close(sink);
@@ -451,7 +451,7 @@ Error_code Posix_mq_handle::epoll_setup()
 
       // Disregard any error.  In Linux, by the way, only EBADF is possible apparently; should be fine.
       mq_close(m_mq.m_native_handle);
-      m_mq = Native_handle();
+      m_mq = {};
       return;
     }
     // else if (epoll_hndl.m_native_handle != -1)
@@ -468,30 +468,22 @@ Error_code Posix_mq_handle::epoll_setup()
     {
       FLOW_LOG_WARNING("Posix_mq_handle [" << *this << "]: Created MQ handle fine, but an epoll_ctl() failed; "
                        "snd_else_rcv = [" << snd_else_rcv << "]; details follow.");
-      sys_err_code = Error_code(errno, system_category());
+      sys_err_code = {errno, system_category()};
 
       // Clean up everything.
       close(epoll_hndl.m_native_handle);
-      epoll_hndl = Native_handle();
+      epoll_hndl = {};
       // Disregard any error.  In Linux, by the way, only EBADF is possible apparently; should be fine.
       mq_close(m_mq.m_native_handle);
-      m_mq = Native_handle();
+      m_mq = {};
       return;
     }
   }; // const auto setup =
 
-  setup(&m_epoll_hndl_snd, true);
-  if (!sys_err_code)
-  {
-    setup(&m_epoll_hndl_rcv, false);
-    if (sys_err_code)
-    {
-      // Have to undo first setup(), except m_mq+pipes cleanup was already done by 2nd setup().
-      close(m_epoll_hndl_snd.m_native_handle);
-      m_epoll_hndl_snd = Native_handle();
-    }
-  }
-  // else { 1st setup() cleaned everything up. }
+  (setup(&m_epoll_hndl_snd, true), sys_err_code) || // Do setup1.  If it succeeds...
+    ((setup(&m_epoll_hndl_rcv, false), sys_err_code) && // ...do setup2.  If it fails...
+       (// ...undo setup1, except m_mq+pipes cleanup was already done by setup2's failure, so merely:
+        close(m_epoll_hndl_snd.m_native_handle), m_epoll_hndl_snd = {}, true));
 
   return sys_err_code;
 } // Posix_mq_handle::epoll_setup()
@@ -532,14 +524,14 @@ Posix_mq_handle& Posix_mq_handle::operator=(Posix_mq_handle&& src)
 
   if (&src != this)
   {
-    m_mq = Native_handle();
+    m_mq = {};
     m_absolute_name.clear();
-    m_epoll_hndl_snd = Native_handle();
-    m_epoll_hndl_rcv = Native_handle();
-    m_interrupter_snd = Pipe_writer(m_nb_task_engine);
-    m_interrupt_detector_snd = Pipe_reader(m_nb_task_engine);
-    m_interrupter_rcv = Pipe_writer(m_nb_task_engine);
-    m_interrupt_detector_rcv = Pipe_reader(m_nb_task_engine);
+    m_epoll_hndl_snd = {};
+    m_epoll_hndl_rcv = {};
+    m_interrupter_snd = Pipe_writer{m_nb_task_engine};
+    m_interrupt_detector_snd = Pipe_reader{m_nb_task_engine};
+    m_interrupter_rcv = Pipe_writer{m_nb_task_engine};
+    m_interrupt_detector_rcv = Pipe_reader{m_nb_task_engine};
 
     swap(*this, src);
   }
@@ -596,17 +588,17 @@ void swap(Posix_mq_handle& val1, Posix_mq_handle& val2)
     {
       // Leave their stupid task engines in-place.  Do need to reassociate them with the swapped FDs though.
       val.m_interrupter_snd
-        = fds[0].null() ? Pipe_writer(val.m_nb_task_engine)
-                        : Pipe_writer(val.m_nb_task_engine, fds[0].m_native_handle);
+        = fds[0].null() ? Pipe_writer{val.m_nb_task_engine}
+                        : Pipe_writer{val.m_nb_task_engine, fds[0].m_native_handle};
       val.m_interrupter_rcv
-        = fds[1].null() ? Pipe_writer(val.m_nb_task_engine)
-                        : Pipe_writer(val.m_nb_task_engine, fds[1].m_native_handle);
+        = fds[1].null() ? Pipe_writer{val.m_nb_task_engine}
+                        : Pipe_writer{val.m_nb_task_engine, fds[1].m_native_handle};
       val.m_interrupt_detector_snd
-        = fds[2].null() ? Pipe_reader(val.m_nb_task_engine)
-                        : Pipe_reader(val.m_nb_task_engine, fds[2].m_native_handle);
+        = fds[2].null() ? Pipe_reader{val.m_nb_task_engine}
+                        : Pipe_reader{val.m_nb_task_engine, fds[2].m_native_handle};
       val.m_interrupt_detector_rcv
-        = fds[3].null() ? Pipe_reader(val.m_nb_task_engine)
-                        : Pipe_reader(val.m_nb_task_engine, fds[3].m_native_handle);
+        = fds[3].null() ? Pipe_reader{val.m_nb_task_engine}
+                        : Pipe_reader{val.m_nb_task_engine, fds[3].m_native_handle};
     };
     reload(val1, fds2); // Swap 'em.
     reload(val2, fds1);
@@ -903,7 +895,7 @@ bool Posix_mq_handle::try_receive(util::Blob_mutable* blob, Error_code* err_code
                            static_cast<char*>(blob->data()),
                            blob->size(), &pri_ignored)) >= 0)
   {
-    *blob = Blob_mutable(blob->data(), n_rcvd);
+    *blob = Blob_mutable{blob->data(), size_t(n_rcvd)};
     FLOW_LOG_TRACE("Received message sized [" << n_rcvd << "].");
     if (blob->size() != 0)
     {
@@ -962,7 +954,7 @@ void Posix_mq_handle::receive(util::Blob_mutable* blob, Error_code* err_code)
                              static_cast<char*>(blob->data()),
                              blob->size(), &pri_ignored)) >= 0)
     {
-      *blob = Blob_mutable(blob->data(), n_rcvd);
+      *blob = Blob_mutable{blob->data(), size_t(n_rcvd)};
       FLOW_LOG_TRACE("Received message sized [" << n_rcvd << "].");
       if (blob->size() != 0)
       {
@@ -1034,7 +1026,7 @@ bool Posix_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duratio
                              static_cast<char*>(blob->data()),
                              blob->size(), &pri_ignored)) >= 0)
     {
-      *blob = Blob_mutable(blob->data(), n_rcvd);
+      *blob = Blob_mutable{blob->data(), size_t(n_rcvd)};
       FLOW_LOG_TRACE("Received message sized [" << n_rcvd << "].");
       if (blob->size() != 0)
       {
@@ -1179,7 +1171,8 @@ bool Posix_mq_handle::allow_receives()
   return allow_impl<false>();
 }
 
-bool Posix_mq_handle::wait_impl(util::Fine_duration timeout_from_now_or_none, bool snd_else_rcv, Error_code* err_code)
+template<bool SND_ELSE_RCV>
+bool Posix_mq_handle::wait_impl(util::Fine_duration timeout_from_now_or_none, Error_code* err_code)
 {
   using util::Fine_time_pt;
   using util::Fine_duration;
@@ -1191,7 +1184,7 @@ bool Posix_mq_handle::wait_impl(util::Fine_duration timeout_from_now_or_none, bo
   using ::epoll_wait;
   using Epoll_event = ::epoll_event;
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, wait_impl, timeout_from_now_or_none, snd_else_rcv, _1);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, wait_impl<SND_ELSE_RCV>, timeout_from_now_or_none, _1);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   assert((!m_mq.null())
@@ -1205,27 +1198,27 @@ bool Posix_mq_handle::wait_impl(util::Fine_duration timeout_from_now_or_none, bo
   {
     epoll_timeout_from_now_ms = -1;
     FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Infinite-await-unstarved for "
-                   "snd_else_rcv [" << snd_else_rcv << "].  Will perform an epoll_wait().");
+                   "snd_else_rcv [" << SND_ELSE_RCV << "].  Will perform an epoll_wait().");
   }
   else
   {
     epoll_timeout_from_now = round<milliseconds>(timeout_from_now_or_none);
     FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Blocking-await/poll-unstarved for "
-                   "snd_else_rcv [" << snd_else_rcv << "]; timeout ~[" << epoll_timeout_from_now << "] -- "
+                   "snd_else_rcv [" << SND_ELSE_RCV << "]; timeout ~[" << epoll_timeout_from_now << "] -- "
                    "if 0 then poll.  Will perform an epoll_wait().");
     epoll_timeout_from_now_ms = int(epoll_timeout_from_now.count());
   }
 
   array<Epoll_event, 2> evs; // Only one possible event (we choose 1 of 2 event sets).
-  const auto epoll_result
-    = epoll_wait((snd_else_rcv ? m_epoll_hndl_snd : m_epoll_hndl_rcv)
-                   .m_native_handle,
-                 evs.begin(), 1, epoll_timeout_from_now_ms);
+  Native_handle::handle_t epoll_hndl;
+  if constexpr(SND_ELSE_RCV) { epoll_hndl = m_epoll_hndl_snd.m_native_handle; } else
+                             { epoll_hndl = m_epoll_hndl_rcv.m_native_handle; }
+  const auto epoll_result = epoll_wait(epoll_hndl, evs.begin(), 1, epoll_timeout_from_now_ms);
   if (epoll_result == -1)
   {
     FLOW_LOG_WARNING("Posix_mq_handle [" << *this << "]: epoll_wait() yielded error.  Details follow.");
 
-    const auto& sys_err_code = *err_code = Error_code(errno, system_category());
+    const auto& sys_err_code = *err_code = {errno, system_category()};
     FLOW_ERROR_SYS_ERROR_LOG_WARNING();
     return false;
   }
@@ -1240,12 +1233,12 @@ bool Posix_mq_handle::wait_impl(util::Fine_duration timeout_from_now_or_none, bo
     if (timeout_from_now_or_none == Fine_duration::max())
     {
       FLOW_LOG_INFO("Posix_mq_handle [" << *this << "]: Infinite-await-unstarved for "
-                    "snd_else_rcv [" << snd_else_rcv << "]: interrupted.");
+                    "snd_else_rcv [" << SND_ELSE_RCV << "]: interrupted.");
     }
     else
     {
       FLOW_LOG_INFO("Posix_mq_handle [" << *this << "]: Blocking-await/poll-unstarved for "
-                    "snd_else_rcv [" << snd_else_rcv << "]; timeout ~[" << epoll_timeout_from_now << "] -- "
+                    "snd_else_rcv [" << SND_ELSE_RCV << "]; timeout ~[" << epoll_timeout_from_now << "] -- "
                     "if 0 then poll: interrupted.");
     }
     *err_code = error::Code::S_INTERRUPTED;
@@ -1257,12 +1250,12 @@ bool Posix_mq_handle::wait_impl(util::Fine_duration timeout_from_now_or_none, bo
   if (timeout_from_now_or_none == Fine_duration::max())
   {
     FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Infinite-await-unstarved for "
-                   "snd_else_rcv [" << snd_else_rcv << "]: succeeded? = [" << success << "].");
+                   "snd_else_rcv [" << SND_ELSE_RCV << "]: succeeded? = [" << success << "].");
   }
   else
   {
     FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Blocking-await/poll-unstarved for "
-                   "snd_else_rcv [" << snd_else_rcv << "]; timeout ~[" << epoll_timeout_from_now << "] -- "
+                   "snd_else_rcv [" << SND_ELSE_RCV << "]; timeout ~[" << epoll_timeout_from_now << "] -- "
                    "if 0 then poll: succeeded? = [" << success << "].");
   }
 
@@ -1272,32 +1265,32 @@ bool Posix_mq_handle::wait_impl(util::Fine_duration timeout_from_now_or_none, bo
 
 bool Posix_mq_handle::is_sendable(Error_code* err_code)
 {
-  return wait_impl(util::Fine_duration::zero(), true, err_code);
+  return wait_impl<true>(util::Fine_duration::zero(), err_code);
 }
 
 void Posix_mq_handle::wait_sendable(Error_code* err_code)
 {
-  wait_impl(util::Fine_duration::max(), true, err_code);
+  wait_impl<true>(util::Fine_duration::max(), err_code);
 }
 
 bool Posix_mq_handle::timed_wait_sendable(util::Fine_duration timeout_from_now, Error_code* err_code)
 {
-  return wait_impl(timeout_from_now, true, err_code);
+  return wait_impl<true>(timeout_from_now, err_code);
 }
 
 bool Posix_mq_handle::is_receivable(Error_code* err_code)
 {
-  return wait_impl(util::Fine_duration::zero(), false, err_code);
+  return wait_impl<false>(util::Fine_duration::zero(), err_code);
 }
 
 void Posix_mq_handle::wait_receivable(Error_code* err_code)
 {
-  wait_impl(util::Fine_duration::max(), false, err_code);
+  wait_impl<false>(util::Fine_duration::max(), err_code);
 }
 
 bool Posix_mq_handle::timed_wait_receivable(util::Fine_duration timeout_from_now, Error_code* err_code)
 {
-  return wait_impl(timeout_from_now, false, err_code);
+  return wait_impl<false>(timeout_from_now, err_code);
 }
 
 Native_handle Posix_mq_handle::native_handle() const
@@ -1332,7 +1325,7 @@ void Posix_mq_handle::remove_persistent(flow::log::Logger* logger_ptr, // Static
 
   FLOW_LOG_WARNING("Posix_mq @ Shared_name[" << absolute_name << "]: While removing persistent MQ:"
                    "mq_unlink() yielded error.  Details follow.");
-  const auto& sys_err_code = *err_code = Error_code(errno, system_category());
+  const auto& sys_err_code = *err_code = {errno, system_category()};
   FLOW_ERROR_SYS_ERROR_LOG_WARNING();
 } // Posix_mq_handle::remove_persistent()
 
@@ -1351,8 +1344,8 @@ bool Posix_mq_handle::handle_mq_api_result(int result, Error_code* err_code, uti
                    "Details follow.");
   const auto& sys_err_code = *err_code
     = (errno == EMSGSIZE)
-        ? error::Code::S_MQ_MESSAGE_SIZE_OVER_OR_UNDERFLOW // By contract must emit this specific code for this.
-        : Error_code(errno, system_category()); // Otherwise whatever it was.
+        ? Error_code{error::Code::S_MQ_MESSAGE_SIZE_OVER_OR_UNDERFLOW} // By contract: this specific code for this.
+        : Error_code{errno, system_category()}; // Otherwise whatever it was.
   FLOW_ERROR_SYS_ERROR_LOG_WARNING();
 
   return false;

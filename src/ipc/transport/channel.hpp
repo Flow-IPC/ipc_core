@@ -43,7 +43,6 @@ namespace ipc::transport
  * their `sync_io::` counterparts -- directly (in unstructured form) as well.)
  *
  * ### Main use: bundler of peer sender/receiver objects ###
- *
  * This bundling of the local peer objects of 1-2 pipes is the Channel template's core functionality;
  * it is therefore (data-wise -- but code-wise as well) an *extremely* thin wrapper around the stored 2-4 peer
  * objects.  At its core it provides:
@@ -63,7 +62,7 @@ namespace ipc::transport
  *
  * Accordingly it provides a very useful method: async_io_obj().  If you have a `sync_io`-pattern-peer-storing
  * Channel `x` (i.e., `"decltype(x)::S_IS_SYNC_IO_OBJ == true"`), simply call `x.async_io_obj()` to create/return
- * an async-I/O version of it.  For example, is `x` was
+ * an async-I/O version of it.  For example, if `x` was
  * `Channel<transport::sync_io::Native_socket_stream, Null_peer, Null_peer, Null_peer>` containing
  * a single sync_io::Native_socket_stream core (acting as a blob-sender and -receiver), then
  * `x.async_io_obj()` shall return a new channel object with the same structure but with
@@ -74,8 +73,8 @@ namespace ipc::transport
  * Generally speaking, APIs such as ipc::session (e.g., session::Session_server::async_accept())
  * and ipc::transport (e.g., transport::Native_socket_stream::async_accept()) will create
  * and subsume objects in their `sync_io`-pattern form, sometimes called *cores*.  These are lighter-weight
- * (compared to async-I/O ones) and don't auto-start background threads for example.  Yet whenever you want
- * the async-I/O goodies (and you *do* want them) simply `.async_channel()` to get yourself that guy from
+ * (compared to async-I/O ones) and don't auto-start background threads for example.  Yet when/if you want
+ * the async-I/O goodies simply `.async_io_obj()` to get yourself that guy from
  * the `sync_io` *core*.
  *
  * @note Notably struc::Channel (and struc::sync_io::Channel, should you wish to use one directly)
@@ -85,40 +84,12 @@ namespace ipc::transport
  * As a nicety, a Channel itself implements the concepts implemented by each of its stored objects, forwarding API
  * calls to it.  For example, if it bundles a Blob_sender and a Native_handle_sender, then it will itself have
  * send_blob() and send_native_handle(), forwarding to the stored Blob_sender and Native_handle_sender respectively.
- *   - For the main transmission methods, which have almost identical signatures in the `transport::` and
- *     `transport::sync_io::` sender/receiver concepts, each method simply forwards to the appropriate stored
- *     peer object.  Therefore they can be seen as simple syntactic sugar -- it is really just forwarding.
- *     - Blob_sender: send_blob(), send_blob_max_size().
- *     - Native_handle_sender: send_native_handle(), send_meta_blob_max_size().
- *     - Blob_receiver: async_receive_blob(), receive_blob_max_size().
- *     - Native_handle_receiver: async_receive_native_handle(), receive_meta_blob_max_size().
- *   - For the secondary transmission methods, which *also* coincide among certain concepts within
- *     each of those 2 (sync-versus-async) groups, the methods have a combined action for your convenience.
- *     Therefore they actually do something you might find algorithmically helpful rather than mere forwarding.
- *     Here I would single out async_end_sending() specifically.
- *     - Blob_sender, Native_handle_sender:
- *       - auto_ping(): Enables auto-pinging with the same frequency on all (1-2) stored out-pipes.
- *       - end_sending(), async_end_sending(): Performs that operation on all (1-2) stored out-pipes.
- *         `async_end_sending(F)` invokes completion handler `F()` only once *all* (1-2) out-pipes have finished
- *         (this may save you code having to worry about it).
- *         - There is an overload for each of `S_IS_SYNC_IO_OBJ` and `S_IS_ASYNC_IO_OBJ` `Channel` forms
- *     - Blob_receiver, Native_handle_receiver:
- *       - idle_timer_run(): Enables idle-timer with the same idle-timeout on all (1-2) stored in-pipes.
  *
- * In addition the following `transport::sync_io::` methods are available as syntactic sugar if and only if
- * `S_IS_SYNC_IO_OBJ`.
- *   - These method names do not coincide among concepts and therefore are simple forwards:
- *     - Blob_sender:
- *       start_send_blob_ops().
- *     - Native_handle_sender:
- *       start_send_native_handle_ops().
- *     - Blob_receiver:
- *       start_receive_blob_ops().
- *     - Native_handle_receiver:
- *       start_receive_native_handle_ops().
- *   - This method coincides among all 4 potential concepts:
- *     replace_event_wait_handles().
- *     - It invokes the stored peer objects' method of the same name.
+ * In some cases, where in particular it makes sense, a method might actually do something you might find
+ * algorithmically helpful rather than mere forwarding.  E.g., auto_ping() enables auto-pinging with the same
+ * frequency on all (1-2) stored out-pipes.
+ *
+ * Just have a look at the individual doc headers to see what's available.
  *
  * ### How to use: type, initialization ###
  * A Channel stores a `Blob_sender` and `Blob_receiver`; or a `Native_handle_sender` and `Native_handle_receiver`;
@@ -167,7 +138,7 @@ namespace ipc::transport
  *   - Access the peer objects via blob_snd(), blob_rcv(), hndl_snd(), hndl_rcv() (of which only the ones
  *     enabled at compile-time -- not Null_peer in that template-parm slot -- shall compile).  Use their APIs as
  *     desired.
- *   - Use the concept-implementing forwarding API ("Secondary use" above) on `*this` itself.
+ *   - Use the forwarding API ("Secondary use" above) on `*this` itself.
  *
  * Informally: one approach to retain sanity might be -- for a given `*this` -- to use one or the other approach
  * (for a given object), not both.
@@ -275,19 +246,19 @@ namespace ipc::transport
  *
  * Certainly, post-initialization, accessors `{blob|hndl}_{snd|rcv}()` are safe to invoke concurrently.
  *
- * @tparam Blob_sender
+ * @tparam Blob_sender_t
  *         Implements that concept in `transport::` or `transport::sync_io::` if blobs pipe enabled; else Null_peer.
  *         If not Null_peer, and another 1 of remaining 3 parameters is not Null_peer, then they must both be
  *         in `transport::` or both in `transport::sync_io::`.
- * @tparam Blob_receiver
+ * @tparam Blob_receiver_t
  *         Implements that concept in `transport::` or `transport::sync_io::` if blobs pipe enabled; else Null_peer.
  *         If not Null_peer, and another 1 of remaining 3 parameters is not Null_peer, then they must both be
  *         in `transport::` or both in `transport::sync_io::`.
- * @tparam Native_handle_sender
+ * @tparam Native_handle_sender_t
  *         Implements that concept in `transport::` or `transport::sync_io::` if handles pipe enabled; else Null_peer.
  *         If not Null_peer, and another 1 of remaining 3 parameters is not Null_peer, then they must both be
  *         in `transport::` or both in `transport::sync_io::`.
- * @tparam Native_handle_receiver
+ * @tparam Native_handle_receiver_t
  *         Implements that concept in `transport::` or `transport::sync_io::` if handles pipe enabled; else Null_peer.
  *         If not Null_peer, and another 1 of remaining 3 parameters is not Null_peer, then they must both be
  *         in `transport::` or both in `transport::sync_io::`.
@@ -301,22 +272,22 @@ namespace ipc::transport
  * @see Native_handle_receiver: possible implemented concept.
  * @see sync_io::Native_handle_receiver: alternative possible implemented concept (not both).
  */
-template<typename Blob_sender, typename Blob_receiver,
-         typename Native_handle_sender, typename Native_handle_receiver>
+template<typename Blob_sender_t, typename Blob_receiver_t,
+         typename Native_handle_sender_t, typename Native_handle_receiver_t>
 class Channel :
   public flow::log::Log_context
 {
 public:
   // Types.
 
-  /// Alias for `Blob_sender` template parameter.
-  using Blob_sender_obj = Blob_sender;
-  /// Alias for `Blob_receiver` template parameter.
-  using Blob_receiver_obj = Blob_receiver;
-  /// Alias for `Native_handle_sender` template parameter.
-  using Native_handle_sender_obj = Native_handle_sender;
-  /// Alias for `Native_handle_receiver` template parameter.
-  using Native_handle_receiver_obj = Native_handle_receiver;
+  /// Alias for `Blob_sender_t` template parameter.
+  using Blob_sender_obj = Blob_sender_t;
+  /// Alias for `Blob_receiver_t` template parameter.
+  using Blob_receiver_obj = Blob_receiver_t;
+  /// Alias for `Native_handle_sender_t` template parameter.
+  using Native_handle_sender_obj = Native_handle_sender_t;
+  /// Alias for `Native_handle_receiver_t` template parameter.
+  using Native_handle_receiver_obj = Native_handle_receiver_t;
 
   static_assert((std::is_same_v<Blob_sender_obj, Null_peer> && std::is_same_v<Blob_sender_obj, Blob_receiver_obj>)
                 ||
@@ -354,6 +325,22 @@ public:
                               typename Native_handle_sender_obj::Sync_io_obj,
                               typename Native_handle_receiver_obj::Sync_io_obj>;
 
+  /// See concept API.
+  using Blob_snd_stats = typename Blob_sender_obj::Blob_snd_stats;
+  /// See concept API.
+  using Blob_rcv_stats = typename Blob_receiver_obj::Blob_rcv_stats;
+  /// See concept API.
+  using Native_handle_snd_stats = typename Native_handle_sender_obj::Native_handle_snd_stats;
+  /// See concept API.
+  using Native_handle_rcv_stats = typename Native_handle_receiver_obj::Native_handle_rcv_stats;
+
+  /// See concept API.
+  template<typename Msg_resource>
+  using Blob_batch_in = typename Blob_receiver_obj::template Blob_batch_in<Msg_resource>;
+  /// See concept API.
+  template<typename Msg_resource>
+  using Native_handle_batch_in = typename Native_handle_receiver_obj::template Native_handle_batch_in<Msg_resource>;
+
   // Constants.
 
   /// Useful for generic programming: `true` if and only if types imply both blobs and handles pipes are enabled.
@@ -385,6 +372,20 @@ public:
    * (by convention living directly in namespace ipc::transport). */
   static constexpr bool S_IS_ASYNC_IO_OBJ
     = !S_IS_SYNC_IO_OBJ;
+
+  /**
+   * See concept API (Blob_receiver).  Meaningful if and only if #S_HAS_BLOB_PIPE; otherwise it equals
+   * `Null_peer`'s dummy value (0).
+   */
+  static constexpr size_t S_RCV_BLOB_BATCH_SZ_RECOMMENDATION
+    = Blob_receiver_obj::S_RCV_BLOB_BATCH_SZ_RECOMMENDATION;
+
+  /**
+   * See concept API (Native_handle_receiver).  Meaningful if and only if #S_HAS_NATIVE_HANDLE_PIPE; otherwise
+   * it equals `Null_peer`'s dummy value (0).
+   */
+  static constexpr size_t S_RCV_NATIVE_HANDLE_BATCH_SZ_RECOMMENDATION
+    = Native_handle_receiver_obj::S_RCV_NATIVE_HANDLE_BATCH_SZ_RECOMMENDATION;
 
   // Constructors/destructor.
 
@@ -673,54 +674,74 @@ public:
   /**
    * Yields `blob_snd()->` same method.
    *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
    * @return See concept API.
    */
-  size_t send_blob_max_size() const;
+  template<typename... Args>
+  size_t send_blob_max_size(Args&&... args) const;
 
   /**
    * Yields `hndl_snd()->` same method.
    *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
    * @return See concept API.
    */
-  size_t send_meta_blob_max_size() const;
+  template<typename... Args>
+  size_t send_meta_blob_max_size(Args&&... args) const;
 
   /**
    * Yields `blob_rcv()->` same method.
    *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
    * @return See concept API.
    */
-  size_t receive_blob_max_size() const;
+  template<typename... Args>
+  size_t receive_blob_max_size(Args&&... args) const;
 
   /**
    * Yields `hndl_rcv()->` same method.
    *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
    * @return See concept API.
    */
-  size_t receive_meta_blob_max_size() const;
+  template<typename... Args>
+  size_t receive_meta_blob_max_size(Args&&... args) const;
 
   /**
    * Yields `blob_snd()->` same method.
    *
-   * @param blob
-   *        See concept API.
-   * @param err_code
+   * @tparam Args
+   *         See concept API.
+   * @param args
    *        See concept API.
    * @return See concept API.
    */
-  bool send_blob(const util::Blob_const& blob, Error_code* err_code = 0);
+  template<typename... Args>
+  bool send_blob(Args&&... args);
 
   /**
    * Yields `hndl_snd()->` same method.
    *
-   * @param hndl_or_null
-   *        See concept API.
-   * @param meta_blob
-   *        See concept API.
-   * @param err_code
+   * @tparam Args
+   *         See concept API.
+   * @param args
    *        See concept API.
    * @return See concept API.
    */
-  bool send_native_handle(Native_handle hndl_or_null, const util::Blob_const& meta_blob, Error_code* err_code = 0);
+  template<typename... Args>
+  bool send_native_handle(Args&&... args);
 
   /**
    * Performs `hndl_snd()->` and/or `blob_snd()->` same method, synthesizing completion handlers into one
@@ -811,14 +832,59 @@ public:
    *        See concept API.
    * @return See above.
    */
-  bool auto_ping(util::Fine_duration period = boost::chrono::seconds(2));
+  bool auto_ping(util::Fine_duration period = boost::chrono::seconds{2});
 
   /**
-   * Yields `blob_rcv()->` same method.  Blob_receiver versus sync_io::Blob_receiver signatures differ slightly;
-   * therefore this uses param-pack perfect forwarding.
+   * Yields `blob_snd()->` same method.
    *
    * @tparam Args
-   *         See above.
+   *         See concept API.
+   * @param args
+   *        See concept API.
+   * @return See concept API.
+   */
+  template<typename... Args>
+  Blob_snd_stats blob_send_stats(Args&&... args) const;
+
+  /**
+   * Yields `blob_snd()->` same method.
+   *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
+   */
+  template<typename... Args>
+  void blob_send_stats_reset(Args&&... args);
+
+  /**
+   * Yields `hndl_snd()->` same method.
+   *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
+   * @return See concept API.
+   */
+  template<typename... Args>
+  Native_handle_snd_stats native_handle_send_stats(Args&&... args) const;
+
+  /**
+   * Yields `hndl_snd()->` same method.
+   *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
+   */
+  template<typename... Args>
+  void native_handle_send_stats_reset(Args&&... args);
+
+  /**
+   * Yields `blob_rcv()->` same method.
+   *
+   * @tparam Args
+   *         See concept API.
    * @param args
    *        See concept API.
    * @return See concept API.
@@ -827,11 +893,10 @@ public:
   bool async_receive_blob(Args&&... args);
 
   /**
-   * Yields `hndl_rcv()->` same method.  Native_handle_receiver versus sync_io::Native_handle_receiver signatures
-   * differ slightly; therefore this uses param-pack perfect forwarding.
+   * Yields `hndl_rcv()->` same method.
    *
    * @tparam Args
-   *         See above.
+   *         See concept API.
    * @param args
    *        See concept API.
    * @return See concept API.
@@ -840,15 +905,85 @@ public:
   bool async_receive_native_handle(Args&&... args);
 
   /**
+   * Yields `blob_rcv()->async_receive_blob_batch<Msg_resource>(args...)`.
+   *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
+   * @return See concept API.
+   */
+  template<typename Msg_resource, typename... Args>
+  bool async_receive_blob_batch(Args&&... args);
+
+  /**
+   * Yields `hndl_rcv()->async_receive_native_handle_batch<Msg_resource>(args...)`.
+   *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
+   * @return See concept API.
+   */
+  template<typename Msg_resource, typename... Args>
+  bool async_receive_native_handle_batch(Args&&... args);
+
+  /**
    * Performs `hndl_rcv()->` and/or `blob_rcv()->` same method, returning `true` if
    * all (1-2) invoked methods returned `true`; `false` conversely.  As with async_end_sending() (either overload)
    * behavior is undefined (assertion may trip), if one returned `true` and the other `false`.
    *
    * @param timeout
-   *        See above.
+   *        See concept API.
    * @return See above.
    */
-  bool idle_timer_run(util::Fine_duration timeout = boost::chrono::seconds(5));
+  bool idle_timer_run(util::Fine_duration timeout = boost::chrono::seconds{5});
+
+  /**
+   * Yields `blob_rcv()->` same method.
+   *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
+   * @return See concept API.
+   */
+  template<typename... Args>
+  Blob_rcv_stats blob_receive_stats(Args&&... args) const;
+
+  /**
+   * Yields `blob_rcv()->` same method.
+   *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
+   */
+  template<typename... Args>
+  void blob_receive_stats_reset(Args&&... args);
+
+  /**
+   * Yields `hndl_rcv()->` same method.
+   *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
+   * @return See concept API.
+   */
+  template<typename... Args>
+  Native_handle_rcv_stats native_handle_receive_stats(Args&&... args) const;
+
+  /**
+   * Yields `hndl_rcv()->` same method.
+   *
+   * @tparam Args
+   *         See concept API.
+   * @param args
+   *        See concept API.
+   */
+  template<typename... Args>
+  void native_handle_receive_stats_reset(Args&&... args);
 
   /**
    * Executes same method on all unique stored peer objects; returns `true` if and only if they all did.
@@ -856,62 +991,62 @@ public:
    *
    * Compilable only if #S_IS_SYNC_IO_OBJ.
    *
-   * @tparam Create_ev_wait_hndl_func
+   * @tparam Args
    *         See concept API.
-   * @param create_ev_wait_hndl_func
+   * @param args
    *        See concept API.
    * @return See above.
    */
-  template<typename Create_ev_wait_hndl_func>
-  bool replace_event_wait_handles(const Create_ev_wait_hndl_func& create_ev_wait_hndl_func);
+  template<typename... Args>
+  bool replace_event_wait_handles(Args&&... args);
 
   /**
    * Yields `blob_snd()->` same method.
    *
-   * @tparam Event_wait_func_t
+   * @tparam Args
    *         See concept API.
-   * @param ev_wait_func
+   * @param args
    *        See concept API.
    * @return See concept API.
    */
-  template<typename Event_wait_func_t>
-  bool start_send_blob_ops(Event_wait_func_t&& ev_wait_func);
+  template<typename... Args>
+  bool start_send_blob_ops(Args&&... args);
 
   /**
    * Yields `hndl_snd()->` same method.
    *
-   * @tparam Event_wait_func_t
+   * @tparam Args
    *         See concept API.
-   * @param ev_wait_func
+   * @param args
    *        See concept API.
    * @return See concept API.
    */
-  template<typename Event_wait_func_t>
-  bool start_send_native_handle_ops(Event_wait_func_t&& ev_wait_func);
+  template<typename... Args>
+  bool start_send_native_handle_ops(Args&&... args);
 
   /**
    * Yields `blob_rcv()->` same method.
    *
-   * @tparam Event_wait_func_t
+   * @tparam Args
    *         See concept API.
-   * @param ev_wait_func
+   * @param args
    *        See concept API.
    * @return See concept API.
    */
-  template<typename Event_wait_func_t>
-  bool start_receive_blob_ops(Event_wait_func_t&& ev_wait_func);
+  template<typename... Args>
+  bool start_receive_blob_ops(Args&&... args);
 
   /**
    * Yields `hndl_rcv()->` same method.
    *
-   * @tparam Event_wait_func_t
+   * @tparam Args
    *         See concept API.
-   * @param ev_wait_func
+   * @param args
    *        See concept API.
    * @return See concept API.
    */
-  template<typename Event_wait_func_t>
-  bool start_receive_native_handle_ops(Event_wait_func_t&& ev_wait_func);
+  template<typename... Args>
+  bool start_receive_native_handle_ops(Args&&... args);
 
   /**
    * Returns nickname, a brief string suitable for logging.  This is included in the output by the `ostream<<`
@@ -941,11 +1076,11 @@ private:
   // Friends.
 
   /// Friend of Channel.
-  template<typename Blob_sender2, typename Blob_receiver2,
-           typename Native_handle_sender2, typename Native_handle_receiver2>
+  template<typename Blob_sender_t2, typename Blob_receiver_t2,
+           typename Native_handle_sender_t2, typename Native_handle_receiver_t2>
   friend std::ostream& operator<<(std::ostream& os,
-                                  const Channel<Blob_sender2, Blob_receiver2,
-                                                Native_handle_sender2, Native_handle_receiver2>& val);
+                                  const Channel<Blob_sender_t2, Blob_receiver_t2,
+                                                Native_handle_sender_t2, Native_handle_receiver_t2>& val);
 
   // Data.
 
@@ -1003,6 +1138,24 @@ public:
   using Sync_io_obj = Null_peer;
   /// You may disregard.
   using Async_io_obj = Null_peer;
+  /// You may disregard.
+  template<typename Msg_resource>
+  using Native_handle_batch_in = Null_peer;
+  /// You may disregard.
+  template<typename Msg_resource>
+  using Blob_batch_in = Null_peer;
+  /// You may disregard.
+  using Native_handle_snd_stats = Null_peer;
+  /// You may disregard.
+  using Blob_snd_stats = Null_peer;
+  /// You may disregard.
+  using Native_handle_rcv_stats = Null_peer;
+  /// You may disregard.
+  using Blob_rcv_stats = Null_peer;
+  /// You may disregard.
+  static constexpr size_t S_RCV_BLOB_BATCH_SZ_RECOMMENDATION = 0;
+  /// You may disregard.
+  static constexpr size_t S_RCV_NATIVE_HANDLE_BATCH_SZ_RECOMMENDATION = 0;
 };
 
 /**
@@ -1062,12 +1215,14 @@ public:
    *
    * @warning Failing to know its exact semantics may lead to confusing results that wouldn't be immediately clear,
    *          until the downstream bugs appear!
+   * @see session::Session::remote_peer_process_credentials() offers centralized, caveat-free access to similar info.
+   *      It is however higher-level and requires the use of ipc::session infrastructure.
    *
    * @param err_code
    *        See above.
    * @return See above.
    */
-  util::Process_credentials remote_peer_process_credentials(Error_code* err_code = 0) const;
+  const util::Process_credentials& remote_peer_process_credentials(Error_code* err_code = nullptr) const;
 }; // class Socket_stream_channel
 
 /**
@@ -1133,12 +1288,14 @@ public:
    *
    * @warning Failing to know its exact semantics may lead to confusing results that wouldn't be immediately clear,
    *          until the downstream bugs appear!
+   * @see session::Session::remote_peer_process_credentials() offers centralized, caveat-free access to similar info.
+   *      It is however higher-level and requires the use of ipc::session infrastructure.
    *
    * @param err_code
    *        See above.
    * @return See above.
    */
-  util::Process_credentials remote_peer_process_credentials(Error_code* err_code = 0) const;
+  const util::Process_credentials& remote_peer_process_credentials(Error_code* err_code = nullptr) const;
 }; // class Socket_stream_channel_of_blobs
 
 /**
@@ -1161,28 +1318,34 @@ public:
  *
  * @tparam Persistent_mq_handle
  *         Implements that concept.
- * @tparam Native_handle_sender
+ * @tparam Native_handle_sender_t
  *         Implements that concept (in `transport::` or `transport::sync_io::`)
  *         if handles pipe enabled; otherwise Null_peer.
- * @tparam Native_handle_receiver
+ * @tparam Native_handle_receiver_t
  *         Analogously.
  *
  * @tparam SIO
  *         Selects between `transport::sync_io::` and `transport::` version of held type(s); hence
  *         between Channel::S_IS_SYNC_IO_OBJ and Channel::S_IS_ASYNC_IO_OBJ.
  */
-template<bool SIO, typename Persistent_mq_handle,
 #ifdef IPC_DOXYGEN_ONLY // Mirror the transport_fwd.hpp fwd-declaration in the generated docs.
-         typename Native_handle_sender = Null_peer, typename Native_handle_receiver = Null_peer>
+
+template<bool SIO, typename Persistent_mq_handle,
+         typename Native_handle_sender_t = Null_peer, typename Native_handle_receiver_t = Null_peer>
+class Mqs_channel
+
 #else
-         typename Native_handle_sender, typename Native_handle_receiver>
+
+template<bool SIO, typename Persistent_mq_handle,
+         typename Native_handle_sender_t, typename Native_handle_receiver_t>
+class Mqs_channel
+
 #endif
-class Mqs_channel :
-  public Channel<std::conditional_t<SIO, sync_io::Blob_stream_mq_sender<Persistent_mq_handle>,
-                                         Blob_stream_mq_sender<Persistent_mq_handle>>,
-                 std::conditional_t<SIO, sync_io::Blob_stream_mq_receiver<Persistent_mq_handle>,
-                                         Blob_stream_mq_receiver<Persistent_mq_handle>>,
-                 Native_handle_sender, Native_handle_receiver>
+  : public Channel<std::conditional_t<SIO, sync_io::Blob_stream_mq_sender<Persistent_mq_handle>,
+                                           Blob_stream_mq_sender<Persistent_mq_handle>>,
+                   std::conditional_t<SIO, sync_io::Blob_stream_mq_receiver<Persistent_mq_handle>,
+                                           Blob_stream_mq_receiver<Persistent_mq_handle>>,
+                   Native_handle_sender_t, Native_handle_receiver_t>
 {
 public:
   // Types.
@@ -1195,7 +1358,7 @@ public:
                                                Blob_stream_mq_sender<Persistent_mq_handle>>,
                        std::conditional_t<SIO, sync_io::Blob_stream_mq_receiver<Persistent_mq_handle>,
                                                Blob_stream_mq_receiver<Persistent_mq_handle>>,
-                       Native_handle_sender, Native_handle_receiver>;
+                       Native_handle_sender_t, Native_handle_receiver_t>;
 
   // Constructors/destructor.
 
@@ -1248,7 +1411,7 @@ public:
    *        See above.
    */
   explicit Mqs_channel(flow::log::Logger* logger_ptr, util::String_view nickname_str,
-                       Mq&& mq_out, Mq&& mq_in, Error_code* err_code = 0);
+                       Mq&& mq_out, Mq&& mq_in, Error_code* err_code = nullptr);
 
   /// Identical to Channel default ctor.
   Mqs_channel();
@@ -1324,7 +1487,7 @@ public:
   explicit Mqs_socket_stream_channel(flow::log::Logger* logger_ptr, util::String_view nickname_str,
                                      Mq&& mq_out, Mq&& mq_in,
                                      typename Base::Base::Native_handle_sender_obj&& sock_stm,
-                                     Error_code* err_code = 0);
+                                     Error_code* err_code = nullptr);
 
   /// Identical to Channel default ctor.
   Mqs_socket_stream_channel();
@@ -1337,12 +1500,14 @@ public:
    *
    * @warning Failing to know its exact semantics may lead to confusing results that wouldn't be immediately clear,
    *          until the downstream bugs appear!
+   * @see session::Session::remote_peer_process_credentials() offers centralized, caveat-free access to similar info.
+   *      It is however higher-level and requires the use of ipc::session infrastructure.
    *
    * @param err_code
    *        See above.
    * @return See above.  If `*this` is as-if-default-cted then returns default-cted value.
    */
-  util::Process_credentials remote_peer_process_credentials(Error_code* err_code = 0) const;
+  const util::Process_credentials& remote_peer_process_credentials(Error_code* err_code = nullptr) const;
 }; // class Mqs_socket_stream_channel
 
 // Free functions: in *_fwd.hpp.
@@ -1351,10 +1516,11 @@ public:
 
 /// Internally used macro; public API users should disregard (same deal as in struc/channel.hpp).
 #define TEMPLATE_CHANNEL \
-  template<typename Blob_sender, typename Blob_receiver, typename Native_handle_sender, typename Native_handle_receiver>
+  template<typename Blob_sender_t, typename Blob_receiver_t, \
+           typename Native_handle_sender_t, typename Native_handle_receiver_t>
 /// Internally used macro; public API users should disregard (same deal as in struc/channel.hpp).
 #define CLASS_CHANNEL \
-  Channel<Blob_sender, Blob_receiver, Native_handle_sender, Native_handle_receiver>
+  Channel<Blob_sender_t, Blob_receiver_t, Native_handle_sender_t, Native_handle_receiver_t>
 
 TEMPLATE_CHANNEL
 CLASS_CHANNEL::Channel() :
@@ -1383,36 +1549,36 @@ typename CLASS_CHANNEL::Async_io_obj CLASS_CHANNEL::async_io_obj()
             "and initialize the remaining pipe(s) via init_*(), but for the time being we are outlawing it "
             "out of an abundance of feelings of anti-entropy.");
 
-  Async_io_obj target(get_logger(), nickname());
+  Async_io_obj target{get_logger(), nickname()};
   if constexpr(S_HAS_BLOB_PIPE)
   {
     if constexpr(std::is_same_v<Blob_sender_obj, Blob_receiver_obj>)
     {
-      target.init_blob_pipe(typename Async_io_obj::Blob_sender_obj(std::move(*(blob_snd()))));
+      target.init_blob_pipe(typename Async_io_obj::Blob_sender_obj{std::move(*(blob_snd()))});
     }
     else
     {
-      target.init_blob_pipe(typename Async_io_obj::Blob_sender_obj(std::move(*(blob_snd()))),
-                            typename Async_io_obj::Blob_receiver_obj(std::move(*(blob_rcv()))));
+      target.init_blob_pipe(typename Async_io_obj::Blob_sender_obj{std::move(*(blob_snd()))},
+                            typename Async_io_obj::Blob_receiver_obj{std::move(*(blob_rcv()))});
     }
   }
   if constexpr(S_HAS_NATIVE_HANDLE_PIPE)
   {
     if constexpr(std::is_same_v<Native_handle_sender_obj, Native_handle_receiver_obj>)
     {
-      target.init_native_handle_pipe(typename Async_io_obj::Native_handle_sender_obj(std::move(*(hndl_snd()))));
+      target.init_native_handle_pipe(typename Async_io_obj::Native_handle_sender_obj{std::move(*(hndl_snd()))});
     }
     else
     {
-      target.init_native_handle_pipe(typename Async_io_obj::Native_handle_sender_obj(std::move(*(hndl_snd()))),
-                                     typename Async_io_obj::Native_handle_receiver_obj(std::move(*(hndl_rcv()))));
+      target.init_native_handle_pipe(typename Async_io_obj::Native_handle_sender_obj{std::move(*(hndl_snd()))},
+                                     typename Async_io_obj::Native_handle_receiver_obj{std::move(*(hndl_rcv()))});
     }
   }
 
   FLOW_LOG_INFO("Channel [" << target << "]: Created from sync_io::Channel core.");
 
   // As promised: *this becomes as-if default-cted.  So this will reset Logger and nickname too.
-  *this = Channel();
+  *this = {};
 
   assert(target.initialized());
 
@@ -1605,26 +1771,27 @@ const typename CLASS_CHANNEL::Native_handle_receiver_obj* CLASS_CHANNEL::hndl_rc
 }
 
 TEMPLATE_CHANNEL
-bool CLASS_CHANNEL::send_blob(const util::Blob_const& blob, Error_code* err_code)
+template<typename... Args>
+bool CLASS_CHANNEL::send_blob(Args&&... args)
 {
   static_assert(S_HAS_BLOB_PIPE, "Compilable only given the compile-time presence of that pipe.");
 
   const auto peer = blob_snd();
   assert(peer && "Ensure initialized() first.");
 
-  return peer->send_blob(blob, err_code);
+  return peer->send_blob(std::forward<Args>(args)...);
 } // Channel::send_blob()
 
 TEMPLATE_CHANNEL
-bool CLASS_CHANNEL::send_native_handle(Native_handle hndl_or_null, const util::Blob_const& meta_blob,
-                                       Error_code* err_code)
+template<typename... Args>
+bool CLASS_CHANNEL::send_native_handle(Args&&... args)
 {
   static_assert(S_HAS_NATIVE_HANDLE_PIPE, "Compilable only given the compile-time presence of that pipe.");
 
   const auto peer = hndl_snd();
   assert(peer && "Ensure initialized() first.");
 
-  return peer->send_native_handle(hndl_or_null, meta_blob, err_code);
+  return peer->send_native_handle(std::forward<Args>(args)...);
 } // Channel::send_native_handle()
 
 TEMPLATE_CHANNEL
@@ -1700,7 +1867,7 @@ bool CLASS_CHANNEL::async_end_sending(Task_err&& on_done_func)
     {
       Error_code err_code = async_err_code; // We may overwrite it.
       {
-        Lock_guard<Mutex_non_recursive> lock(state->m_mutex);
+        Lock_guard<Mutex_non_recursive> lock{state->m_mutex};
         const auto post_n_done = ++state->m_n_done;
         const bool all_done = post_n_done == 2;
         assert((post_n_done == 1) || all_done);
@@ -1719,12 +1886,12 @@ bool CLASS_CHANNEL::async_end_sending(Task_err&& on_done_func)
           err_code = state->m_err_code1;
         }
         // else { err_code remains == async_err_code. }
-      } // Lock_guard<Mutex_non_recursive> lock(state->m_mutex);
+      } // Lock_guard<Mutex_non_recursive> lock{state->m_mutex};
 
       state->m_on_done_func(err_code);
     }; // auto combined_on_done =
 
-    if (!peer1->async_end_sending(Task_asio_err(combined_on_done))) // Copy combined_on_done for the call below.
+    if (!peer1->async_end_sending(Task_asio_err{combined_on_done})) // Copy combined_on_done for the call below.
     {
       return false;
     }
@@ -1812,7 +1979,7 @@ bool CLASS_CHANNEL::async_end_sending(Error_code* sync_err_code_ptr, Task_err&& 
 
     Error_code sync_err_code1;
     if (!peer1->async_end_sending(&sync_err_code1,
-                                  Task_asio_err(combined_on_done))) // Copy combined_on_done for the call below.
+                                  Task_asio_err{combined_on_done})) // Copy combined_on_done for the call below.
     {
       return false;
     }
@@ -1835,7 +2002,7 @@ bool CLASS_CHANNEL::async_end_sending(Error_code* sync_err_code_ptr, Task_err&& 
       // Standard error-reporting semantics.
       if ((!sync_err_code_ptr) && sync_err_code)
       {
-        throw flow::error::Runtime_error(sync_err_code, "Channel::async_end_sending(2)");
+        throw flow::error::Runtime_error{sync_err_code, "Channel::async_end_sending(2)"};
       }
       // else
       sync_err_code_ptr && (*sync_err_code_ptr = sync_err_code);
@@ -1967,6 +2134,30 @@ bool CLASS_CHANNEL::async_receive_native_handle(Args&&... args)
 }
 
 TEMPLATE_CHANNEL
+template<typename Msg_resource, typename... Args>
+bool CLASS_CHANNEL::async_receive_blob_batch(Args&&... args)
+{
+  static_assert(S_HAS_BLOB_PIPE, "Compilable only given the compile-time presence of that pipe.");
+
+  const auto peer = blob_rcv();
+  assert(peer && "Ensure initialized() first.");
+
+  return peer->template async_receive_blob_batch<Msg_resource>(std::forward<Args>(args)...);
+}
+
+TEMPLATE_CHANNEL
+template<typename Msg_resource, typename... Args>
+bool CLASS_CHANNEL::async_receive_native_handle_batch(Args&&... args)
+{
+  static_assert(S_HAS_NATIVE_HANDLE_PIPE, "Compilable only given the compile-time presence of that pipe.");
+
+  const auto peer = hndl_rcv();
+  assert(peer && "Ensure initialized() first.");
+
+  return peer->template async_receive_native_handle_batch<Msg_resource>(std::forward<Args>(args)...);
+}
+
+TEMPLATE_CHANNEL
 bool CLASS_CHANNEL::idle_timer_run(util::Fine_duration timeout)
 {
   // @todo This is very similar to auto_ping().  Add some code reuse.  This code is simple but not that short.
@@ -2009,53 +2200,152 @@ bool CLASS_CHANNEL::idle_timer_run(util::Fine_duration timeout)
 } // Channel::idle_timer_run()
 
 TEMPLATE_CHANNEL
-size_t CLASS_CHANNEL::send_blob_max_size() const
+template<typename... Args>
+size_t CLASS_CHANNEL::send_blob_max_size(Args&&... args) const
 {
   static_assert(S_HAS_BLOB_PIPE, "Compilable only given the compile-time presence of that pipe.");
 
   const auto peer = blob_snd();
   assert(peer && "Ensure initialized() first.");
 
-  return peer->send_blob_max_size();
+  return peer->send_blob_max_size(std::forward<Args>(args)...);
 }
 
 TEMPLATE_CHANNEL
-size_t CLASS_CHANNEL::send_meta_blob_max_size() const
+template<typename... Args>
+size_t CLASS_CHANNEL::send_meta_blob_max_size(Args&&... args) const
 {
   static_assert(S_HAS_NATIVE_HANDLE_PIPE, "Compilable only given the compile-time presence of that pipe.");
 
   const auto peer = hndl_snd();
   assert(peer && "Ensure initialized() first.");
 
-  return peer->send_meta_blob_max_size();
+  return peer->send_meta_blob_max_size(std::forward<Args>(args)...);
 }
 
 TEMPLATE_CHANNEL
-size_t CLASS_CHANNEL::receive_blob_max_size() const
+template<typename... Args>
+size_t CLASS_CHANNEL::receive_blob_max_size(Args&&... args) const
 {
   static_assert(S_HAS_BLOB_PIPE, "Compilable only given the compile-time presence of that pipe.");
 
   const auto peer = blob_rcv();
   assert(peer && "Ensure initialized() first.");
 
-  return peer->receive_blob_max_size();
+  return peer->receive_blob_max_size(std::forward<Args>(args)...);
 }
 
 TEMPLATE_CHANNEL
-size_t
-  CLASS_CHANNEL::receive_meta_blob_max_size() const
+template<typename... Args>
+size_t CLASS_CHANNEL::receive_meta_blob_max_size(Args&&... args) const
 {
   static_assert(S_HAS_NATIVE_HANDLE_PIPE, "Compilable only given the compile-time presence of that pipe.");
 
   const auto peer = hndl_rcv();
   assert(peer && "Ensure initialized() first.");
 
-  return peer->receive_meta_blob_max_size();
+  return peer->receive_meta_blob_max_size(std::forward<Args>(args)...);
 }
 
 TEMPLATE_CHANNEL
-template<typename Create_ev_wait_hndl_func>
-bool CLASS_CHANNEL::replace_event_wait_handles(const Create_ev_wait_hndl_func& create_ev_wait_hndl_func)
+template<typename... Args>
+typename CLASS_CHANNEL::Blob_snd_stats CLASS_CHANNEL::blob_send_stats(Args&&... args) const
+{
+  static_assert(S_HAS_BLOB_PIPE, "Compilable only given the compile-time presence of that pipe.");
+
+  const auto peer = blob_snd();
+  assert(peer && "Ensure initialized() first.");
+
+  return peer->blob_send_stats(std::forward<Args>(args)...);
+}
+
+TEMPLATE_CHANNEL
+template<typename... Args>
+void CLASS_CHANNEL::blob_send_stats_reset(Args&&... args)
+{
+  static_assert(S_HAS_BLOB_PIPE, "Compilable only given the compile-time presence of that pipe.");
+
+  auto peer = blob_snd();
+  assert(peer && "Ensure initialized() first.");
+
+  peer->blob_send_stats_reset(std::forward<Args>(args)...);
+}
+
+TEMPLATE_CHANNEL
+template<typename... Args>
+typename CLASS_CHANNEL::Native_handle_snd_stats CLASS_CHANNEL::native_handle_send_stats(Args&&... args) const
+{
+  static_assert(S_HAS_NATIVE_HANDLE_PIPE, "Compilable only given the compile-time presence of that pipe.");
+
+  const auto peer = hndl_snd();
+  assert(peer && "Ensure initialized() first.");
+
+  return peer->native_handle_send_stats(std::forward<Args>(args)...);
+}
+
+TEMPLATE_CHANNEL
+template<typename... Args>
+void CLASS_CHANNEL::native_handle_send_stats_reset(Args&&... args)
+{
+  static_assert(S_HAS_NATIVE_HANDLE_PIPE, "Compilable only given the compile-time presence of that pipe.");
+
+  auto peer = hndl_snd();
+  assert(peer && "Ensure initialized() first.");
+
+  peer->native_handle_send_stats_reset(std::forward<Args>(args)...);
+}
+
+TEMPLATE_CHANNEL
+template<typename... Args>
+typename CLASS_CHANNEL::Blob_rcv_stats CLASS_CHANNEL::blob_receive_stats(Args&&... args) const
+{
+  static_assert(S_HAS_BLOB_PIPE, "Compilable only given the compile-time presence of that pipe.");
+
+  const auto peer = blob_rcv();
+  assert(peer && "Ensure initialized() first.");
+
+  return peer->blob_receive_stats(std::forward<Args>(args)...);
+}
+
+TEMPLATE_CHANNEL
+template<typename... Args>
+void CLASS_CHANNEL::blob_receive_stats_reset(Args&&... args)
+{
+  static_assert(S_HAS_BLOB_PIPE, "Compilable only given the compile-time presence of that pipe.");
+
+  auto peer = blob_rcv();
+  assert(peer && "Ensure initialized() first.");
+
+  peer->blob_receive_stats_reset(std::forward<Args>(args)...);
+}
+
+TEMPLATE_CHANNEL
+template<typename... Args>
+typename CLASS_CHANNEL::Native_handle_rcv_stats CLASS_CHANNEL::native_handle_receive_stats(Args&&... args) const
+{
+  static_assert(S_HAS_NATIVE_HANDLE_PIPE, "Compilable only given the compile-time presence of that pipe.");
+
+  const auto peer = hndl_rcv();
+  assert(peer && "Ensure initialized() first.");
+
+  return peer->native_handle_receive_stats(std::forward<Args>(args)...);
+}
+
+TEMPLATE_CHANNEL
+template<typename... Args>
+void CLASS_CHANNEL::native_handle_receive_stats_reset(Args&&... args)
+{
+  static_assert(S_HAS_NATIVE_HANDLE_PIPE, "Compilable only given the compile-time presence of that pipe.");
+
+  auto peer = hndl_rcv();
+  assert(peer && "Ensure initialized() first.");
+
+  peer->native_handle_receive_stats_reset(std::forward<Args>(args)...);
+}
+
+TEMPLATE_CHANNEL
+template<typename... Args>
+bool CLASS_CHANNEL::replace_event_wait_handles(Args&&... args)
 {
   static_assert(S_IS_SYNC_IO_OBJ, "This overload usable only with sync_io-pattern object.");
 
@@ -2078,30 +2368,30 @@ bool CLASS_CHANNEL::replace_event_wait_handles(const Create_ev_wait_hndl_func& c
   {
     if (m_blob_snd)
     {
-      ok1 = m_blob_snd->replace_event_wait_handles(create_ev_wait_hndl_func);
+      ok1 = m_blob_snd->replace_event_wait_handles(std::forward<Args>(args)...);
     }
     if (m_blob_rcv)
     {
-      ok2 = m_blob_rcv->replace_event_wait_handles(create_ev_wait_hndl_func);
+      ok2 = m_blob_rcv->replace_event_wait_handles(std::forward<Args>(args)...);
     }
   }
   if constexpr(S_HAS_NATIVE_HANDLE_PIPE)
   {
     if (m_hndl_snd)
     {
-      ok3 = m_hndl_snd->replace_event_wait_handles(create_ev_wait_hndl_func);
+      ok3 = m_hndl_snd->replace_event_wait_handles(std::forward<Args>(args)...);
     }
     if (m_hndl_rcv)
     {
-      ok4 = m_hndl_rcv->replace_event_wait_handles(create_ev_wait_hndl_func);
+      ok4 = m_hndl_rcv->replace_event_wait_handles(std::forward<Args>(args)...);
     }
   }
   return ok1 && ok2 && ok3 && ok4;
 } // Channel::replace_event_wait_handles()
 
 TEMPLATE_CHANNEL
-template<typename Event_wait_func_t>
-bool CLASS_CHANNEL::start_send_blob_ops(Event_wait_func_t&& ev_wait_func)
+template<typename... Args>
+bool CLASS_CHANNEL::start_send_blob_ops(Args&&... args)
 {
   static_assert(S_IS_SYNC_IO_OBJ, "This overload usable only with sync_io-pattern object.");
   static_assert(S_HAS_BLOB_PIPE, "Compilable only given the compile-time presence of that pipe.");
@@ -2109,12 +2399,12 @@ bool CLASS_CHANNEL::start_send_blob_ops(Event_wait_func_t&& ev_wait_func)
   const auto peer = blob_snd();
   assert(peer && "Ensure initialized() first.");
 
-  return peer->start_send_blob_ops(std::move(ev_wait_func));
+  return peer->start_send_blob_ops(std::forward<Args>(args)...);
 }
 
 TEMPLATE_CHANNEL
-template<typename Event_wait_func_t>
-bool CLASS_CHANNEL::start_send_native_handle_ops(Event_wait_func_t&& ev_wait_func)
+template<typename... Args>
+bool CLASS_CHANNEL::start_send_native_handle_ops(Args&&... args)
 {
   static_assert(S_IS_SYNC_IO_OBJ, "This overload usable only with sync_io-pattern object.");
   static_assert(S_HAS_NATIVE_HANDLE_PIPE, "Compilable only given the compile-time presence of that pipe.");
@@ -2122,12 +2412,12 @@ bool CLASS_CHANNEL::start_send_native_handle_ops(Event_wait_func_t&& ev_wait_fun
   const auto peer = hndl_snd();
   assert(peer && "Ensure initialized() first.");
 
-  return peer->start_send_native_handle_ops(std::move(ev_wait_func));
+  return peer->start_send_native_handle_ops(std::forward<Args>(args)...);
 }
 
 TEMPLATE_CHANNEL
-template<typename Event_wait_func_t>
-bool CLASS_CHANNEL::start_receive_blob_ops(Event_wait_func_t&& ev_wait_func)
+template<typename... Args>
+bool CLASS_CHANNEL::start_receive_blob_ops(Args&&... args)
 {
   static_assert(S_IS_SYNC_IO_OBJ, "This overload usable only with sync_io-pattern object.");
   static_assert(S_HAS_BLOB_PIPE, "Compilable only given the compile-time presence of that pipe.");
@@ -2135,12 +2425,12 @@ bool CLASS_CHANNEL::start_receive_blob_ops(Event_wait_func_t&& ev_wait_func)
   const auto peer = blob_rcv();
   assert(peer && "Ensure initialized() first.");
 
-  return peer->start_receive_blob_ops(std::move(ev_wait_func));
+  return peer->start_receive_blob_ops(std::forward<Args>(args)...);
 }
 
 TEMPLATE_CHANNEL
-template<typename Event_wait_func_t>
-bool CLASS_CHANNEL::start_receive_native_handle_ops(Event_wait_func_t&& ev_wait_func)
+template<typename... Args>
+bool CLASS_CHANNEL::start_receive_native_handle_ops(Args&&... args)
 {
   static_assert(S_IS_SYNC_IO_OBJ, "This overload usable only with sync_io-pattern object.");
   static_assert(S_HAS_NATIVE_HANDLE_PIPE, "Compilable only given the compile-time presence of that pipe.");
@@ -2148,7 +2438,7 @@ bool CLASS_CHANNEL::start_receive_native_handle_ops(Event_wait_func_t&& ev_wait_
   const auto peer = hndl_rcv();
   assert(peer && "Ensure initialized() first.");
 
-  return peer->start_receive_native_handle_ops(std::move(ev_wait_func));
+  return peer->start_receive_native_handle_ops(std::forward<Args>(args)...);
 }
 
 TEMPLATE_CHANNEL
@@ -2160,9 +2450,13 @@ const std::string& CLASS_CHANNEL::nickname() const
 TEMPLATE_CHANNEL
 std::ostream& operator<<(std::ostream& os, const CLASS_CHANNEL& val)
 {
+  using util::String_view;
   using std::string;
 
-  os << '[' << (val.nickname().empty() ? string("null") : val.nickname()) << "]@" << static_cast<const void*>(&val);
+  constexpr String_view STR_NULL{"null"};
+
+  os << '[' << (val.nickname().empty() ? STR_NULL : String_view{val.nickname()})
+     << "]@" << static_cast<const void*>(&val);
 
   /* The way this written -- skipping wordy (if technically faster) compile-time checking -- friendship is needed.
    * E.g., if Blob_sender=Null_peer, then m_blob_snd is compiled -- just always null -- but blob_snd() is not
@@ -2217,10 +2511,11 @@ template<bool SIO>
 Socket_stream_channel<SIO>::Socket_stream_channel() = default;
 
 template<bool SIO>
-util::Process_credentials Socket_stream_channel<SIO>::remote_peer_process_credentials(Error_code* err_code) const
+const util::Process_credentials& Socket_stream_channel<SIO>::remote_peer_process_credentials(Error_code* err_code) const
 {
-  const auto stream = Base::hndl_snd();
-  return stream ? stream->remote_peer_process_credentials(err_code) : util::Process_credentials();
+  if (const auto stream = Base::hndl_snd()) { return stream->remote_peer_process_credentials(err_code); }
+  if (err_code) { err_code->clear(); }
+  return util::NULL_PROCESS_CREDENTIALS;
 }
 
 template<bool SIO>
@@ -2237,15 +2532,16 @@ template<bool SIO>
 Socket_stream_channel_of_blobs<SIO>::Socket_stream_channel_of_blobs() = default;
 
 template<bool SIO>
-util::Process_credentials
+const util::Process_credentials&
   Socket_stream_channel_of_blobs<SIO>::remote_peer_process_credentials(Error_code* err_code) const
 {
-  const auto stream = Base::blob_snd();
-  return stream ? stream->remote_peer_process_credentials(err_code) : util::Process_credentials();
+  if (const auto stream = Base::blob_snd()) { return stream->remote_peer_process_credentials(err_code); }
+  if (err_code) { err_code->clear(); }
+  return util::NULL_PROCESS_CREDENTIALS;
 }
 
-template<bool SIO, typename Persistent_mq_handle, typename Native_handle_sender, typename Native_handle_receiver>
-Mqs_channel<SIO, Persistent_mq_handle, Native_handle_sender, Native_handle_receiver>::Mqs_channel
+template<bool SIO, typename Persistent_mq_handle, typename Native_handle_sender_t, typename Native_handle_receiver_t>
+Mqs_channel<SIO, Persistent_mq_handle, Native_handle_sender_t, Native_handle_receiver_t>::Mqs_channel
   (flow::log::Logger* logger_ptr, util::String_view nickname_str, Mq&& mq_out, Mq&& mq_in, Error_code* err_code) :
 
   Base(logger_ptr, nickname_str)
@@ -2276,19 +2572,19 @@ Mqs_channel<SIO, Persistent_mq_handle, Native_handle_sender, Native_handle_recei
         return;
       }
       // else
-      throw Runtime_error(our_err_code,
+      throw Runtime_error{our_err_code,
                           ostream_op_string("Mqs_channel::Mqs_channel():",
-                                            snd_else_rcv ? "mq_snd_init" : "mq_rcv_init"));
+                                            snd_else_rcv ? "mq_snd_init" : "mq_rcv_init")};
     }
     // else our_err_code is still success.
   };
 
-  typename Base::Blob_sender_obj snd_out(logger_ptr, nickname_str, std::move(mq_out), &our_err_code);
+  typename Base::Blob_sender_obj snd_out{logger_ptr, nickname_str, std::move(mq_out), &our_err_code};
   handle_result(true); // May throw.
   typename Base::Blob_receiver_obj rcv_in;
   if (!our_err_code) // As promised: don't try to initialize the 2nd if the 1st failed anyway.
   {
-    rcv_in = typename Base::Blob_receiver_obj(logger_ptr, nickname_str, std::move(mq_in), &our_err_code);
+    rcv_in = typename Base::Blob_receiver_obj{logger_ptr, nickname_str, std::move(mq_in), &our_err_code};
     handle_result(false); // May throw.
   }
 
@@ -2319,8 +2615,8 @@ Mqs_channel<SIO, Persistent_mq_handle, Native_handle_sender, Native_handle_recei
   // else { Probably some sub-ctor, or whatever, will do init_native_handle_pipe(). }
 } // Mqs_channel::Mqs_channel()
 
-template<bool SIO, typename Persistent_mq_handle, typename Native_handle_sender, typename Native_handle_receiver>
-Mqs_channel<SIO, Persistent_mq_handle, Native_handle_sender, Native_handle_receiver>::Mqs_channel() = default;
+template<bool SIO, typename Persistent_mq_handle, typename Native_handle_sender_t, typename Native_handle_receiver_t>
+Mqs_channel<SIO, Persistent_mq_handle, Native_handle_sender_t, Native_handle_receiver_t>::Mqs_channel() = default;
 
 template<bool SIO, typename Persistent_mq_handle>
 Mqs_socket_stream_channel<SIO, Persistent_mq_handle>::Mqs_socket_stream_channel
@@ -2344,11 +2640,12 @@ template<bool SIO, typename Persistent_mq_handle>
 Mqs_socket_stream_channel<SIO, Persistent_mq_handle>::Mqs_socket_stream_channel() = default;
 
 template<bool SIO, typename Persistent_mq_handle>
-util::Process_credentials
+const util::Process_credentials&
   Mqs_socket_stream_channel<SIO, Persistent_mq_handle>::remote_peer_process_credentials(Error_code* err_code) const
 {
-  const auto stream = Base::Base::hndl_snd();
-  return stream ? stream->remote_peer_process_credentials(err_code) : util::Process_credentials();
+  if (const auto stream = Base::Base::hndl_snd()) { return stream->remote_peer_process_credentials(err_code); }
+  if (err_code) { err_code->clear(); }
+  return util::NULL_PROCESS_CREDENTIALS;
 }
 
 } // namespace ipc::transport

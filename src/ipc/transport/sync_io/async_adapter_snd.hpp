@@ -19,6 +19,7 @@
 #pragma once
 
 #include "ipc/transport/detail/transport_fwd.hpp"
+#include "ipc/transport/blob_transport_stats.hpp"
 #include "ipc/transport/error.hpp"
 #include "ipc/util/sync_io/asio_waitable_native_hndl.hpp"
 #include <flow/log/log.hpp>
@@ -30,20 +31,30 @@ namespace ipc::transport::sync_io
 // Types.
 
 /**
- * Internal-use type that adapts a given PEER-state sync_io::Native_handle_sender or sync_io::Blob_sender *core* into
+ * Type that adapts a given PEER-state sync_io::Native_handle_sender or sync_io::Blob_sender *core* into
  * the async-I/O-pattern Native_handle_sender or Blob_sender.  State-mutating logic of the latter is forwarded
  * to a `*this`; while trivial `const` (in PEER state) things like `.send_blob_max_size()` are forwarded directly to the
  * core `sync_io::X`.
  *
- * @see transport::Native_socket_stream::Impl uses this for 99% of its outgoing-direction
+ * Flow-IPC uses a `*this` to implement each of transport::Native_socket_stream (out-direction) and
+ * transport::Blob_stream_mq_sender; but this is a public API, as one can implement any custom
+ * transport::Blob_sender (et al) in terms of the corresponding custom sync_io::Blob_sender (et al) impl.
+ * It would be an advanced task but nevertheless fully supported/intended.
+ *
+ * @internal
+ * @see transport::Native_socket_stream_impl uses this for 99% of its outgoing-direction
  *      (PEER-state by definition) logic.
  * @see transport::Blob_stream_mq_sender_impl uses this for 99% of its logic.
+ * @endinternal
  *
- * @see Async_adapter_receiver for the opposite-direction thing.  E.g., transport::Native_socket_stream::Impl
+ * @see Async_adapter_receiver for the opposite-direction thing.  E.g., transport::Native_socket_stream_impl
  *      uses that for 99% of its incoming-direction logic.
  *
+ * @internal
+ * Impl
+ * ----
  * ### Threads and thread nomenclature; locking ###
- * Thread U, thread W... locking... just see those sections in transport::Native_socket_stream::Impl class doc header.
+ * Thread U, thread W... locking... just see those sections in transport::Native_socket_stream_impl class doc header.
  * We adopt that nomenclature and logic.  However, as we are concerned with only one direction (op-type),
  * we only deal with code in either thread U or W concerned with that.  The other-direction code -- if applicable
  * (e.g., applicable for `Native_socket_stream` which deals with both over 1 socket connection; N/A
@@ -68,6 +79,10 @@ namespace ipc::transport::sync_io
  * as if they call our dtor before that can complete, then we are to invoke `on_done_func(E)` where E =
  * operation-aborted (by our contract).  So we save `on_done_func` into `m_end_sending_on_done_func_or_empty`
  * instead of capturing it.
+ * @endinternal
+ *
+ * @tparam Core_t
+ *         The `sync_io::X` type being adapted into async-I/O-pattern `X`.
  */
 template<typename Core_t>
 class Async_adapter_sender :
@@ -113,47 +128,65 @@ public:
   // Methods.
 
   /**
-   * See Native_handle_sender counterpart.  However, this one is `void`, as there is no way `*this` is not in PEER state
-   * (by definition).
+   * See transport::Native_handle_sender counterpart.  However, this one is `void`, as there is no way `*this` is not
+   * in PEER state (by definition).
    *
    * @param hndl_or_null
-   *        See Native_handle_sender counterpart.
+   *        See above.
    * @param meta_blob
-   *        See Native_handle_sender counterpart.
+   *        See above.
    * @param err_code
-   *        See Native_handle_sender counterpart.
+   *        See above.
    */
   void send_native_handle(Native_handle hndl_or_null, const util::Blob_const& meta_blob, Error_code* err_code);
 
   /**
-   * See Blob_sender counterpart.  However, this one is `void`, as there is no way `*this` is not in PEER state
-   * (by definition).
+   * See transport::Blob_sender counterpart.  However, this one is `void`, as there is no way `*this` is not in PEER
+   * state (by definition).
    *
    * @param blob
-   *        See Blob_sender counterpart.
+   *        See above.
    * @param err_code
-   *        See Blob_sender counterpart.
+   *        See above.
    */
   void send_blob(const util::Blob_const& blob, Error_code* err_code);
 
   /**
-   * See Native_handle_sender counterpart; or leave `on_done_func_or_empty.empty()` for
-   * Native_handle_sender::end_sending().
+   * See transport::Native_handle_sender counterpart; or leave `on_done_func_or_empty.empty()` for
+   * transport::Native_handle_sender::end_sending().
    *
    * @param on_done_func_or_empty
-   *        See Native_handle_sender counterpart.  See above.
-   * @return See Native_handle_sender counterpart.
+   *        See above.
+   * @return See above.
    */
   bool async_end_sending(flow::async::Task_asio_err&& on_done_func_or_empty);
 
   /**
-   * See Native_handle_sender counterpart.
+   * See transport::Native_handle_sender counterpart.
    *
    * @param period
-   *        See Native_handle_sender counterpart.
-   * @return See Native_handle_sender counterpart.
+   *        See above.
+   * @return See above.
    */
   bool auto_ping(util::Fine_duration period);
+
+  /**
+   * See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
+  stat::Blob_snd_stats blob_send_stats() const;
+
+  /// See Native_socket_stream counterpart.
+  void blob_send_stats_reset();
+
+  /**
+   * See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
+  stat::Blob_snd_stats native_handle_send_stats() const;
+
+  /// See Native_socket_stream counterpart.
+  void native_handle_send_stats_reset();
 
 private:
   // Methods.
@@ -273,10 +306,10 @@ Async_adapter_sender<Core_t>::Async_adapter_sender(flow::log::Logger* logger_ptr
       // They want to know about completed async_wait().  Oblige.
 
       // Protect m_sync_io and m_* against send-ops (`send_*()`, *end_sending(), ...).
-      Lock_guard<decltype(m_mutex)> lock(m_mutex);
+      Lock_guard<decltype(m_mutex)> lock{m_mutex};
 
       /* Inform m_sync_io of the event.  This can synchronously invoke handler we have registered via m_sync_io
-       * API (e.g., `send_*()`, auto_ping()).  In our case -- if indeed it triggers a handler -- it will
+       * API.  In our case -- if indeed it triggers a handler -- it will
        * have to do with async_end_sending() completion. */
 
       (*on_active_ev_func)();
@@ -297,7 +330,7 @@ Async_adapter_sender<Core_t>::~Async_adapter_sender()
 
   /* Pre-condition: m_worker is stop()ed, and any pending tasks on it have been executed.
    * Our promised job is to invoke any pending handlers with operation-aborted.
-   * The decision to do it from a one-off thread is explained in transport::Native_socket_stream::Impl::~Impl()
+   * The decision to do it from a one-off thread is explained in transport::Native_socket_stream_impl::~dtor()
    * and used in a few places; so see that.  Let's just do it.
    * @todo It would be cool, I guess, to do it all in one one-off thread instead of potentially starting, like,
    * 2 for some of our customers.  Well, whatever.  At least we can avoid it if we know there are no handlers
@@ -305,8 +338,8 @@ Async_adapter_sender<Core_t>::~Async_adapter_sender()
 
   if (!m_end_sending_on_done_func_or_empty.empty())
   {
-    Single_thread_task_loop one_thread(get_logger(),
-                                       ostream_op_string("ASdDeinit-", m_log_pfx));
+    Single_thread_task_loop one_thread{get_logger(),
+                                       ostream_op_string("ASdDeinit-", m_log_pfx)};
     one_thread.start([&]()
     {
       reset_thread_pinning(get_logger()); // Don't inherit any strange core-affinity.  Float free.
@@ -329,7 +362,7 @@ void Async_adapter_sender<Core_t>::send_blob(const util::Blob_const& blob, Error
   /* See comments in send_native_handle(); we are just a somewhat degraded version of that.
    * It's just that send_native_handle() might not even compile, if m_sync_io does not have that method.
    * Logic, as pertains to us, is the same though. */
-  Lock_guard<decltype(m_mutex)> lock(m_mutex);
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
 #ifndef NDEBUG
   const bool ok =
 #endif
@@ -358,7 +391,7 @@ void Async_adapter_sender<Core_t>::send_native_handle(Native_handle hndl, const 
    * to send, non-empty in would-block conditions; send_native_handle() pushes items onto that queue, while
    * on_active_ev_func() (on writable socket) pops items off it upon successfully sending them off over socket. */
 
-  Lock_guard<decltype(m_mutex)> lock(m_mutex);
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
 #ifndef NDEBUG
   const bool ok =
 #endif
@@ -377,7 +410,7 @@ bool Async_adapter_sender<Core_t>::async_end_sending(flow::async::Task_asio_err&
   /* While the same comments about locking m_mutex apply, in addition to that:
    * This is somewhat more complex than the other send-ops, as there is a completion handler. */
 
-  Lock_guard<decltype(m_mutex)> lock(m_mutex);
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
 
   if (on_done_func_or_empty.empty())
   {
@@ -469,8 +502,44 @@ bool Async_adapter_sender<Core_t>::auto_ping(util::Fine_duration period)
 
   // Like send_native_handle() and others (keeping comments light).
 
-  Lock_guard<decltype(m_mutex)> lock(m_mutex);
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
   return m_sync_io.auto_ping(period);
+}
+
+template<typename Core_t>
+stat::Blob_snd_stats Async_adapter_sender<Core_t>::blob_send_stats() const
+{
+  using flow::util::Lock_guard;
+
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
+  return m_sync_io.blob_send_stats();
+}
+
+template<typename Core_t>
+void Async_adapter_sender<Core_t>::blob_send_stats_reset()
+{
+  using flow::util::Lock_guard;
+
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
+  m_sync_io.blob_send_stats_reset();
+}
+
+template<typename Core_t>
+stat::Blob_snd_stats Async_adapter_sender<Core_t>::native_handle_send_stats() const
+{
+  using flow::util::Lock_guard;
+
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
+  return m_sync_io.native_handle_send_stats();
+}
+
+template<typename Core_t>
+void Async_adapter_sender<Core_t>::native_handle_send_stats_reset()
+{
+  using flow::util::Lock_guard;
+
+  Lock_guard<decltype(m_mutex)> lock{m_mutex};
+  m_sync_io.native_handle_send_stats_reset();
 }
 
 } // namespace ipc::transport::sync_io

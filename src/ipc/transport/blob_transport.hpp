@@ -51,6 +51,24 @@ public:
   /// Shared_name relative-folder fragment (no separators) identifying this resource type.  Equals `_receiver`'s.
   static const Shared_name S_RESOURCE_TYPE_ID;
 
+  // Types.
+
+  /**
+   * Return type, typically a `struct`, for blob_send_stats().
+   *
+   * In addition: the impl must choose one of the following paths.  Note that stat::Blob_snd_stats defines statistics
+   * relevant to any concept impl of Blob_sender.
+   *   -# This type *is* stat::Blob_snd_stats.  Therefore, given a value `S` of this type, you can count on this:
+   *      `using ipc::transport::stat::blob_snd_stats; assert(&(blob_snd_stats(S)) == &S)`.
+   *      - That is: your impl adds no stats beyond the concept-level ones.
+   *   -# This type *is not* stat::Blob_snd_stats but contains one via some type of composition.  Therefore your
+   *      Blob_sender impl must be accompanied (in the same namespace, for ADL) with a
+   *      free function such that this works:
+   *      `using ipc::transport::stat::blob_snd_stats; const stat::Blob_snd_stats& core_stats = blob_snd_stats(S)`.
+   *      - That is: your impl adds some stats on top of the concept-level ones.
+   */
+  using Blob_snd_stats = value;
+
   // Constructors/destructor.
 
   /**
@@ -132,7 +150,7 @@ public:
    *        See above.
    * @return See above.
    */
-  bool send_blob(const util::Blob_const& blob, Error_code* err_code = 0);
+  bool send_blob(const util::Blob_const& blob, Error_code* err_code = nullptr);
 
   /**
    * Equivalent to send_blob() but sends a graceful-close message instead of the usual payload; the opposing
@@ -171,6 +189,28 @@ public:
    * @return See above.
    */
   bool auto_ping();
+
+  /**
+   * Returns the accumulated transport statistics as of this call.
+   * If not in PEER state returns a zeroed-out stats object.
+   *
+   * @see #Blob_snd_stats doc header about how to obtain a transport::stat::Blob_snd_stats core
+   *      from the returned `struct`.
+   *
+   * Thread-safe: can be called concurrently with any other method including `send_*()`.
+   * The returned copy is a consistent snapshot.
+   *
+   * @return Stats snapshot by value.
+   */
+  Blob_snd_stats blob_send_stats() const;
+
+  /**
+   * Resets the transport statistics as of this call.  The formal meaning of a reset is discussed in
+   * `flow::util::stat` doc header.  If not in PEER state this is a no-op.
+   *
+   * Thread-safe: can be called concurrently with any other method including `send_*()`.
+   */
+  void blob_send_stats_reset();
 }; // class Blob_sender
 
 /**
@@ -198,6 +238,7 @@ public:
 
   /**
    * If `false` then `blob.size() > receive_blob_max_size()` in PEER-state async_receive_blob()
+   * or `batch->target_payload_size() < receive_blob_max_size()` in PEER-state async_receive_blob_batch()
    * shall yield non-pipe-hosing error::Code::INVALID_ARGUMENT, and it shall never yield
    * pipe-hosing error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE; else the latter may occur, while the former
    * shall never occur for that reason.
@@ -205,6 +246,31 @@ public:
    * @see "Blob underflow semantics" in Native_handle_sender concept doc header; they apply equally here.
    */
   static constexpr bool S_BLOB_UNDERFLOW_ALLOWED = value;
+
+  /// All notes as from Native_handle_receiver::S_RCV_NATIVE_HANDLE_BATCH_SZ_RECOMMENDATION doc header apply.
+  static constexpr size_t S_RCV_BLOB_BATCH_SZ_RECOMMENDATION = value;
+
+  // Types.
+
+  /// See `async_receive_*_batch()` argument `batch`.
+  template<typename Msg_resource>
+  using Blob_batch_in = Msg_batch_in<Msg_resource, true>;
+
+  /**
+   * Return type, typically a `struct`, for blob_receive_stats().
+   *
+   * In addition: the impl must choose one of the following paths.  Note that stat::Blob_rcv_stats defines statistics
+   * relevant to any concept impl of Blob_receiver.
+   *   -# This type *is* stat::Blob_rcv_stats.  Therefore, given a value `S` of this type, you can count on this:
+   *      `using ipc::transport::stat::blob_rcv_stats; assert(&(blob_rcv_stats(S)) == &S)`.
+   *      - That is: your impl adds no stats beyond the concept-level ones.
+   *   -# This type *is not* stat::Blob_rcv_stats but contains one via some type of composition.  Therefore your
+   *      Blob_receiver impl must be accompanied (in the same namespace, for ADL) with a
+   *      free function such that this works:
+   *      `using ipc::transport::stat::blob_rcv_stats; const stat::Blob_rcv_stats& core_stats = blob_rcv_stats(S)`.
+   *      - That is: your impl adds some stats on top of the concept-level ones.
+   */
+  using Blob_rcv_stats = value;
 
   // Constructors/destructor.
 
@@ -261,9 +327,10 @@ public:
   Blob_receiver& operator=(const Blob_receiver&) = delete;
 
   /**
-   * In PEER state: Returns min `target_blob.size()` such that (1) async_receive_blob() shall not fail
+   * In PEER state: Returns min target-blob size such that (1) async_receive_blob() shall not fail
    * with error::Code::S_INVALID_ARGUMENT (only if #S_BLOB_UNDERFLOW_ALLOWED is `false`; otherwise not relevant),
-   * and (2) it shall *never* fail with error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE.  Please see
+   * and (2) async_receive_blob_batch() shall not similarly fail,
+   * and (3) neither shall *ever* fail with error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE.  Please see
    * "Blob underflow semantics" (for Native_handle_receiver, but applied in common-sense fashion to us) for
    * explanation of these semantics.
    *
@@ -286,6 +353,24 @@ public:
    * All notes from Native_handle_receiver::async_receive_native_handle() doc header apply.  In particular
    * watch out for the semantics regarding `target_blob.size()` and potential resulting errors.
    *
+   * Additionally, a corollary to counterpart concept Blob_sender requirements: this method shall never yield
+   * `size_t n_rcvd = 0` to `on_done_func()`, as it is not allowed to send an empty message (blob).
+   * (Native_handle_sender is allowed to do so, but only if such an empty meta-blob is paired with
+   * a non-null `Native_handle`.)
+   *
+   * ### Informal suggestion w/r/t a `Native_handle_sender` that is also a `Blob_sender` ###
+   * Suppose you have class `X` (e.g., Native_socket_stream is such a class) that implements *both*
+   * concepts.  Suppose an `X` is on the opposing side of a `*this`.  Then we informally recommend that
+   * this async_receive_native_handle() detect the situation wherein the opposing `X`:
+   *   - used `send_native_handle(hndl, blob, ...)` or equivalent; and
+   *   - that method or equivalent sent no `hndl` (e.g., the above method was passed `hndl` that contained
+   *     no handle: `hndl.null() == true`).
+   *
+   * It should emit an error in that case.  Flow-IPC itself uses error::Code::S_BLOB_RECEIVER_GOT_NON_BLOB.
+   *
+   * This is technically not a formal requirement.  It's just nice, as it detects a user misbehavior as opposed
+   * to an internal impl bug.
+   *
    * @tparam Task_err_sz
    *         See above.
    * @param target_blob
@@ -297,8 +382,36 @@ public:
    * @return See above.
    */
   template<typename Task_err_sz>
-  bool async_receive_blob(const util::Blob_mutable& target_blob,
-                          Task_err_sz&& on_done_func);
+  bool async_receive_blob(const util::Blob_mutable& target_blob, Task_err_sz&& on_done_func);
+
+  /**
+   * In PEER state: Asynchronously awaits 1+ discrete message(s) -- as sent by the opposing peer via
+   * Blob_sender::send_blob() or `"Blob_sender::*end_sending()"` -- and
+   * receives them into into the target locations as described by `*batch` slots, reliably and in-order.
+   *
+   * All notes from Native_handle_receiver::async_receive_native_handle_batch() doc header apply.
+   *
+   * Additionally, a corollary to counterpart concept Blob_sender requirements: this method shall never yield
+   * a slot (index `idx`) such that `batch->result_payload_blob(idx) == 0`; meaning an empty blob was received.
+   * That is because it is not allowed to send an empty message (blob).
+   * (Native_handle_sender is allowed to do so, but only if such an empty meta-blob is paired with
+   * a non-null `Native_handle`.)
+   *
+   * @tparam Msg_resource
+   *         See above.
+   * @tparam Task_err
+   *         See above.
+   * @param batch
+   *        See above.  However note that Blob_batch_in<Msg_resource>::result_payload_hndl() (the would-be method
+   *        itself) shall not exist, as `Blob_batch_in<M>` is `Msg_batch_in<M, true>`; note the `NO_HNDSL = true`.
+   * @param assume_would_block
+   *        See above.
+   * @param on_done_func
+   *        See above.
+   * @return Same notes as for async_receive_blob().
+   */
+  template<typename Msg_resource, typename Task_err>
+  bool async_receive_blob_batch(Blob_batch_in<Msg_resource>* batch, bool assume_would_block, Task_err&& on_done_func);
 
   /**
    * In PEER state: Irreversibly enables a conceptual idle timer whose potential side effect is, once at least
@@ -312,6 +425,30 @@ public:
    * @return See above.
    */
   bool idle_timer_run(util::Fine_duration timeout);
+
+  /**
+   * Returns the accumulated transport statistics as of this call.
+   * If not in PEER state returns a zeroed-out stats object.
+   *
+   * @see #Blob_rcv_stats doc header about how to obtain a transport::stat::Blob_rcv_stats core
+   *      from the returned `struct`.
+   *
+   * Thread-safe: can be called concurrently with any other method including `async_receive_*()`.
+   * The returned copy is a consistent snapshot.
+   *
+   * @return Stats snapshot by value.
+   */
+  Blob_rcv_stats blob_receive_stats() const;
+
+  /**
+   * Resets the transport statistics as of this call.  The formal meaning of a reset is discussed in
+   * `flow::util::stat` doc header.  If not in PEER state this is a no-op.
+   *
+   * Thread-safe: can be called concurrently with any other method including `async_receive_*()`.
+   */
+  void blob_receive_stats_reset();
 }; // class Blob_receiver
 
 } // namespace ipc::transport
+
+#endif // ifdef IPC_DOXYGEN_ONLY

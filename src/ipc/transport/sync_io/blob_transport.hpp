@@ -50,6 +50,15 @@ public:
   /// Same notes as for transport::Blob_sender.
   static const Shared_name S_RESOURCE_TYPE_ID;
 
+  // Types.
+
+  /**
+   * Return type, typically a `struct`, for blob_send_stats().
+   *
+   * All notes from transport::Blob_sender::Blob_snd_stats doc header apply verbatim.
+   */
+  using Blob_snd_stats = value;
+
   // Constructors/destructor.
 
   /**
@@ -145,7 +154,7 @@ public:
    *        See above.
    * @return See above.
    */
-  bool send_blob(const util::Blob_const& blob, Error_code* err_code = 0);
+  bool send_blob(const util::Blob_const& blob, Error_code* err_code = nullptr);
 
   /**
    * Equivalent to send_blob() but sends a graceful-close message instead of the usual payload.
@@ -184,6 +193,22 @@ public:
    * @return See above.
    */
   bool auto_ping();
+
+  /**
+   * Returns the accumulated transport statistics as of this call.
+   * If not in PEER state returns a zeroed-out stats object.
+   *
+   * All notes from sync_io::Native_handle_sender apply.
+   *
+   * @return See above.
+   */
+  Blob_snd_stats blob_send_stats() const;
+
+  /**
+   * Resets the transport statistics as of this call.  The formal meaning of a reset is discussed in
+   * `flow::util::stat` doc header.  If not in PEER state this is a no-op.
+   */
+  void blob_send_stats_reset();
 }; // class Blob_sender
 
 /**
@@ -210,6 +235,22 @@ public:
 
   /// Same notes as for transport::Blob_receiver.
   static constexpr bool S_BLOB_UNDERFLOW_ALLOWED = value;
+
+  /// Same notes as for transport::Blob_receiver.
+  static constexpr size_t S_RCV_BLOB_BATCH_SZ_RECOMMENDATION = value;
+
+  // Types.
+
+  /// See `async_receive_*_batch()` argument `batch`.
+  template<typename Msg_resource>
+  using Blob_batch_in = Msg_batch_in<Msg_resource, true>;
+
+  /**
+   * Return type, typically a `struct`, for blob_receive_stats().
+   *
+   * All notes from transport::Blob_receiver::Blob_rcv_stats doc header apply verbatim.
+   */
+  using Blob_rcv_stats = value;
 
   // Constructors/destructor.
 
@@ -321,6 +362,31 @@ public:
                           Task_err_sz&& on_done_func);
 
   /**
+   * In PEER state: Identical to sync_io::Native_handle_receiver::async_receive_native_handle_batch(); except that
+   * since `Msg_batch_in<..., true>` (note the `true`) is the type of `*batch`, only blobs (not `Native_handle`s)
+   * can be received.
+   *
+   * @tparam Msg_resource
+   *         See above.
+   * @tparam Task_err
+   *         See above.
+   * @param batch
+   *        See above.
+   * @param assume_would_block
+   *        See above.
+   * @param sync_err_code
+   *        See above.
+   *        Do realize error::Code::S_SYNC_IO_WOULD_BLOCK *is* still an error, so if this pointer is null, then
+   *        would-block *will* make this throw.
+   * @param on_done_func
+   *        See above.
+   * @return See above.
+   */
+  template<typename Msg_resource, typename Task_err>
+  bool async_receive_native_handle_batch(Blob_batch_in<Msg_resource>* batch, bool assume_would_block,
+                                         Error_code* sync_err_code, Task_err&& on_done_func);
+
+  /**
    * In PEER state: Irreversibly enables a conceptual idle timer whose potential side effect is, once at least
    * the specified time has passed since the last received low-level traffic (or this call, whichever most
    * recently occurred), to emit the pipe-hosing error error::Code::S_RECEIVER_IDLE_TIMEOUT.
@@ -332,6 +398,24 @@ public:
    * @return See above.
    */
   bool idle_timer_run(util::Fine_duration timeout);
+
+  /**
+   * Returns the accumulated transport statistics as of this call.
+   * If not in PEER state returns a zeroed-out stats object.
+   *
+   * All notes from sync_io::Native_handle_receiver apply.
+   *
+   * @return See above.
+   */
+  Blob_rcv_stats blob_receive_stats() const;
+
+  /**
+   * Resets the transport statistics as of this call.  The formal meaning of a reset is discussed in
+   * `flow::util::stat` doc header.  If not in PEER state this is a no-op.
+   */
+  void blob_receive_stats_reset();
 }; // class Blob_receiver
 
 } // namespace ipc::transport::sync_io
+
+#endif // ifdef IPC_DOXYGEN_ONLY

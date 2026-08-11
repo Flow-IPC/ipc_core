@@ -35,10 +35,10 @@ namespace ipc::util::sync_io
  *
  * ### Rationale ###
  * In the `sync_io` pattern, suppose there is ipc::transport or ipc::session object X (e.g.,
- * ipc::transport::sync_io::Native_socket_stream::Impl).  By definiton of the `sync_io` pattern, X itself
+ * ipc::transport::sync_io::Native_socket_stream_impl).  By definiton of the `sync_io` pattern, X itself
  * endeavours to not async-wait on various events itself, in its own threads it might start, but rather
  * instructs the user to wait on Native_handle being readable or writable and to inform X of such an event
- * (see sync_io::Event_wait_func doc header).  For example `Native_socket_stream::Impl`, when awaiting in-traffic,
+ * (see sync_io::Event_wait_func doc header).  For example `Native_socket_stream_impl`, when awaiting in-traffic,
  * uses #Event_wait_func to inform itself when the Unix-domain socket has become readable -- the user uses
  * their own `[e]poll*()` or boost.asio loop or ... to detect the readability and then informs X when this happens.
  *
@@ -153,7 +153,7 @@ public:
    * Object representing the read end of IPC mechanism, where readable status indicates the associated
    * timer_async_wait() call has resulted in the timer firing.  Formally the `*this` user shall perform only
    * the following operations on such an object R, after obtaining it from create_timer_signal_pipe():
-   *   - Load your Asio_waitable_native_handle `E` via `E.assign(Native_handle(R.native_handle())`
+   *   - Load your Asio_waitable_native_handle `E` via `E.assign(Native_handle{R.native_handle()})`
    *     or equivalent.
    *   - Call `Event_wait_func`, passing in `&E`, just ahead of Timer_event_emitter::timer_async_wait().
    *   - Call `consume_timer_firing_signal(&R)` in the handler for the so-registered-via-`Event_wait_func`

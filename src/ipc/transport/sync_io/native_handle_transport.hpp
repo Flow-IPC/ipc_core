@@ -65,7 +65,7 @@ namespace ipc::transport::sync_io
  * Therefore: If you report an active event to `*this` (per `sync_io` pattern) from thread 1, and possibly
  * call methods such as `send_native_handle()` from thread 2, then you must use a mutex (or strand or ...)
  * to prevent concurrent execution.  For example: transport::Native_socket_stream, which internally operates
- * a sync_io::Native_socket_stream, uses a send-ops mutex (`transport::Native_socket_stream::Impl::m_snd_mutex`).
+ * a sync_io::Native_socket_stream, uses a send-ops mutex (`transport::Native_socket_stream_impl::m_snd_mutex`).
  *
  * ### Rationale: Why is send_native_handle() not asynchronous? ###
  * Same notes as for transport::Native_handle_sender.
@@ -77,6 +77,15 @@ public:
 
   /// Same notes as for transport::Native_handle_sender.
   static const Shared_name S_RESOURCE_TYPE_ID;
+
+  // Types.
+
+  /**
+   * Return type, typically a `struct`, for native_handle_send_stats().
+   *
+   * All notes from transport::Native_handle_sender::Native_handle_snd_stats doc header apply verbatim.
+   */
+  using Native_handle_snd_stats = value;
 
   // Constructors/destructor.
 
@@ -181,7 +190,7 @@ public:
    * In PEER state: Synchronously, non-blockingly sends one discrete message, reliably/in-order, to the opposing peer;
    * the message consists of the provided native handle (if supplied); or the provided binary blob (if supplied);
    * or both (if both supplied).  The opposing peer's paired sync_io::Native_handle_receiver or
-   * transport::Native_handle_receiver shall receive it reliably and in-order via `async_receive_native_handle()`.
+   * transport::Native_handle_receiver shall receive it reliably and in-order via `async_receive_*()`.
    *
    * Per `sync_io` pattern: if internally more work is required asynchronously pending 1+ native handles being
    * in 1+ active-event (readable, writable) state, this method shall synchronously invoke the `Event_wait_func`
@@ -213,12 +222,13 @@ public:
    * @return Same notes as for transport::Native_handle_sender.  In addition: return `false` if
    *         start_send_native_handle_ops() has not been called successfully.
    */
-  bool send_native_handle(Native_handle hndl_or_null, const util::Blob_const& meta_blob, Error_code* err_code = 0);
+  bool send_native_handle(Native_handle hndl_or_null, const util::Blob_const& meta_blob,
+                          Error_code* err_code = nullptr);
 
   /**
    * Equivalent to send_native_handle() but sends a graceful-close message instead of the usual payload; the opposing
    * peer's paired sync_io::Native_handle_receiver or transport::Native_handle_receiver shall receive it reliably
-   * and in-order via `async_receive_native_handle()` in the form of
+   * and in-order via `async_receive_*()` in the form of
    * #Error_code = error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE.  If invoked after already invoking
    * `*end_sending()`, the method shall no-op and return `false` and neither an exception nor truthy
    * `*err_code`.  Otherwise it shall return `true` -- but potentially emit a truthy #Error_code (if an error is
@@ -236,7 +246,7 @@ public:
    * by the `*this` user, synchronously from inside the `(*on_active_ev_func)()` call that achieves this state.
    *
    * If, by contrast, no more work is required -- the operation completed synchronously within this method -- then:
-   * success or error *other than* error::code::S_SYNC_IO_WOULD_BLOB shall be emitted (again per standard
+   * success or error *other than* error::Code::S_SYNC_IO_WOULD_BLOCK shall be emitted (again per standard
    * semantics) synchronously, and `on_done_func()` shall not be saved nor ever executed by `*this`.
    * Thus the result of the operation shall be either output directly synchronously -- if op completed synchronously --
    * or later via `on_done_func()` completion handler.
@@ -261,7 +271,7 @@ public:
    * @internal
    * The semantic re. calling `*end_sending()` after already having called it and having that exclusively
    * return `false` and do nothing was a judgment call.  As of this writing there's a long-ish comment at the top of
-   * of `"sync_io::Native_socket_stream::Impl::*end_sending()"`" body discussing why I (ygoldfel) went that way.
+   * of `"sync_io::Native_socket_stream_impl::*end_sending()"`" body discussing why I (ygoldfel) went that way.
    * @endinternal
    *
    * @tparam Task_err
@@ -318,6 +328,30 @@ public:
    *         start_send_native_handle_ops() has not been called successfully.
    */
   bool auto_ping(util::Fine_duration period = default_value);
+
+  /**
+   * Returns the accumulated transport statistics as of this call.
+   * If not in PEER state returns a zeroed-out stats object.
+   *
+   * @see #Native_handle_snd_stats doc header about how to obtain a transport::stat::Blob_snd_stats core from the
+   *      returned `struct`.
+   *
+   * ### Rationale: Why return by value, given that `const &` should be possible? ###
+   * The main reason is to be able to have an identical signature to
+   * transport::Native_handle_receiver::native_handle_receive_stats(); this allows easier generic bundling,
+   * most notably in transport::Channel.  Secondarily this increases degrees of freedom for how an impl
+   * internally handles the object.  Last but the opposite of least: It is assumed obtaining stats *results*
+   * is well off any perf-hot path.
+   *
+   * @return Stats snapshot by value.
+   */
+  Native_handle_snd_stats native_handle_send_stats() const;
+
+  /**
+   * Resets the transport statistics as of this call.  The formal meaning of a reset is discussed in
+   * `flow::util::stat` doc header.  If not in PEER state this is a no-op.
+   */
+  void native_handle_send_stats_reset();
 }; // class Native_handle_sender
 
 /**
@@ -326,9 +360,12 @@ public:
  * transport::Native_handle_receiver.  This is paired with the sync_io::Native_handle_sender concept which defines
  * sending of such messages.
  *
+ * @see transport::Native_handle_receiver -- our async-I/O counterpart.
+ * @see util::sync_io doc header -- describes the general `sync_io` pattern we are following here.
+ *
  * ### Concept contents ###
  * The concept defines the behaviors/requirements mirroring those of sync_io::Native_handle_sender.
- * Notes from that doc header apply similarly; except that among the `sync_io`-specific method names replace
+ * Notes from that doc header section apply similarly; except that among the `sync_io`-specific method names replace
  * `send_native_handle` fragment of method names with `receive_native_handle`.
  *
  * @note The "Thread safety" section most definitely applies.  You should read it.
@@ -346,6 +383,22 @@ public:
 
   /// Same notes as for transport::Native_handle_receiver.
   static constexpr bool S_META_BLOB_UNDERFLOW_ALLOWED = value;
+
+  /// Same notes as for transport::Native_handle_receiver.
+  static constexpr size_t S_RCV_NATIVE_HANDLE_BATCH_SZ_RECOMMENDATION = value;
+
+  // Types.
+
+  /// See `async_receive_*_batch()` argument `batch`.
+  template<typename Msg_resource>
+  using Native_handle_batch_in = Msg_batch_in<Msg_resource, false>;
+
+  /**
+   * Return type, typically a `struct`, for native_handle_receive_stats().
+   *
+   * All notes from transport::Native_handle_receiver::Native_handle_rcv_stats doc header apply verbatim.
+   */
+  using Native_handle_rcv_stats = value;
 
   // Constructors/destructor.
 
@@ -404,7 +457,7 @@ public:
 
   /**
    * Sets up the `sync_io`-pattern interaction between `*this` and the user's event loop; required before
-   * async_receive_native_handle(), idle_timer_run() will work (as opposed to no-op/return
+   * `async_receive_*()`, idle_timer_run() will work (as opposed to no-op/return
    * `false`).
    *
    * Otherwise the notes for sync_io::Native_handle_receiver::start_send_native_handle_ops() apply equally.
@@ -431,12 +484,12 @@ public:
    * Native_handle_sender::send_native_handle() or `"Native_handle_sender::*end_sending()"` -- and
    * receives it into the given target locations, reliably and in-order.  The message is, therefore, one of the
    * following:
-   *   - A binary blob; a native handle; or both.  This is indicated by `on_done_func(Error_code(), N)` or
+   *   - A binary blob; a native handle; or both.  This is indicated by `on_done_func(Error_code{}, N)` or
    *     the equivalent synchronous out-args (see below on that topic).
    *     The falsy code indicates success; `N <= target_meta_blob.size()` indicates the number of bytes received into
    *     `target_meta_blob.data()` (zero means no blob was sent in the message).  `*target_hndl` is set
    *     (`target_hndl->null() == true` means no handle was sent in the message).
-   *   - Graceful-close.  This is indicated by `on_done_func(error::code::S_RECEIVES_FINISHED_CANNOT_RECEIVE, 0)` or
+   *   - Graceful-close.  This is indicated by `on_done_func(error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE, 0)` or
    *     the equivalent synchronous out-args (see below on that topic).
    *     Neither the target blob nor target native handle are touched.
    *
@@ -449,7 +502,7 @@ public:
    * by the `*this` user, synchronously from inside the `(*on_active_ev_func)()` call that achieves this state.
    *
    * If, by contrast, no more work is required -- the operation completed synchronously within this method -- then:
-   * success or error *other than* error::code::S_SYNC_IO_WOULD_BLOB shall be emitted (again per standard
+   * success or error *other than* error::Code::S_SYNC_IO_WOULD_BLOCK shall be emitted (again per standard
    * semantics) synchronously; `*sync_sz` is set to 0 or bytes-transmitted, and `on_done_func()` shall not be
    * saved nor ever executed by `*this`.  Thus the result of the operation shall be either output directly
    * synchronously -- if op completed synchronously -- or later via `on_done_func()` completion handler.
@@ -497,6 +550,69 @@ public:
                                    Task_err_sz&& on_done_func);
 
   /**
+   * In PEER state: Possibly-asynchronously awaits 1+ discrete message(s) -- as sent by the opposing peer via
+   * Native_handle_sender::send_native_handle() or `"Native_handle_sender::*end_sending()"` -- and
+   * receives them into into the target locations as described by `*batch` slots, reliably and in-order.
+   *
+   * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns
+   * `false` immediately instead and otherwise no-ops (logging aside).  Same if the preceding `async_receive_*()`
+   * to have returned `true` has not yet executed its completion handler or synchronously completed.
+   *
+   * ### Semantics of the async-op ###
+   * As described just below, the batch-receive async-op occurs either synchronously within this call or
+   * has an async tail; the result is reported in different ways; but the semantics of what it does and the result
+   * (essentially the final contents of `*batch` and the `Error_code` emitted) are the same either way.
+   * These are identical to those described in doc header section "Semantics of the async-op"
+   * for transport::Native_handle_receiver::async_receive_native_handle_batch().  These are essential; please read.
+   *
+   * Per `sync_io` pattern: if internally more work is required asynchronously pending 1+ native handles being
+   * in 1+ active-event (readable, writable) state, this method shall later invoke the `Event_wait_func`
+   * registered via start_receive_native_handle_ops() by the user of `*this`; and the error code
+   * error::Code::S_SYNC_IO_WOULD_BLOCK shall be emitted here synchronously (via `*sync_err_code` if not null,
+   * exception if null -- per standard `flow::Error_code`-doc-header semantics).  Meanwhile the completion handler
+   * `on_done_func()` shall execute once the required async-waits have been satisfied
+   * by the `*this` user, synchronously from inside the `(*on_active_ev_func)()` call that achieves this state.
+   *
+   * If, by contrast, no more work is required -- the operation completed synchronously within this method -- then:
+   * success or error *other than* error::Code::S_SYNC_IO_WOULD_BLOCK shall be emitted (again per standard
+   * semantics) synchronously; `batch->n_used()` is unchanged or increases by 1+ depending on which occurred;
+   * and `on_done_func()` shall not be saved nor ever executed by `*this`.  Thus the result of the operation
+   * shall be either output directly synchronously -- if op completed synchronously -- or later via `on_done_func()`
+   * completion handler.
+   *
+   * ### Error semantics ###
+   * Same notes as for transport::Native_handle_receiver.  Exception: error may be emitted synchronously.
+   * Exception: error::Code::S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER shall not be emitted.
+   *
+   * @tparam Msg_resource
+   *         See Msg_batch_in docs; this is the eponymous template parameter to `decltype(*batch)`.
+   * @tparam Task_err
+   *         A functor type with signature identical to `flow::async::Task_asio_err`.  Note that information about
+   *         the number of messages received (if no error) is indicated via `batch->n_used()` change.
+   *         Furthermore the number of bytes in each received blob is indicated inside `*batch` as well;
+   *         use Msg_batch_in::result_payload_blob() to get these values; pass-in `idx` in range
+   *         [`0`, `batch->n_used()`).
+   * @param batch
+   *        Pointer (non-null, or behavior undefined) to Msg_batch_in impl storing the current batch state;
+   *        if the async-op results in no error (1+ message(s) received), `*batch` state is updated accordingly.
+   *        See above and/or concept Msg_batch_in docs for details.
+   * @param assume_would_block
+   *        If `true`, for performance `*this` can assume the pipe is in would-block and proceed accordingly.
+   *        If `false` it cannot make this assumption, so in particular it must attempt to synchronously obtain
+   *        any available in-messages (or pipe error).
+   * @param sync_err_code
+   *        See above.
+   *        Do realize error::Code::S_SYNC_IO_WOULD_BLOCK *is* still an error, so if this pointer is null, then
+   *        would-block *will* make this throw.
+   * @param on_done_func
+   *        See above.
+   * @return Same notes as for async_receive_native_handle().
+   */
+  template<typename Msg_resource, typename Task_err>
+  bool async_receive_native_handle_batch(Native_handle_batch_in<Msg_resource>* batch, bool assume_would_block,
+                                         Error_code* sync_err_code, Task_err&& on_done_func);
+
+  /**
    * In PEER state: Irreversibly enables a conceptual idle timer whose potential side effect is, once at least
    * the specified time has passed since the last received low-level traffic (or this call, whichever most
    * recently occurred), to emit the pipe-hosing error error::Code::S_RECEIVER_IDLE_TIMEOUT.  The implementation
@@ -510,23 +626,23 @@ public:
    *   - In *this* case the events waited-on are likely to be at most 1 (per PEER state) firing of an internal
    *     idle timer.
    *     - Indeed if that does occur, the `(*on_active_ev_func)()` call (by the `*this` user) that reported
-   *       the timer firing shall also act as-if the currently pending async_receive_native_handle() (if any)
+   *       the timer firing shall also act as-if the currently pending `async_receive_*()` (if any)
    *       encountered the pipe-hosing error error::Code::S_RECEIVER_IDLE_TIMEOUT.
    *       - No special code is necessary on the user's part to handle this: it will look like the
-   *         async_receive_native_handle() failing with a pipe-hosing error; which any proper
+   *         `async_receive_*()` failing with a pipe-hosing error; which any proper
    *         `on_done_func()` must handle anyway.
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns `false` immediately
    * instead and otherwise no-ops (logging aside).  If idle_timer_run() has already been called successfuly,
    * subsequently it will return `false` and no-op (logging aside).
    *
-   * ### Important: Relationship between idle_timer_run() and async_receive_native_handle() ###
+   * ### Important: Relationship between idle_timer_run() and `async_receive_*()` ###
    * Notes for transport::Native_handle_receiver apply.  In short: if you use idle_timer_run(), then you'd best
-   * have an async_receive_native_handle() outstanding at ~all times.
+   * have an `async_receive_*()` outstanding at ~all times.
    *
    * ### Error semantics ###
    * If and only if the timeout does occur down the line, the aforementioned error will be emitted via
-   * async_receive_native_handle() (or similar) handler.  It shall be treated as the reason to hose the pipe
+   * `async_receive_*()` handler.  It shall be treated as the reason to hose the pipe
    * (assuming it was not hosed by something else earlier).
    *
    * ### Suggested use ###
@@ -538,6 +654,28 @@ public:
    *         start_receive_native_handle_ops() has not been called successfully.
    */
   bool idle_timer_run(util::Fine_duration timeout = default_value);
+
+  /**
+   * Returns the accumulated transport statistics as of this call.
+   * If not in PEER state returns a zeroed-out stats object.
+   *
+   * @see #Native_handle_rcv_stats doc header about how to obtain a transport::stat::Blob_rcv_stats core from the
+   *      returned `struct`.
+   *
+   * ### Rationale: Why return by value, given that `const &` should be possible? ###
+   * See Native_handle_sender::native_handle_send_stats() doc header.  Same here.
+   *
+   * @return Stats snapshot by value.
+   */
+  Native_handle_rcv_stats native_handle_receive_stats() const;
+
+  /**
+   * Resets the transport statistics as of this call.  The formal meaning of a reset is discussed in
+   * `flow::util::stat` doc header.  If not in PEER state this is a no-op.
+   */
+  void native_handle_receive_stats_reset();
 }; // class Native_handle_receiver
 
 } // namespace ipc::transport::sync_io
+
+#endif // ifdef IPC_DOXYGEN_ONLY

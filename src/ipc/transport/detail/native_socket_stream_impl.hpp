@@ -18,10 +18,9 @@
 /// @file
 #pragma once
 
-#include "ipc/transport/native_socket_stream.hpp"
 #include "ipc/transport/sync_io/native_socket_stream.hpp"
-#include "ipc/transport/sync_io/detail/async_adapter_snd.hpp"
-#include "ipc/transport/sync_io/detail/async_adapter_rcv.hpp"
+#include "ipc/transport/sync_io/async_adapter_snd.hpp"
+#include "ipc/transport/sync_io/async_adapter_rcv.hpp"
 #include "ipc/transport/asio_local_stream_socket_fwd.hpp"
 #include <cstddef>
 #include <flow/async/single_thread_task_loop.hpp>
@@ -32,7 +31,7 @@ namespace ipc::transport
 // Types.
 
 /**
- * Internal, non-movable pImpl implementation of Native_socket_stream class.
+ * Internal, non-movable pImpl-lite implementation of Native_socket_stream class.
  * In and of itself it would have been directly and publicly usable; however Native_socket_stream adds move semantics
  * which are essential to cooperation with Native_socket_stream_acceptor and overall consistency with the rest
  * of ipc::transport API and, arguably, boost.asio API design.
@@ -43,7 +42,8 @@ namespace ipc::transport
  * Impl design
  * -----------
  * ### Intro / history ###
- * Native_socket_stream::Impl is, one could argue, the core class of this entire library, Flow-IPC.
+ * Native_socket_stream_impl is (or perhaps was, and now sync_io::Native_socket_stream_impl is, as you'll see),
+ * one could argue, the core class of this entire library, Flow-IPC.
  * Beyond that, even the closest alternatives (which, in the first place, cannot do some of what it can -- namely the
  * `Blob_stream_mq_*` guys cannot transmit native handles) tend to use many of the same techniques.
  * So, like, this impl design is important -- for performance on behalf of the ipc::transport use and ipc::session
@@ -66,12 +66,12 @@ namespace ipc::transport
  *
  * Naturally I scrapped the idea of simply writing the new guy from scratch and leaving existing guy as-is.
  * Instead I moved the relevant aspects of the old guy into the new guy, and (re)wrote the formerly-old guy
- * (that's the present class Native_socket_stream::Impl) *in terms of* the new guy.  (I then repeated this for
+ * (that's the present class Native_socket_stream_impl) *in terms of* the new guy.  (I then repeated this for
  * its peers Blob_stream_mq_sender -- which is like `*this` but for blobs-only and outgoing-only -- and
  * Blob_stream_mq_receiver, which is (same) but incoming-only.)  Any other approach would have resulted in 2x
  * the code and 2x the bug potential and maintenance going forward.  (Plus it allowed for the nifty
  * concept of being able to construct a Native_socket_stream from a sync_io::Native_socket_stream "core";
- * this was immediately standardized to all the relevant concepts.) Note -- however -- that as Native_socket_stream
+ * this was immediately standardized to all the relevant concepts.)  Note -- however -- that as Native_socket_stream
  * underwent this bifurcation into Native_socket_stream and sync_io::Native_socket_stream, its API did not change
  * *at all* (modulo the addition of the `sync_io`-core-subsuming constructor).
  *
@@ -88,7 +88,7 @@ namespace ipc::transport
  *
  * So... actually... it is pretty straightforward now!  Pre-decoupling it was much more of a challenge.
  * Of course, you may want to change its insides; in that case you might need to get into
- * sync_io::Native_socket_stream::Impl.  Though, that guy is simpler too, as its mission is much reduced --
+ * sync_io::Native_socket_stream_impl.  Though, that guy is simpler too, as its mission is much reduced --
  * no more "thread W" or async-handlers to invoke.
  *
  * That said you'll need to in fact understand how sync_io::Native_socket_stream (as a black box) works which means
@@ -145,11 +145,33 @@ namespace ipc::transport
  * ### Incoming-direction impl design ###
  * @see sync_io::Async_adapter_receiver where all that is encapsulated.
  */
-class Native_socket_stream::Impl :
+class Native_socket_stream_impl :
   public flow::log::Log_context,
   private boost::noncopyable // And not movable.
 {
 public:
+  // Types.
+
+  /**
+   * See Native_socket_stream counterpart.  Or, just go to where that'll ultimately point you:
+   * transport::Native_handle_receiver::Native_handle_batch_in concept doc header.
+   */
+  template<typename Msg_resource>
+  using Native_handle_batch_in = sync_io::Native_socket_stream::template Native_handle_batch_in<Msg_resource>;
+
+  /// See Native_socket_stream counterpart / transport::Blob_receiver::Blob_batch_in.
+  template<typename Msg_resource>
+  using Blob_batch_in = typename sync_io::Native_socket_stream::template Blob_batch_in<Msg_resource>;
+
+  /// Implements Blob_sender concept API.
+  using Blob_snd_stats = transport::stat::Blob_snd_stats;
+  /// Implements Native_handle_sender concept API.  Identical to #Blob_snd_stats for this impl.
+  using Native_handle_snd_stats = transport::stat::Blob_snd_stats;
+  /// Implements Blob_receiver concept API.
+  using Blob_rcv_stats = transport::stat::Blob_rcv_stats;
+  /// Implements Native_handle_receiver concept API.  Identical to #Blob_rcv_stats for this impl.
+  using Native_handle_rcv_stats = transport::stat::Blob_rcv_stats;
+
   // Constructors/destructor.
 
   /**
@@ -160,7 +182,7 @@ public:
    * @param nickname_str
    *        See Native_socket_stream counterpart.
    */
-  explicit Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str);
+  explicit Native_socket_stream_impl(flow::log::Logger* logger_ptr, util::String_view nickname_str);
 
   /**
    * See Native_socket_stream counterpart.
@@ -172,8 +194,8 @@ public:
    * @param nickname_str
    *        See Native_socket_stream counterpart.
    */
-  explicit Impl(flow::log::Logger* logger_ptr, util::String_view nickname_str,
-                Native_handle&& native_peer_socket_moved);
+  explicit Native_socket_stream_impl(flow::log::Logger* logger_ptr, util::String_view nickname_str,
+                                     Native_handle&& native_peer_socket_moved);
 
   /**
    * See Native_socket_stream counterpart.
@@ -181,7 +203,7 @@ public:
    * @param sync_io_core_in_peer_state_moved
    *        See Native_socket_stream counterpart.
    */
-  explicit Impl(sync_io::Native_socket_stream&& sync_io_core_in_peer_state_moved);
+  explicit Native_socket_stream_impl(sync_io::Native_socket_stream&& sync_io_core_in_peer_state_moved);
 
   /**
    * See Native_socket_stream counterpart.
@@ -192,16 +214,16 @@ public:
    * point it out here.
    * @endinternal
    */
-  ~Impl();
+  ~Native_socket_stream_impl();
 
   // Methods.
 
   /* The following dead code is intentionally left-in; in fact this doc header (or close to it) could live
-   * in transport::Native_socket_stream and an identical signature in this Impl would implement it.  Why is it around?
+   * in transport::Native_socket_stream and an identical signature in `*this` would implement it.  Why is it around?
    * Answer: There is currently no public async_connect(), only private; the public-facing reason for this
    * is briefly given in the Native_socket_stream class doc header (TL;DR: there's no point, as locally it's always
    * a quick operation); the internal reason that async_connect() does exist, but not publicly, is given at length
-   * in the sync_io::Native_socket_stream::Impl doc header.  release() would be quite helpful, if async_connect()
+   * in the sync_io::Native_socket_stream_impl doc header.  release() would be quite helpful, if async_connect()
    * were public: As then one could construct an async-I/O-pattern transport::Native_socket_stream; .async_connect()
    * it; then .release() the sync_io-pattern core; and various things elsewhere require sync_io-pattern cores
    * rather than the heavier-weight, thread-assisted async-I/O wrappers like a *this.  So one could .release() a core
@@ -255,7 +277,7 @@ public:
    *        See Native_socket_stream counterpart.
    * @return See Native_socket_stream counterpart.
    */
-  util::Process_credentials remote_peer_process_credentials(Error_code* err_code) const;
+  const util::Process_credentials& remote_peer_process_credentials(Error_code* err_code) const;
 
   /**
    * See Native_socket_stream counterpart.
@@ -327,6 +349,24 @@ public:
    * See Native_socket_stream counterpart.
    * @return See Native_socket_stream counterpart.
    */
+  Blob_snd_stats blob_send_stats() const;
+
+  /// See Native_socket_stream counterpart.
+  void blob_send_stats_reset();
+
+  /**
+   * See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
+  Blob_snd_stats native_handle_send_stats() const;
+
+  /// See Native_socket_stream counterpart.
+  void native_handle_send_stats_reset();
+
+  /**
+   * See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
   size_t receive_meta_blob_max_size() const;
 
   /**
@@ -365,11 +405,59 @@ public:
   /**
    * See Native_socket_stream counterpart.
    *
+   * @param batch
+   *        See Native_socket_stream counterpart.
+   * @param assume_would_block
+   *        See Native_socket_stream counterpart.
+   * @param on_done_func
+   *        See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
+  template<typename Msg_resource>
+  bool async_receive_native_handle_batch(Native_handle_batch_in<Msg_resource>* batch, bool assume_would_block,
+                                         flow::async::Task_asio_err&& on_done_func);
+
+  /**
+   * See Native_socket_stream counterpart.
+   *
+   * @param batch
+   *        See Native_socket_stream counterpart.
+   * @param assume_would_block
+   *        See Native_socket_stream counterpart.
+   * @param on_done_func
+   *        See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
+  template<typename Msg_resource>
+  bool async_receive_blob_batch(Blob_batch_in<Msg_resource>* batch, bool assume_would_block,
+                                flow::async::Task_asio_err&& on_done_func);
+
+  /**
+   * See Native_socket_stream counterpart.
+   *
    * @param timeout
    *        See Native_socket_stream counterpart.
    * @return See Native_socket_stream counterpart.
    */
   bool idle_timer_run(util::Fine_duration timeout);
+
+  /**
+   * See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
+  Blob_rcv_stats blob_receive_stats() const;
+
+  /// See Native_socket_stream counterpart.
+  void blob_receive_stats_reset();
+
+  /**
+   * See Native_socket_stream counterpart.
+   * @return See Native_socket_stream counterpart.
+   */
+  Blob_rcv_stats native_handle_receive_stats() const;
+
+  /// See Native_socket_stream counterpart.
+  void native_handle_receive_stats_reset();
 
 private:
   // Constructors.
@@ -391,7 +479,7 @@ private:
    * @param tag
    *        Ctor-selecting tag.
    */
-  explicit Impl(sync_io::Native_socket_stream&& sync_io_core_moved, std::nullptr_t tag);
+  explicit Native_socket_stream_impl(sync_io::Native_socket_stream&& sync_io_core_moved, std::nullptr_t tag);
 
   // Data.
 
@@ -403,11 +491,8 @@ private:
    *
    * Ordering: Must be either declared after mutex(es), or `.stop()`ed explicitly in dtor: Thread must be joined,
    * before mutex possibly-locked-in-it destructs.
-   *
-   * Why is it wrapped in `unique_ptr`?  As of this writing the only reason is release() needs to be able to
-   * `move()` it to a temporary stack object before destroying it outright.
    */
-  boost::movelib::unique_ptr<flow::async::Single_thread_task_loop> m_worker;
+  flow::async::Single_thread_task_loop m_worker;
 
   /**
    * The core `Native_socket_stream` engine, implementing the `sync_io` pattern (see util::sync_io doc header).
@@ -460,21 +545,34 @@ private:
    * See #m_snd_sync_io_adapter -- same stuff.
    */
   std::optional<sync_io::Async_adapter_receiver<decltype(m_sync_io)>> m_rcv_sync_io_adapter;
-}; // class Native_socket_stream::Impl
+}; // class Native_socket_stream_impl
 
-// Free functions.
+// Free functions: in *_fwd.hpp.
 
-/**
- * Prints string representation of the given Native_socket_stream::Impl to the given `ostream`.
- *
- * @relatesalso Native_socket_stream::Impl
- *
- * @param os
- *        Stream to which to write.
- * @param val
- *        Object to serialize.
- * @return `os`.
- */
-std::ostream& operator<<(std::ostream& os, const Native_socket_stream::Impl& val);
+// Template implementations.
+
+template<typename Msg_resource>
+bool Native_socket_stream_impl::async_receive_native_handle_batch(Native_handle_batch_in<Msg_resource>* batch,
+                                                                  bool assume_would_block,
+                                                                  flow::async::Task_asio_err&& on_done_func)
+{
+  return m_rcv_sync_io_adapter
+           ? (m_rcv_sync_io_adapter->async_receive_native_handle_batch
+                (batch, assume_would_block, std::move(on_done_func)),
+              true) // It's void.
+           : false;
+}
+
+template<typename Msg_resource>
+bool Native_socket_stream_impl::async_receive_blob_batch(Blob_batch_in<Msg_resource>* batch,
+                                                         bool assume_would_block,
+                                                         flow::async::Task_asio_err&& on_done_func)
+{
+  return m_rcv_sync_io_adapter
+           ? (m_rcv_sync_io_adapter->async_receive_blob_batch
+                (batch, assume_would_block, std::move(on_done_func)),
+              true) // It's void.
+           : false;
+}
 
 } // namespace ipc::transport

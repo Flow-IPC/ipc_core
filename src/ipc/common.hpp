@@ -273,7 +273,7 @@ namespace ipc
 // Types.  They're outside of `namespace ::ipc::util` for brevity due to their frequent use.
 
 /* (The @namespace and @brief thingies shouldn't be needed, but some Doxygen bug necessitated them.
- * See flow::util::bind_ns for explanation... same thing here.) */
+ * See flow::log::fs for explanation... same thing here.) */
 
 /**
  * @namespace ipc::bipc

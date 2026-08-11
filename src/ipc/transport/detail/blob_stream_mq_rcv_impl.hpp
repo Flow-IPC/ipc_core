@@ -19,7 +19,8 @@
 #pragma once
 
 #include "ipc/transport/sync_io/blob_stream_mq_rcv.hpp"
-#include "ipc/transport/sync_io/detail/async_adapter_rcv.hpp"
+#include "ipc/transport/sync_io/async_adapter_rcv.hpp"
+#include "ipc/transport/blob_stream_mq.hpp"
 #include "ipc/transport/detail/blob_stream_mq_impl.hpp"
 #include "ipc/transport/error.hpp"
 #include "ipc/util/sync_io/sync_io_fwd.hpp"
@@ -58,6 +59,7 @@ namespace ipc::transport
 template<typename Persistent_mq_handle>
 class Blob_stream_mq_receiver_impl :
   public Blob_stream_mq_base_impl<Persistent_mq_handle>,
+  public Blob_stream_mq_receiver_base,
   public flow::log::Log_context,
   private boost::noncopyable // And not movable.
 {
@@ -69,6 +71,10 @@ public:
 
   /// Short-hand for template arg for underlying MQ handle type.
   using Mq = typename Base::Mq;
+
+  /// See Blob_stream_mq_receiver counterpart.
+  template<typename Msg_resource>
+  using Blob_batch_in = Blob_stream_mq_receiver_base::Blob_batch_in<Msg_resource>;
 
   // Constructors/destructor.
 
@@ -127,11 +133,33 @@ public:
   /**
    * See Blob_stream_mq_receiver counterpart, but assuming PEER state.
    *
+   * @param batch
+   *        See Blob_stream_mq_receiver counterpart.
+   * @param assume_would_block
+   *        See Blob_stream_mq_receiver counterpart.
+   * @param on_done_func
+   *        See Blob_stream_mq_receiver counterpart.
+   */
+  template<typename Msg_resource, typename Task_err>
+  void async_receive_blob_batch(Blob_batch_in<Msg_resource>* batch, bool assume_would_block, Task_err&& on_done_func);
+
+  /**
+   * See Blob_stream_mq_receiver counterpart, but assuming PEER state.
+   *
    * @param timeout
    *        See Blob_stream_mq_receiver counterpart.
    * @return See Blob_stream_mq_receiver counterpart.
    */
   bool idle_timer_run(util::Fine_duration timeout);
+
+  /**
+   * See Blob_stream_mq_receiver counterpart.
+   * @return See Blob_stream_mq_receiver counterpart.
+   */
+  stat::Blob_rcv_stats blob_receive_stats() const;
+
+  /// See Blob_stream_mq_receiver counterpart.
+  void blob_receive_stats_reset();
 
   /**
    * See Blob_stream_mq_receiver counterpart, but assuming PEER state.
@@ -175,7 +203,7 @@ private:
   sync_io::Blob_stream_mq_receiver<Mq> m_sync_io;
 
   /**
-   * This handles ~all logic in that state.  sync_io::Async_adapter_receiver adapts
+   * This handles ~all logic.  sync_io::Async_adapter_receiver adapts
    * any sync_io::Blob_receiver and makes available ~all necessary async-I/O Blob_receiver APIs.
    * So we forward ~everything to this guy.
    *
@@ -236,8 +264,8 @@ Blob_stream_mq_receiver_impl<Persistent_mq_handle>::Blob_stream_mq_receiver_impl
 #ifndef NDEBUG
   bool ok =
 #endif
-  m_sync_io.replace_event_wait_handles([this]() -> Asio_waitable_native_handle
-                                         { return Asio_waitable_native_handle(*(m_worker.task_engine())); });
+  m_sync_io.replace_event_wait_handles([this]() -> auto
+                                         { return Asio_waitable_native_handle{*(m_worker.task_engine())}; });
   assert(ok && "Did you break contract by passing-in a non-fresh sync_io core object to ctor?");
 
   /* Have to do this after .replace_event_wait_handles() by the adapter's ctor's contract.
@@ -277,7 +305,7 @@ Blob_stream_mq_receiver_impl<Persistent_mq_handle>::~Blob_stream_mq_receiver_imp
                 "from some other thread.  In this user thread we will await those handlers' completion and then "
                 "return.");
 
-  Single_thread_task_loop one_thread(get_logger(), ostream_op_string("MQRcDeinit-", nickname()));
+  Single_thread_task_loop one_thread{get_logger(), ostream_op_string("MQRcDeinit-", nickname())};
   one_thread.start([&]()
   {
     reset_thread_pinning(get_logger()); // Don't inherit any strange core-affinity.  Float free.
@@ -309,15 +337,36 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::async_receive_blob(cons
 }
 
 template<typename Persistent_mq_handle>
+template<typename Msg_resource, typename Task_err>
+void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::async_receive_blob_batch(Blob_batch_in<Msg_resource>* batch,
+                                                                                  bool assume_would_block,
+                                                                                  Task_err&& on_done_func)
+{
+  m_sync_io_adapter->async_receive_blob_batch(batch, assume_would_block, std::move(on_done_func));
+}
+
+template<typename Persistent_mq_handle>
 bool Blob_stream_mq_receiver_impl<Persistent_mq_handle>::idle_timer_run(util::Fine_duration timeout)
 {
   return m_sync_io_adapter->idle_timer_run(timeout);
 }
 
 template<typename Persistent_mq_handle>
+stat::Blob_rcv_stats Blob_stream_mq_receiver_impl<Persistent_mq_handle>::blob_receive_stats() const
+{
+  return m_sync_io_adapter->blob_receive_stats();
+}
+
+template<typename Persistent_mq_handle>
+void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::blob_receive_stats_reset()
+{
+  m_sync_io_adapter->blob_receive_stats_reset();
+}
+
+template<typename Persistent_mq_handle>
 size_t Blob_stream_mq_receiver_impl<Persistent_mq_handle>::receive_blob_max_size() const
 {
-  /* Never changes (always in PEER state); no need to lock.  Contrast with transport::Native_socket_stream::Impl
+  /* Never changes (always in PEER state); no need to lock.  Contrast with transport::Native_socket_stream_impl
    * which has to rationalize somewhat harder... but also locks nothing here. */
   return m_sync_io.receive_blob_max_size();
 }

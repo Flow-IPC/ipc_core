@@ -17,15 +17,16 @@
 
 /// @file
 #include "ipc/transport/sync_io/detail/native_socket_stream_impl.hpp"
+#include "ipc/transport/native_socket_stream_cfg.hpp"
 #include "ipc/transport/error.hpp"
 #include <boost/move/make_unique.hpp>
 
 namespace ipc::transport::sync_io
 {
 
-// Native_socket_stream::Impl implementations (::snd_*() and send-API methods only).
+// Native_socket_stream_impl implementations (::snd_*() and send-API methods only).
 
-bool Native_socket_stream::Impl::start_send_native_handle_ops(util::sync_io::Event_wait_func&& ev_wait_func)
+bool Native_socket_stream_impl::start_send_native_handle_ops(util::sync_io::Event_wait_func&& ev_wait_func)
 {
   using util::Blob_const;
 
@@ -36,63 +37,70 @@ bool Native_socket_stream::Impl::start_send_native_handle_ops(util::sync_io::Eve
   // else
 
   const auto protocol_ver_to_send_if_needed = m_protocol_negotiator.local_max_proto_ver_for_sending();
-  if (protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_UNKNOWN)
+  assert(protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_UNKNOWN);
+
+  assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
+         && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
+  assert((!m_snd_pending_err_code) && "We should be the first send-related transmission code possible.");
+
+  /* As discussed in m_protocol_negotiator doc header and class doc header "Protocol negotiation" section:
+   * send a special as-if-payload 1 (and no payload 2): no Native_handle; no meta-blob; and the "length"
+   * field in payload 1 instead of any length stores protocol_ver_to_send_if_needed (sized appropriately).
+   * By the way m_protocol_negotiator logged about the fact we're about to send it, so we can be pretty quiet.
+   *
+   * The mechanics here are very similar to how send_native_handle() invokes snd_sync_write_or_q_payload().
+   * Keeping comments light, except where something different applies (as of this writing that's just: the
+   * meaning of snd_sync_write_or_q_payload() return value). */
+
+  const auto fake_meta_length_raw
+    = static_cast<Native_socket_stream_cfg::low_lvl_payload_blob_length_t>(protocol_ver_to_send_if_needed);
+  const Blob_const payload_blob{&fake_meta_length_raw, sizeof(fake_meta_length_raw)};
+
+  FLOW_LOG_TRACE("Socket stream [" << *this << "]: Want to send protocol-negotiation info.  "
+                 "About to send payload 1 of 1; "
+                 "contains low-level blob of size [" << payload_blob.size() << "] "
+                 "located @ [" << payload_blob.data() << "].");
+
+  snd_sync_write_or_q_payload({}, payload_blob, {}, false);
+  m_snd_stats.m_total_low_lvl_bytes += sizeof(fake_meta_length_raw);
+  /* m_send_pending_err_code may have become truthy; just means next send_*()/whatever will emit that error.
+   *
+   * Otherwise: Either it inline-sent it (very likely), or it got queued.
+   *            Either way: no error; let's get on with queuing-or-sending real stuff like send_*() payloads.
+   * P.S. There's only 1 protocol version as of this writing, so there's no ambiguity, and we can just get on with
+   * sending stuff right away.  This could change in the future.  See m_protocol_negotiator doc header for more. */
+
+  /* If we bring back transport::Native_socket_stream::release() (currently that code path if `#if 0`d out;
+   * like see the `#if 0`d reset_sync_io_setup()), then instead of assert()ing
+   * that `protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_UNKNOWN` above, it would become an `if`,
+   * and if that isn't the case then we'd just log the following and no-op. */
+#if 0
+  FLOW_LOG_TRACE("Socket stream [" << *this << "]: Wanted to send protocol-negotiation info; "
+                 "but we've marked it as already-sent, even though we are in start_*_ops() in PEER state.  "
+                 "Probably we come from a .release()d Native_socket_stream which has already done it; cool.");
+#endif
+
+  // See log_stats() doc header for basic background behind the logic here.
+  if (m_snd_pending_err_code) // Note we've asserted it was not already truthy at the start.
   {
-    assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
-           && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
-
-    assert((!m_snd_pending_err_code) && "We should be the first send-related transmission code possible.");
-
-    /* As discussed in m_protocol_negotiator doc header and class doc header "Protocol negotiation" section:
-     * send a special as-if-send_blob()-user-message: no Native_handle; meta-blob = sized
-     * to sizeof(protocol_ver_to_send_if_needed), containing protocol_ver_to_send_if_needed.
-     * By the way m_protocol_negotiator logged about the fact we're about to send it, so we can be pretty quiet.
-     *
-     * The mechanics here are very similar to how send_native_handle() invokes snd_sync_write_or_q_payload().
-     * Keeping comments light, except where something different applies (as of this writing that's just: the
-     * meaning of snd_sync_write_or_q_payload() return value). */
-
-    const auto fake_meta_length_raw = low_lvl_payload_blob_length_t(protocol_ver_to_send_if_needed);
-    const Blob_const payload_blob(&fake_meta_length_raw, sizeof(fake_meta_length_raw));
-
-    FLOW_LOG_TRACE("Socket stream [" << *this << "]: Want to send protocol-negotiation info.  "
-                   "About to send payload 1 of 1; "
-                   "contains low-level blob of size [" << payload_blob.size() << "] "
-                   "located @ [" << payload_blob.data() << "].");
-
-    snd_sync_write_or_q_payload({}, payload_blob, false);
-    /* m_send_pending_err_code may have become truthy; just means next send_*()/whatever will emit that error.
-     *
-     * Otherwise: Either it inline-sent it (very likely), or it got queued.
-     *            Either way: no error; let's get on with queuing-or-sending real stuff like send_*() payloads.
-     * P.S. There's only 1 protocol version as of this writing, so there's no ambiguity, and we can just get on with
-     * sending stuff right away.  This could change in the future.  See m_protocol_negotiator doc header for more. */
+    log_stats("start_send_native_handle_ops(): while sync-processing: proto-neg-send => snd-pipe hosed");
   }
-  else
-  {
-    FLOW_LOG_TRACE("Socket stream [" << *this << "]: Wanted to send protocol-negotiation info; "
-                   "but we've marked it as already-sent, even though we are in start_*_ops() in PEER state.  "
-                   "Probably we come from a .release()d Native_socket_stream which has already done it; cool.");
-
-  }
-  // else { Corner case... we come from a .release()d guy.  See Impl::reset_sync_io_setup().  Already sent it. }
 
   return true;
-} // Native_socket_stream::Impl::start_send_native_handle_ops()
+} // Native_socket_stream_impl::start_send_native_handle_ops()
 
-bool Native_socket_stream::Impl::start_send_blob_ops(util::sync_io::Event_wait_func&& ev_wait_func)
+bool Native_socket_stream_impl::start_send_blob_ops(util::sync_io::Event_wait_func&& ev_wait_func)
 {
   return start_send_native_handle_ops(std::move(ev_wait_func));
 }
 
-bool Native_socket_stream::Impl::send_blob(const util::Blob_const& blob, Error_code* err_code)
+bool Native_socket_stream_impl::send_blob(const util::Blob_const& blob, Error_code* err_code)
 {
-  // Just use this in degraded fashion.
-  return send_native_handle(Native_handle(), blob, err_code);
+  return send_native_handle({}, blob, err_code);
 }
 
-bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, const util::Blob_const& meta_blob,
-                                                    Error_code* err_code)
+bool Native_socket_stream_impl::send_native_handle(Native_handle hndl_or_null, const util::Blob_const& meta_blob,
+                                                   Error_code* err_code)
 {
   using util::Fine_duration;
   using util::Blob_const;
@@ -112,13 +120,14 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
   }
   // else
 
+  const bool was_hosed_already = bool(m_snd_pending_err_code);
   const size_t meta_size = meta_blob.size();
   assert(((!hndl_or_null.null()) || (meta_size != 0))
          && "Native_socket_stream::send_blob() blob must have length 1+; "
               "Native_socket_stream::send_native_handle() must have same or non-null hndl_or_null or both.");
 
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: Will send handle [" << hndl_or_null << "] with "
-                 "meta-blob of size [" << meta_blob.size() << "].");
+                 "meta-blob of size [" << meta_size << "].");
   if (meta_size != 0)
   {
     // Verbose and slow (100% skipped unless log filter passes).
@@ -140,14 +149,14 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
     *err_code = error::Code::S_SENDS_FINISHED_CANNOT_SEND;
     // Note that this clause will always be reached subsequently also.
   }
-  else if (meta_blob.size() > S_MAX_META_BLOB_LENGTH)
+  else if (meta_size > Native_socket_stream_cfg::S_MAX_META_BLOB_LENGTH)
   {
     *err_code = error::Code::S_INVALID_ARGUMENT;
-    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Send: User argument length [" << meta_blob.size() << "] "
-                     "exceeds limit [" << S_MAX_META_BLOB_LENGTH << "].");
+    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Send: User argument length [" << meta_size << "] "
+                     "exceeds limit [" << Native_socket_stream_cfg::S_MAX_META_BLOB_LENGTH << "].");
     // More WARNING logging below; just wanted to show those particular details also.
   }
-  else if (m_snd_pending_err_code) // && (!m_snd_finished) && (meta_blob.size() OK)
+  else if (was_hosed_already) // && (!m_snd_finished) && (meta_size OK)
   {
     /* This --^ holds either the last inline-completed send_native_handle() call's emitted Error_code, or (rarely) one
      * that was found while attempting to dequeue previously-would-blocked queued-up (due to incomplete s_n_h())
@@ -160,55 +169,81 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
                   "send attempts like this.  Will not proceed with send.  More info in WARNING below.");
     *err_code = m_snd_pending_err_code;
   }
-  else // if (!m_snd_finished) && (meta_blob.size() OK) && (!m_snd_pending_err_code)
+  else // if (!m_snd_finished) && (meta_size OK) && (!was_hosed_already)
   {
-    /* As seen in protocol definition in class doc header, payload 1 contains handle, if any, and the length of
-     * the blob in payload 2 (or 0 if no payload 2).  Set up the meta-length thing on the stack before entering
-     * critical section.  Endianness stays constant on the machine, so don't worry about that.
-     * @todo Actually it would be (1) more forward-compatible and (2) consistent to do the same as how
-     * the structured layer encodes UUIDs -- mandating a pre-send conversion native->little-endian, post-send
-     * conversion backwards.  The forward-compatibility is for when this mechanism is expanded to inter-machine IPC;
-     * while noting that the conversion is actually a no-op given our known hardware, so no real perf penalty. */
-    const auto meta_length_raw = low_lvl_payload_blob_length_t(meta_size);
+    /* For Protocol_byte_stream:
+     *   As seen in protocol definition in class doc header, payload 1 contains handle, if any, and the length of
+     *   the blob in payload 2 (or 0 if no payload 2).  Set up the meta-length thing on the stack before entering
+     *   critical section.  Endianness stays constant on the machine, so don't worry about that.
+     *   @todo Actually it would be (1) more forward-compatible and (2) consistent to do the same as how
+     *   the structured layer encodes UUIDs -- mandating a pre-send conversion native->little-endian, post-send
+     *   conversion backwards.  The forward-compatibility is for when this mechanism is expanded to inter-machine IPC;
+     *   while noting that the conversion is actually a no-op given our known hardware, so no real perf penalty.
+     * For Protocol_pkt_stream:
+     *   Actually it is all almost the same (on the send side; receipt algorithm is more different between the two).
+     *   The differences:
+     *     - Payload 1 and payload 2 (if any) *must* be in the same OS-write call.  Since we don't want to first copy
+     *       meta_blob's contents into some temp buffer, we must use scatter/gather semantics.  Happily, though,
+     *       the exact same thing can be done for Protocol_byte_stream; it does not have to be, but it is better, as
+     *       the kernel locking involved in making syscalls can be surprisingly expensive under load.  So we can
+     *       use the same OS-write call in both cases -- mandatory here but optional-but-faster for
+     *       Protocol_byte_stream.
+     *     - Since the OS maintains dgram boundaries for us, when payload 2 has 1+ bytes we still need not encode
+     *       any length; we encode zero still. */
+    using len_t = Native_socket_stream_cfg::low_lvl_payload_blob_length_t;
+    len_t meta_length_raw;
+    if constexpr(Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT)
+    {
+      meta_length_raw = 0;
+    }
+    else
+    {
+      meta_length_raw = static_cast<len_t>(meta_size);
+    }
     // ^-- must stay on stack while snd_sync_write_or_q_payload() executes, and it will.  Will be copied if must queue.
-    const Blob_const meta_length_blob(&meta_length_raw, sizeof(meta_length_raw));
+    const Blob_const meta_length_blob{&meta_length_raw, sizeof(meta_length_raw)};
 
     // Payload 2, if any, consists of stuff we already have ready, namely simply meta_blob itself.  Nothing to do now.
 
-    // Little helper for below; handles each `(handle or none, blob)` payload.  Sets m_snd_pending_err_code.
-    const auto send_low_lvl_payload
-      = [&](unsigned int idx, Native_handle payload_hndl, const Blob_const& payload_blob)
+    const auto logger_ptr = get_logger();
+    if (logger_ptr && logger_ptr->should_log(flow::log::Sev::S_TRACE, get_log_component()))
     {
-      FLOW_LOG_TRACE("Socket stream [" << *this << "]: Wanted to send handle [" << hndl_or_null << "] with "
-                     "meta-blob of size [" << meta_blob.size() << "].  "
-                     "About to send payload index [" << idx << "] of "
-                     "[" << ((meta_length_raw == 0) ? 1 : 2) << "] new low-level payloads; "
-                     "includes handle [" << payload_hndl << "] and "
-                     "low-level blob of size [" << payload_blob.size() << "] "
-                     "located @ [" << payload_blob.data() << "].");
-
-      /* As the name indicates this may synchronously finish it or queue up any parts instead to be done once
-       * a would-block clears, when user informs of this past the present function's return. */
-      snd_sync_write_or_q_payload(payload_hndl, payload_blob, false);
-      /* That may have returned `true` indicating everything (up to and including our payload) was synchronously
-       * given to kernel successfuly; or this will never occur, because outgoing-pipe-ending error was encountered.
-       * Since this is send_native_handle(), we do not care: there is no on-done
-       * callback to invoke, as m_snd_finished is false, as *end_sending() has not been called yet. */
-    }; // const auto send_low_lvl_payload =
-
-    /* Send-or-queue each payload of which we spoke above.  There's a very high chance all of this is done inline;
-     * but there's a small chance either there's stuff queued already (we've delegated waiting for would-block
-     * to clear to user), or not but this can't fully complete (encountered would-block).  We don't care here per
-     * se; I am just saying for context, to clarify what "send-or-queue" means. */
-    send_low_lvl_payload(1, hndl_or_null, meta_length_blob); // It sets m_snd_pending_err_code.
-    if ((meta_length_raw != 0) && (!m_snd_pending_err_code))
-    {
-      send_low_lvl_payload(2, Native_handle(), meta_blob); // It sets m_snd_pending_err_code.
+      FLOW_LOG_TRACE_WITHOUT_CHECKING
+        ("Socket stream [" << *this << "]: Wanted to send handle [" << hndl_or_null << "] with "
+         "meta-blob of size [" << meta_size << "].  About to send payload 1 (includes handle above and "
+         "low-level sub-blob of size [" << sizeof(len_t) << "] located @ [" << &meta_length_raw << "]).");
+      if (meta_size != 0)
+      {
+        FLOW_LOG_TRACE_WITHOUT_CHECKING
+          ("Socket stream [" << *this << "]: ...plus: "
+           "About to send payload 2 (low-level sub-blob of size [" << meta_size << "] "
+           "located @ [" << meta_blob.data() << "]).");
+      }
     }
 
-    *err_code = m_snd_pending_err_code; // Emit the new error.
+    /* As the name indicates, this may synchronously finish it or queue up any parts instead to be done once
+     * a would-block clears, when user informs of this past the present function's return.  If fatal error occurs
+     * instead, then m_snd_pending_err_code shall become truthy.
+     * (If meta_size is 0, meta_blob is basically as-if-default-cted Blob_const{} and will be ignored.) */
+    snd_sync_write_or_q_payload(hndl_or_null, meta_length_blob, meta_blob, false);
+    /* That may have returned `true` indicating everything (up to and including our 1-2 payloads) was synchronously
+     * given to kernel successfuly; or this will never occur, because outgoing-pipe-ending error was encountered.
+     * Since this is send_native_handle(), we do not care: there is no on-done
+     * callback to invoke, as m_snd_finished is false, as *end_sending() has not been called yet. */
 
-    // Did either thing generate a new error?
+    *err_code = m_snd_pending_err_code; // Emit the new error if any.
+
+    if (!*err_code)
+    {
+      // Successful user send.
+      ++m_snd_stats.m_total_msgs;
+      m_snd_stats.m_total_bytes += meta_size;
+      m_snd_stats.m_total_low_lvl_bytes += (sizeof(len_t) + meta_size);
+      m_snd_stats.m_histo_payload_sz.record_value(meta_size);
+      if (!hndl_or_null.null()) { ++m_snd_stats.m_msgs_with_hndls; }
+    }
+
+    // Did it generate a new error?
     if (*err_code)
     {
       FLOW_LOG_TRACE("Socket stream [" << *this << "]: Wanted to send user message but detected error "
@@ -248,14 +283,14 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
       }
     } // else if (m_snd_auto_ping_period != zero) && (!*err_code)
     // else if (m_snd_auto_ping_period == zero) && (!*err_code) { Auto-ping feature not engaged. }
-  } /* else if (!m_snd_finished) && (meta_blob.size() OK) && (!m_snd_pending_err_code)
+  } /* else if (!m_snd_finished) && (meta_size OK) && (!m_snd_pending_err_code)
      *         (but m_snd_pending_err_code may have become truthy inside) */
 
   if (*err_code)
   {
     // At the end try to categorize nature of error.
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: Wanted to send handle [" << hndl_or_null << "] with "
-                     "meta-blob of size [" << meta_blob.size() << "], but an error (not necessarily new error) "
+                     "meta-blob of size [" << meta_size << "], but an error (not necessarily new error) "
                      "encountered on pipe or in user API args.  Error code details follow: "
                      "[" << *err_code << "] [" << err_code->message() << "];  "
                      "pipe hosed (sys/protocol error)? = "
@@ -265,41 +300,32 @@ bool Native_socket_stream::Impl::send_native_handle(Native_handle hndl_or_null, 
                      "[" << (*err_code == error::Code::S_SENDS_FINISHED_CANNOT_SEND) << "].");
   }
 
-  return true;
-} // Native_socket_stream::Impl::send_native_handle()
+  // See log_stats() doc header for basic background behind the logic here.
+  if ((!was_hosed_already) && m_snd_pending_err_code)
+  {
+    log_stats("send_native_handle(): while sync-processing snd-pipe hosed");
+  }
 
-bool Native_socket_stream::Impl::end_sending()
+  return true;
+} // Native_socket_stream_impl::send_native_handle()
+
+bool Native_socket_stream_impl::end_sending()
 {
-  return async_end_sending_impl(nullptr, flow::async::Task_asio_err());
+  return async_end_sending_impl(nullptr, {});
 }
 
-bool Native_socket_stream::Impl::async_end_sending(Error_code* sync_err_code_ptr,
-                                                   flow::async::Task_asio_err&& on_done_func)
+bool Native_socket_stream_impl::async_end_sending(Error_code* err_code,
+                                                  flow::async::Task_asio_err&& on_done_func)
 {
-  Error_code sync_err_code;
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, async_end_sending, _1, std::move(on_done_func));
+  // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
+
   // This guy either takes null/.empty(), or non-null/non-.empty(): it doesn't do the Flow-style error emission itself.
-  const bool ok = async_end_sending_impl(&sync_err_code, std::move(on_done_func));
+  return async_end_sending_impl(err_code, std::move(on_done_func));
+} // Native_socket_stream_impl::async_end_sending()
 
-  if (!ok)
-  {
-    return false; // False start.
-  }
-  // else
-
-  // Standard error-reporting semantics.
-  if ((!sync_err_code_ptr) && sync_err_code)
-  {
-    throw flow::error::Runtime_error(sync_err_code, "Native_socket_stream::Impl::async_end_sending()");
-  }
-  // else
-  sync_err_code_ptr && (*sync_err_code_ptr = sync_err_code);
-  // And if (!sync_err_code_ptr) + no error => no throw.
-
-  return true;
-} // Native_socket_stream::Impl::async_end_sending()
-
-bool Native_socket_stream::Impl::async_end_sending_impl(Error_code* sync_err_code_ptr_or_null,
-                                                        flow::async::Task_asio_err&& on_done_func_or_empty)
+bool Native_socket_stream_impl::async_end_sending_impl(Error_code* sync_err_code_ptr_or_null,
+                                                       flow::async::Task_asio_err&& on_done_func_or_empty)
 {
   using util::Blob_const;
   using flow::async::Task_asio_err;
@@ -356,6 +382,8 @@ bool Native_socket_stream::Impl::async_end_sending_impl(Error_code* sync_err_cod
     return false;
   }
   // else
+
+  bool became_hosed = false;
   m_snd_finished = true; // Cause future send_native_handle() to emit S_SENDS_FINISHED_CANNOT_SEND and return.
 
   bool qd; // Set to false to report results *now*: basically true <=> stuff is still queued to send.
@@ -365,16 +393,11 @@ bool Native_socket_stream::Impl::async_end_sending_impl(Error_code* sync_err_cod
   }
   else
   {
-    // Save this to emit once everything (including the thing we just made) has been sent off.  Or not if empty.
-    assert(m_snd_pending_on_last_send_done_func_or_empty.empty());
-    m_snd_pending_on_last_send_done_func_or_empty = std::move(on_done_func_or_empty);
-    // on_done_func_or_empty is potentially hosed now.
-
     /* Prepare/send the payload per aforementioned (class doc header) strategy: no handle, and a 0x0000 integer.
-     * Keeping comments light, as this is essentially a much simplified version of send_native_handle(). */
+     * Keeping comments light, as this is essentially a simplified version of send_native_handle(). */
 
-    const auto ZERO_SIZE_RAW = low_lvl_payload_blob_length_t(0);
-    const Blob_const blob_with_0(&ZERO_SIZE_RAW, sizeof(ZERO_SIZE_RAW));
+    const auto ZERO_SIZE_RAW = static_cast<Native_socket_stream_cfg::low_lvl_payload_blob_length_t>(0);
+    const Blob_const blob_with_0{&ZERO_SIZE_RAW, sizeof(ZERO_SIZE_RAW)};
 
     /* snd_sync_write_or_q_payload():
      * Returns true => out-queue flushed successfully; or error detected.
@@ -382,7 +405,10 @@ bool Native_socket_stream::Impl::async_end_sending_impl(Error_code* sync_err_cod
      * Returns false => out-queue has stuff in it and will continue to, until transport is writable.
      *   => cannot report completion yet. */
 
-    qd = !snd_sync_write_or_q_payload(Native_handle(), blob_with_0, false);
+    qd = !snd_sync_write_or_q_payload({}, blob_with_0, {}, false);
+    became_hosed = bool(m_snd_pending_err_code);
+
+    m_snd_stats.m_total_low_lvl_bytes += sizeof(ZERO_SIZE_RAW);
     if (qd && sync_err_code_ptr_or_null)
     {
       /* It has not been flushed (we will return would-block).
@@ -433,10 +459,16 @@ bool Native_socket_stream::Impl::async_end_sending_impl(Error_code* sync_err_cod
   }
   // else { Don't care about completion. }
 
-  return true;
-} // Native_socket_stream::Impl::async_end_sending_impl()
+  // See log_stats() doc header for basic background behind the logic here.
+  if (became_hosed)
+  {
+    log_stats("async_end_sending_impl(): while sync-processing snd-pipe hosed");
+  }
 
-bool Native_socket_stream::Impl::auto_ping(util::Fine_duration period)
+  return true;
+} // Native_socket_stream_impl::async_end_sending_impl()
+
+bool Native_socket_stream_impl::auto_ping(util::Fine_duration period)
 {
   using util::Blob_const;
   using util::Fine_duration;
@@ -464,7 +496,7 @@ bool Native_socket_stream::Impl::auto_ping(util::Fine_duration period)
    * *some* message (auto-ping or otherwise) is sent at least every `period` until *end_sending() or error. */
 
   /* Prepare the payload per class doc header strategy: no handle, and a 0xFFFF... integer.
-   * Keeping comments somewhat light, as this is essentially a much simplified version of send_native_handle()
+   * Keeping comments somewhat light, as this is essentially a simplified version of send_native_handle()
    * and is very similar to what async_end_sending() does in this spot. */
 
   if (m_snd_auto_ping_period != Fine_duration::zero())
@@ -493,12 +525,17 @@ bool Native_socket_stream::Impl::auto_ping(util::Fine_duration period)
   }
   // else
 
-  const Blob_const blob_with_ff(&S_META_BLOB_LENGTH_PING_SENTINEL, sizeof(S_META_BLOB_LENGTH_PING_SENTINEL));
+  const Blob_const blob_with_ff{&Native_socket_stream_cfg::S_PING_SENTINEL,
+                                sizeof(Native_socket_stream_cfg::S_PING_SENTINEL)};
 
   /* Important: avoid_qing=true for reasons explained in its doc header.  Namely:
    * If blob_with_ff would-block entirely, then there are already data that would signal-non-idleness sitting
    * in the kernel buffer, so the auto-ping can be safely dropped in that case. */
-  snd_sync_write_or_q_payload(Native_handle(), blob_with_ff, true);
+  snd_sync_write_or_q_payload({}, blob_with_ff, {}, true);
+
+  ++m_snd_stats.m_auto_pings; // Count even if dropped due to avoid_qing or error below.
+  m_snd_stats.m_total_low_lvl_bytes += sizeof(Native_socket_stream_cfg::S_PING_SENTINEL);
+
   if (m_snd_pending_err_code)
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: Wanted to send initial auto-ping but detected error "
@@ -507,6 +544,11 @@ bool Native_socket_stream::Impl::auto_ping(util::Fine_duration period)
                      "[" << m_snd_pending_err_code.message() << "].  "
                      "Saved error code to return in next user send attempt if any; otherwise ignoring; "
                      "will not schedule periodic auto-pings.");
+
+    /* See log_stats() doc header for basic background behind the logic here.
+     * Note we would've returned already had m_snd_pending_err_code been already truthy at the start. */
+    log_stats("auto_ping(): while sync-processing: auto-ping-send => snd-pipe hosed");
+
     return true;
   }
   // else
@@ -538,9 +580,9 @@ bool Native_socket_stream::Impl::auto_ping(util::Fine_duration period)
   m_timer_worker.timer_async_wait(&m_snd_auto_ping_timer, m_snd_auto_ping_timer_fired_peer);
 
   return true;
-} // Native_socket_stream::Impl::auto_ping()
+} // Native_socket_stream_impl::auto_ping()
 
-void Native_socket_stream::Impl::snd_on_ev_auto_ping_now_timer_fired()
+void Native_socket_stream_impl::snd_on_ev_auto_ping_now_timer_fired()
 {
   using util::Blob_const;
   using util::Task;
@@ -579,9 +621,14 @@ void Native_socket_stream::Impl::snd_on_ev_auto_ping_now_timer_fired()
 
   // The next code is similar to the initial auto_ping().  Keeping comments light.
 
-  const Blob_const blob_with_ff{&S_META_BLOB_LENGTH_PING_SENTINEL, sizeof(S_META_BLOB_LENGTH_PING_SENTINEL)};
+  const Blob_const blob_with_ff{&Native_socket_stream_cfg::S_PING_SENTINEL,
+                                sizeof(Native_socket_stream_cfg::S_PING_SENTINEL)};
 
-  snd_sync_write_or_q_payload(Native_handle(), blob_with_ff, true);
+  snd_sync_write_or_q_payload({}, blob_with_ff, {}, true);
+
+  ++m_snd_stats.m_auto_pings;
+  m_snd_stats.m_total_low_lvl_bytes += sizeof(Native_socket_stream_cfg::S_PING_SENTINEL);
+
   if (m_snd_pending_err_code)
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: Wanted to send non-initial auto-ping but detected error "
@@ -590,6 +637,10 @@ void Native_socket_stream::Impl::snd_on_ev_auto_ping_now_timer_fired()
                      "[" << m_snd_pending_err_code.message() << "].  "
                      "Saved error code to return in next user send attempt if any; otherwise ignoring; "
                      "will not continue scheduling periodic auto-pings.");
+
+    /* See log_stats() doc header for basic background behind the logic here.
+     * Note we would've returned already had m_snd_pending_err_code been already truthy at the start. */
+    log_stats("snd_on_ev_auto_ping_now_timer_fired(): while attempting to send auto-ping snd-pipe hosed");
     return;
   }
   // else
@@ -600,10 +651,10 @@ void Native_socket_stream::Impl::snd_on_ev_auto_ping_now_timer_fired()
                        ([this]() { snd_on_ev_auto_ping_now_timer_fired(); }));
   m_snd_auto_ping_timer.expires_after(m_snd_auto_ping_period);
   m_timer_worker.timer_async_wait(&m_snd_auto_ping_timer, m_snd_auto_ping_timer_fired_peer);
-} // Native_socket_stream::Impl::snd_on_ev_auto_ping_now_timer_fired()
+} // Native_socket_stream_impl::snd_on_ev_auto_ping_now_timer_fired()
 
-bool Native_socket_stream::Impl::snd_sync_write_or_q_payload(Native_handle hndl_or_null,
-                                                             const util::Blob_const& orig_blob, bool avoid_qing)
+bool Native_socket_stream_impl::snd_sync_write_or_q_payload(Native_handle hndl_or_null, const util::Blob_const& blob1,
+                                                            const util::Blob_const& blob2_or_none, bool avoid_qing)
 {
   using flow::util::Blob;
   using util::Blob_const;
@@ -615,12 +666,15 @@ bool Native_socket_stream::Impl::snd_sync_write_or_q_payload(Native_handle hndl_
   size_t n_sent_or_zero;
   if (m_snd_pending_payloads_q.empty())
   {
-    FLOW_LOG_TRACE("Socket stream [" << *this << "]: Want to send low-level payload: "
-                   "handle [" << hndl_or_null << "] with blob of size [" << orig_blob.size() << "] "
-                   "located @ [" << orig_blob.data() << "]; no write is pending so proceeding immediately.  "
+    FLOW_LOG_TRACE("Socket stream [" << *this << "]: Want to send low-level payload(s): "
+                   "handle [" << hndl_or_null << "]; "
+                   "payload 1 sized [" << blob1.size() << "] @ [" << blob1.data() << "]; "
+                   "payload 2 sized [" << blob2_or_none.size() << "] @ "
+                   "[" << ((blob2_or_none.size() != 0) ? blob2_or_none.data() : nullptr) << "].  "
+                   "No write is pending so proceeding immediately.  "
                    "Will drop if all of it would-block? = [" << avoid_qing << "].");
 
-    n_sent_or_zero = snd_nb_write_low_lvl_payload(hndl_or_null, orig_blob, &m_snd_pending_err_code);
+    n_sent_or_zero = snd_nb_write_low_lvl_payload(hndl_or_null, blob1, blob2_or_none, &m_snd_pending_err_code);
     if (m_snd_pending_err_code) // It will *not* emit would-block (will just return 0 but no error).
     {
       assert(n_sent_or_zero == 0);
@@ -628,13 +682,13 @@ bool Native_socket_stream::Impl::snd_sync_write_or_q_payload(Native_handle hndl_
     }
     // else
 
-    if (n_sent_or_zero == orig_blob.size())
+    if (n_sent_or_zero == (blob1.size() + blob2_or_none.size()))
     {
       // Awesome: Mainstream case: We wrote the whole thing synchronously.
       return true; // Outgoing-direction pipe flushed.
       // ^-- No error.  Logged about success in snd_nb_write_low_lvl_payload().
     }
-    // else if (n_sent_or_zero < orig_blob.size()) { Fall through.  n_sent_or_zero is significant. }
+    // else if (n_sent_or_zero < [blob1+2 size]) { Fall through.  n_sent_or_zero is significant. }
   } // if (m_snd_pending_payloads_q.empty())
   else // if (!m_snd_pending_payloads_q.empty())
   {
@@ -649,22 +703,38 @@ bool Native_socket_stream::Impl::snd_sync_write_or_q_payload(Native_handle hndl_
    * except the parts that *were* just sent (if any).
    *
    * avoid_qing==true, as of this writing used for auto-pings only, affects
-   * the above as follows: If *all* of orig_blob would need to be queued (queue was already non-empty, or it
-   * was empty, and snd_nb_write_low_lvl_payload() yielded would-block for *all* of orig_blob.size()), then:
+   * the above as follows: If *all* of blob1+2 would need to be queued (queue was already non-empty, or it
+   * was empty, and snd_nb_write_low_lvl_payload() yielded would-block for *all* of blob+2), then:
    * simply pretend like it was sent fine; and continue like nothing happened.  (See our doc header for
    * rationale.) */
+
+  bool sent_none;
+  if constexpr(Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT)
+  {
+    assert((n_sent_or_zero == 0)
+           && "In message-boundary-respecting mode nevertheless OS-write indicated a partially successful "
+                "write; this is thought to be impossible.  Bug?");
+    sent_none = true;
+  }
+  else
+  {
+    sent_none = (n_sent_or_zero == 0);
+  }
 
   if (avoid_qing)
   {
     assert(hndl_or_null.null()
            && "Internal bug?  Do not ask to drop a payload with a native handle inside under any circumstances.");
-    if (n_sent_or_zero == 0)
+    if (sent_none) // Always true if S_USE_OS_DGRAM_SUPPORT; hopefully optimizer will pick up on that.
     {
       /* This would happen at most every few sec (with auto-pings) and is definitely a rather interesting
        * situation though not an error; INFO is suitable. */
       const auto q_size = m_snd_pending_payloads_q.size();
-      FLOW_LOG_INFO("Socket stream [" << *this << "]: Wanted to send low-level payload: "
-                    "blob of size [" << orig_blob.size() << "] located @ [" << orig_blob.data() << "]; "
+      FLOW_LOG_INFO("Socket stream [" << *this << "]: Want to send low-level payload(s): "
+                    "handle [" << hndl_or_null << "]; "
+                    "payload 1 sized [" << blob1.size() << "] @ [" << blob1.data() << "]; "
+                    "payload 2 sized [" << blob2_or_none.size() << "] @ "
+                    "[" << ((blob2_or_none.size() != 0) ? blob2_or_none.data() : nullptr) << "]; "
                     "result was would-block for all of its bytes (either because blocked-queue was non-empty "
                     "already, or it was empty, but all of payload's bytes would-block at this time).  "
                     "Therefore dropping payload (done for auto-pings at least).  Out-queue size remains "
@@ -676,46 +746,93 @@ bool Native_socket_stream::Impl::snd_sync_write_or_q_payload(Native_handle hndl_
        * writing what we return when avoid_qing==true is immaterial (is ignored). */
       return q_size == 0;
     }
-    // else if (n_sent_or_zero > 0) (but not == orig_blob.size())
+    // else if (n_sent_or_zero > 0) (but not == blob1.size + blob2_or_none.size()):
 
-    // This is even more interesting; definitely INFO as well.
-    FLOW_LOG_INFO("Socket stream [" << *this << "]: Wanted to send low-level payload: "
-                  "blob of size [" << orig_blob.size() << "] located @ [" << orig_blob.data() << "]; "
-                  "result was would-block for all but [" << n_sent_or_zero << "] of its bytes (blocked-queue "
-                  "was empty, so nb-send was attmpted, and some -- but not all -- of payload's bytes "
-                  "would-block at this time).  We cannot \"get back\" the sent bytes and thus are forced "
-                  "to queue the remaining ones (would have dropped payload if all the bytes would-block).");
-    // Fall-through.
+    if constexpr(!Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT)
+    {
+      // This is even more interesting that what would've led to the preceding INFO msg; definitely INFO as well.
+      FLOW_LOG_INFO("Socket stream [" << *this << "]: Want to send low-level payload(s): "
+                    "handle [" << hndl_or_null << "]; "
+                    "payload 1 sized [" << blob1.size() << "] @ [" << blob1.data() << "]; "
+                    "payload 2 sized [" << blob2_or_none.size() << "] @ "
+                    "[" << ((blob2_or_none.size() != 0) ? blob2_or_none.data() : nullptr) << "]; "
+                    "result was would-block for all but [" << n_sent_or_zero << "] of its bytes (blocked-queue "
+                    "was empty, so nb-send was attmpted, and some -- but not all -- of payload's bytes "
+                    "would-block at this time).  We cannot \"get back\" the sent bytes and thus are forced "
+                    "to queue the remaining ones (would have dropped payload if all the bytes would-block).");
+      // Fall-through.
+    }
+    // else if constexpr(S_USE_OS_DGRAM_SUPPORT) { Cannot have reached here; see assert() earlier. }
   } // if (avoid_qing)
   // else if (!avoid_qing) { Fall through. }
 
   auto new_low_lvl_payload = boost::movelib::make_unique<Snd_low_lvl_payload>();
-  if (n_sent_or_zero == 0)
+  if constexpr(Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT)
   {
+    // `sent_none` has already been assert()ed; so:
     new_low_lvl_payload->m_hndl_or_null = hndl_or_null;
   }
-  // else { Leave it as null.  Even if (!hndl_or_null.null()): 1+ bytes were sent OK => so was hndl_or_null. }
+  else // if constexpr(!S_USE_OS_DGRAM_SUPPORT)
+  {
+    if (sent_none)
+    {
+      new_low_lvl_payload->m_hndl_or_null = hndl_or_null;
+    }
+    // else { Leave it as null.  Even if (!hndl_or_null.null()): 1+ bytes were sent OK => so was hndl_or_null. }
+  }
 
-  new_low_lvl_payload->m_blob = Blob(get_logger());
-
-  /* Allocate N bytes; copy N bytes from area referred to by new_blob.  Start at 1st unsent byte (possibly 1st byte).
-   * This is the first and only place we copy the source blob (not counting the transmission into kernel buffer); we
-   * have tried our best to synchronously send all of `new_blob`, which would've avoided getting here and this copy.
+  /* Allocate N bytes; copy N bytes into there from blob1 and/or blob2_or_none.  Start at 1st unsent byte (possibly 1st
+   * byte).  This is the first and only place we copy the source blob (not counting the transmission into kernel
+   * buffer); we have tried our best to synchronously send all of N, which would've avoided getting here and this copy.
    * Now we have no choice.  As discussed in the class doc header, probabilistically speaking we should rarely (if
    * ever) get here (and do this annoying alloc, and copy, and later dealloc) under normal operation of both sides. */
-  const auto& new_blob = orig_blob + n_sent_or_zero;
-  new_low_lvl_payload->m_blob.assign_copy(new_blob);
+
+  if constexpr(Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT)
+  {
+    // In dgram mode, partial writes are not possible; so simply copy blob1 and blob2_or_none (if any) into new blob.
+    auto& tgt_blob = new_low_lvl_payload->m_blob = Blob{get_logger(), blob1.size() + blob2_or_none.size()};
+    tgt_blob.emplace_copy
+      (tgt_blob.emplace_copy(tgt_blob.begin(), blob1), // Returns 1-after last-written byte.
+       blob2_or_none); // If blob2_or_none.size() == 0, this outer .emplace_copy() is a no-op.
+  }
+  else
+  {
+    /* In byte-stream mode, partial writes are possible; so this is a bit trickier.
+     * Find the spot in blob1 or blob2_or_none past a total of n_sent_or_zero bytes starting with blob1.begin().
+     * Then copy-over the rest of that blob; and if that blob was blob1 then also all of blob2_or_none.
+     *
+     * Reminder: Blob_const B + size_t N = all of B except without the first N bytes (shifts-right .data() += N,
+     * decrements .size() -= N). */
+    const auto n_unsent = static_cast<size_t>(blob1.size() + blob2_or_none.size() - n_sent_or_zero);
+    auto& tgt_blob = new_low_lvl_payload->m_blob = Blob{get_logger(), n_unsent};
+    if (n_sent_or_zero < blob1.size())
+    {
+      tgt_blob.emplace_copy
+        (tgt_blob.emplace_copy(tgt_blob.begin(), blob1 + n_sent_or_zero), // Returns 1-after last-written byte.
+         blob2_or_none); // If blob2_or_none.size() == 0, this outer .emplace_copy() is a no-op.
+
+      // Sanity check: If (n_sent_or_zero == 0), then this reduces to exactly the `if (S_USE_OS_DGRAM_SUPPORT)` code.
+    }
+    else // if (n_sent_or_zero >= blob1.size()) [All of blob1 was sent; and possibly some of blob2_or_none was too.]
+    {
+      tgt_blob.emplace_copy(tgt_blob.begin(), blob2_or_none + (blob2_or_none.size() - n_unsent));
+    }
+  } // if constexpr(!S_USE_OS_DGRAM_SUPPORT)
 
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: Want to send pending-from-would-block low-level payload: "
                  "handle [" << new_low_lvl_payload->m_hndl_or_null << "] with "
-                 "blob of size [" << new_low_lvl_payload->m_blob.size() << "] "
-                 "located @ [" << new_blob.data() << "]; "
-                 "created blob copy @ [" << new_low_lvl_payload->m_blob.const_buffer().data() << "]; "
+                 "new blob of size [" << new_low_lvl_payload->m_blob.size() << "] "
+                 "located @ [" << new_low_lvl_payload->m_blob.const_buffer().data() << "]; "
                  "enqueued to out-queue which is now of size [" << (m_snd_pending_payloads_q.size() + 1) << "].");
 
   m_snd_pending_payloads_q.emplace(std::move(new_low_lvl_payload)); // Push a new Snd_low_lvl_payload::Ptr.
 
-  if (m_snd_pending_payloads_q.size() == 1)
+  ++m_snd_stats.m_would_block_count;
+  const auto q_size = m_snd_pending_payloads_q.size();
+  m_snd_stats.m_snd_q_depth = q_size;
+  flow::util::stat::update_hi_wmark(&m_snd_stats.m_snd_q_hi_wmark, q_size);
+
+  if (q_size == 1)
   {
     /* Queue was empty; now it isn't; so start the chain of async send head=>dequeue=>async send head=>dequeue=>....
      * (In our case "async send head" means asking (via m_snd_ev_wait_func) user to inform (via callback we pass
@@ -734,13 +851,17 @@ bool Native_socket_stream::Impl::snd_sync_write_or_q_payload(Native_handle hndl_
   // else
   assert(!m_snd_pending_err_code);
   return false; // Outgoing-direction pipe has (even more) pending queued stuff; nothing to do about it for now.
-} // Native_socket_stream::Impl::snd_sync_write_or_q_payload()
+} // Native_socket_stream_impl::snd_sync_write_or_q_payload()
 
-size_t Native_socket_stream::Impl::snd_nb_write_low_lvl_payload(Native_handle hndl_or_null,
-                                                                const util::Blob_const& blob, Error_code* err_code)
+size_t Native_socket_stream_impl::snd_nb_write_low_lvl_payload(Native_handle hndl_or_null,
+                                                               const util::Blob_const& blob1,
+                                                               const util::Blob_const& blob2_or_none,
+                                                               Error_code* err_code)
 {
-  using flow::util::Lock_guard;
+  using util::Blob_const;
   using asio_local_stream_socket::nb_write_some_with_native_handle;
+  using flow::util::Lock_guard;
+  using boost::array;
 
   // We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
 
@@ -752,20 +873,21 @@ size_t Native_socket_stream::Impl::snd_nb_write_low_lvl_payload(Native_handle hn
 
   // m_*peer_socket = (the only) shared data between our- and opposite-direction code.  Must lock (see class docs).
   {
-    Lock_guard<decltype(m_peer_socket_mutex)> peer_socket_lock(m_peer_socket_mutex);
+    Lock_guard<decltype(m_peer_socket_mutex)> peer_socket_lock{m_peer_socket_mutex};
 
     if (m_peer_socket)
     {
       if (hndl_or_null.null())
       {
         /* hndl_or_null is in fact null, so we can just use boost.asio's normal non-blocking send (non_blocking(true),
-         * write_some()). */
+         * send()). */
 
         /* First set non-blocking mode.  (Subtlety: We could use Linux extension per-call MSG_DONTWAIT flag instead;
-         * but this way is fully portable.  For posterity: to do that, use m_peer_socket->send(), which is identical to
-         * write_some() but has an overload accepting flags to OS send() call, where one could supply MSG_DONTWAIT.
+         * but this way is fully portable.  For posterity: to do that, flag MSG_DONTWAIT to ->send().
          * boost.asio lacks a constant for it, but we could just use actual MSG_DONTWAIT; of course stylistically that's
-         * not as nice and suggests lesser portability.) */
+         * not as nice and suggests lesser portability.)  (Subtlety: Peer_socket<Protocol_pkt_stream> lacks
+         * .write_some(), while Peer_socket<Protocol_byte_stream> has it; but they both have
+         * .send(bufs, flags, err_code); so use that.) */
         if (!m_peer_socket->non_blocking()) // This is fast (it doesn't run system calls but uses a cached value).
         {
           FLOW_LOG_TRACE("Socket stream [" << *this << "]: Setting boost.asio peer socket non-blocking mode.");
@@ -782,17 +904,42 @@ size_t Native_socket_stream::Impl::snd_nb_write_low_lvl_payload(Native_handle hn
 
           FLOW_LOG_TRACE("Writing low-level blob directly via boost.asio (blob details logged above hopefully).");
 
-          n_sent_or_zero = m_peer_socket->write_some(blob, *err_code);
+          /* Perf subtlety: If blob2_or_none is "none" (empty), then specifying blob1
+           * alone (as opposed to a 2-container with an empty 2nd element) subtly chooses a compile-time-faster template
+           * impl of ->send().  So do that if relevant, even though the code is less
+           * elegant-looking here.  Also the best choice (for another compile-time-decided optimization) for the
+           * 2-container (if relevant) is {std|boost}::array<2>.  So use that if relevant. */
+
+          if (blob2_or_none.size() == 0)
+          {
+            n_sent_or_zero = m_peer_socket->send(blob1, 0, *err_code);
+          }
+          else
+          {
+            array<Blob_const, 2> buf_seq = { blob1, blob2_or_none };
+            n_sent_or_zero = m_peer_socket->send(buf_seq, 0, *err_code);
+          }
         }
         // else if (*err_code) { *err_code is truthy; n_sent_or_zero == 0; cool. }
       } // if (hndl_or_null.null())
       else // if (!hndl_or_null.null())
       {
         /* Per contract, nb_write_some_with_native_handle() is identical to setting non_blocking(true) and attempting
-         * write_some(orig_blob) -- except if it's able to send even 1 byte it'll also have sent through hndl_or_null.
-         * When we say identical we mean identical result semantics along with everything else. */
-        n_sent_or_zero = nb_write_some_with_native_handle(get_logger(), m_peer_socket.get(),
-                                                          hndl_or_null, blob, err_code);
+         * send(<buffer sequence below>) -- except if it's able to send even 1 byte it'll also have sent
+         * through hndl_or_null.  When we say identical we mean identical result semantics along with everything else.
+         *
+         * Perf subtlety: same as above with m_peer_socket->send(). */
+        if (blob2_or_none.size() == 0)
+        {
+          n_sent_or_zero = nb_write_some_with_native_handle<Native_socket_stream_cfg::Protocol>
+                             (get_logger(), m_peer_socket.get(), hndl_or_null, blob1, err_code);
+        }
+        else
+        {
+          array<Blob_const, 2> buf_seq = { blob1, blob2_or_none };
+          n_sent_or_zero = nb_write_some_with_native_handle<Native_socket_stream_cfg::Protocol>
+                             (get_logger(), m_peer_socket.get(), hndl_or_null, buf_seq, err_code);
+        }
         // That should have TRACE-logged stuff, so we won't (it's our function).
       }
 
@@ -825,7 +972,7 @@ size_t Native_socket_stream::Impl::snd_nb_write_low_lvl_payload(Native_handle hn
     {
       *err_code = error::Code::S_LOW_LVL_TRANSPORT_HOSED_CANNOT_SEND;
     }
-  } // Lock_guard peer_socket_lock(m_peer_socket_mutex)
+  } // Lock_guard peer_socket_lock{m_peer_socket_mutex}
 
   assert((!*err_code)
          || (n_sent_or_zero == 0)); // && *err_code
@@ -836,7 +983,8 @@ size_t Native_socket_stream::Impl::snd_nb_write_low_lvl_payload(Native_handle hn
   }
   else
   {
-    FLOW_LOG_TRACE("Send: no error.  Was able to send [" << n_sent_or_zero << "] of [" << blob.size() << "] bytes.");
+    FLOW_LOG_TRACE("Send: no error.  Was able to send [" << n_sent_or_zero << "] of "
+                   "[" << (blob1.size() + blob2_or_none.size()) << "] bytes.");
     if (!hndl_or_null.null())
     {
       FLOW_LOG_TRACE("Able to send the native handle? = [" << (n_sent_or_zero != 0) << "].");
@@ -844,14 +992,12 @@ size_t Native_socket_stream::Impl::snd_nb_write_low_lvl_payload(Native_handle hn
   }
 
   return n_sent_or_zero;
-} // Native_socket_stream::Impl::snd_nb_write_low_lvl_payload()
+} // Native_socket_stream_impl::snd_nb_write_low_lvl_payload()
 
-void Native_socket_stream::Impl::snd_async_write_q_head_payload()
+void Native_socket_stream_impl::snd_async_write_q_head_payload()
 {
-  using asio_local_stream_socket::async_write_with_native_handle;
   using util::Task;
   using flow::util::Lock_guard;
-  using boost::asio::async_write;
 
   // We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
 
@@ -865,22 +1011,10 @@ void Native_socket_stream::Impl::snd_async_write_q_head_payload()
 
   // m_*peer_socket = (the only) shared data between our- and opposite-direction code.  Must lock (see class docs).
   {
-    Lock_guard<decltype(m_peer_socket_mutex)> peer_socket_lock(m_peer_socket_mutex);
+    Lock_guard<decltype(m_peer_socket_mutex)> peer_socket_lock{m_peer_socket_mutex};
 
     if (m_peer_socket)
     {
-      /* @todo Previously, when we ran our own boost.asio loop in a separate thread mandatorily (non-sync_io pattern),
-       * we did either boost::asio::async_write() (stubborn write, no handle to send) or
-       * asio_local_stream_socket::async_write_with_native_handle (same but with handle to send).
-       * Either one would do the async_wait()->nb-write->async_wait()->... chain for us.  Now with sync_io we
-       * manually split it up into our version of "async"-wait->nb-write->....  However other than the
-       * "async-wait" mechanism itself, the logic is the same.  The to-do would be to perhaps provide
-       * those functions in such a way as to work with the sync_io way of "async"-waiting, without getting rid
-       * of the publicly useful non-sync_io API (some layered design, confined to
-       * asio_local_stream_socket::*).  The logic would not need to be repeated and maintained in two places;
-       * as of this writing the non-sync_io version has become for direct public use (by user) only anyway;
-       * two birds one stone to have both use cases use the same core logic code. */
-
       m_snd_ev_wait_func(&m_ev_wait_hndl_peer_socket,
                          true, // Wait for write.
                          // Once writable do this:
@@ -889,7 +1023,7 @@ void Native_socket_stream::Impl::snd_async_write_q_head_payload()
       return;
     }
     // else:
-  } // Lock_guard peer_socket_lock(m_peer_socket_mutex)
+  } // Lock_guard peer_socket_lock{m_peer_socket_mutex}
 
   m_snd_pending_err_code = error::Code::S_LOW_LVL_TRANSPORT_HOSED_CANNOT_SEND;
 
@@ -898,9 +1032,9 @@ void Native_socket_stream::Impl::snd_async_write_q_head_payload()
    * done it that other way though; in fact originally that's how I had it, but it proved too gnarly over time.
    * Among other things it's nice to have the on-sent handler appear right *below* the async-op that takes it as
    * an arg; *above* is dicey to read. */
-} // Native_socket_stream::Impl::snd_async_write_q_head_payload()
+} // Native_socket_stream_impl::snd_async_write_q_head_payload()
 
-void Native_socket_stream::Impl::snd_on_ev_peer_socket_writable_or_error()
+void Native_socket_stream_impl::snd_on_ev_peer_socket_writable_or_error()
 {
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: User-performed wait-for-writable finished (writable or error, "
                  "we do not know which yet).  We endeavour to send->pop->send->... as much of the queue as we "
@@ -925,7 +1059,7 @@ void Native_socket_stream::Impl::snd_on_ev_peer_socket_writable_or_error()
                    "located @ [" << low_lvl_blob_view.data() << "].");
 
     const auto n_sent_or_zero
-      = snd_nb_write_low_lvl_payload(low_lvl_payload.m_hndl_or_null, low_lvl_blob_view, &m_snd_pending_err_code);
+      = snd_nb_write_low_lvl_payload(low_lvl_payload.m_hndl_or_null, low_lvl_blob_view, {}, &m_snd_pending_err_code);
     if (m_snd_pending_err_code)
     {
       continue; // Get out of the loop.
@@ -936,23 +1070,35 @@ void Native_socket_stream::Impl::snd_on_ev_peer_socket_writable_or_error()
     {
       // Everything was sent nicely!
       m_snd_pending_payloads_q.pop(); // This should dealloc low_lvl_payload.m_blob in particular.
+      m_snd_stats.m_snd_q_depth = m_snd_pending_payloads_q.size();
     }
     else // if (n_sent_or_zero != low_lvl_payload.m_blob.size())
     {
-      /* Some or all of the payload could not be sent (it would-block if we tried to send the rest now).
-       * This is similar to snd_sync_write_or_q_payload(), but we needn't enqueue it, as it's already enqueued;
-       * just "edit" it in-place as needed. */
-      if (n_sent_or_zero != 0)
+      if constexpr(Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT)
       {
-        // Even if (!m_hndl_or_null.null()): 1 bytes were sent => so was the native handle.
-        low_lvl_payload.m_hndl_or_null = Native_handle();
-        /* Slide its .begin() to the right by n_sent_or_zero (might be no-op if was not writable after all).
-         * Note internally it's just a size_t +=; no realloc or anything. */
-        low_lvl_payload.m_blob.start_past_prefix_inc(n_sent_or_zero);
+        assert((n_sent_or_zero == 0)
+               && "In message-boundary-respecting mode nevertheless OS-write indicated a partially successful "
+                    "write; this is thought to be impossible.  Bug?");
+        // Could not send (any of) blob; will just have to retry the whole thing later.
       }
-      // else if (n_sent_or_zero == 0) { Nothing was sent, so no edits needed to low_lvl_payload. }
+      else // if constexpr(!S_USE_OS_DGRAM_SUPPORT)
+      {
+        /* Some or all of the payload could not be sent (it would-block if we tried to send the rest now).
+         * This is similar to snd_sync_write_or_q_payload(), but we needn't enqueue it, as it's already enqueued;
+         * just "edit" it in-place as needed. */
+        if (n_sent_or_zero != 0)
+        {
+          // Even if (!m_hndl_or_null.null()): 1 bytes were sent => so was the native handle.
+          low_lvl_payload.m_hndl_or_null = {};
+          /* Slide its .begin() to the right by n_sent_or_zero (might be no-op if was not writable after all).
+           * Note internally it's just a size_t +=; no realloc or anything. */
+          low_lvl_payload.m_blob.start_past_prefix_inc(n_sent_or_zero);
+        }
+        // else if (n_sent_or_zero == 0) { Nothing was sent, so no edits needed to low_lvl_payload. }
+      } // else if constexpr(!S_USE_OS_DGRAM_SUPPORT)
+
       would_block = true; // Stop; would-block if we tried more.
-    }
+    } // else if (n_sent_or_zero != low_lvl_blob_view.size())
   }
   while ((!m_snd_pending_payloads_q.empty()) && (!would_block) && (!m_snd_pending_err_code));
 
@@ -1005,6 +1151,13 @@ void Native_socket_stream::Impl::snd_on_ev_peer_socket_writable_or_error()
   } // else if (m_snd_pending_payloads_q.empty() && (!m_snd_pending_err_code))
   // else if ((!m_snd_pending_payloads_q.empty()) && (!m_snd_pending_err_code)) { Async-wait started. }
 
+  /* See log_stats() doc header for basic background behind the logic here.
+   * Note we put this ahead of any handler-call to avoid reentrant hellishness. */
+  if (m_snd_pending_err_code) // Note we've asserted it was not already truthy at the start.
+  {
+    log_stats("snd_on_ev_peer_socket_writable_or_error(): while processing ev-ready snd-pipe hosed");
+  }
+
   if (invoke_on_done)
   {
     FLOW_LOG_TRACE("Socket stream [" << *this << "]: Executing end-sending completion handler now.");
@@ -1014,16 +1167,36 @@ void Native_socket_stream::Impl::snd_on_ev_peer_socket_writable_or_error()
     on_done_func(m_snd_pending_err_code);
     FLOW_LOG_TRACE("Handler completed.");
   }
-} // Native_socket_stream::Impl::snd_on_ev_peer_socket_writable_or_error()
+} // Native_socket_stream_impl::snd_on_ev_peer_socket_writable_or_error()
 
-size_t Native_socket_stream::Impl::send_meta_blob_max_size() const
+size_t Native_socket_stream_impl::send_meta_blob_max_size() const
 {
-  return state_peer("send_meta_blob_max_size()") ? S_MAX_META_BLOB_LENGTH : 0;
+  return state_peer("send_meta_blob_max_size()") ? Native_socket_stream_cfg::S_MAX_META_BLOB_LENGTH : 0;
 }
 
-size_t Native_socket_stream::Impl::send_blob_max_size() const
+size_t Native_socket_stream_impl::send_blob_max_size() const
 {
   return send_meta_blob_max_size();
+}
+
+stat::Blob_snd_stats Native_socket_stream_impl::blob_send_stats() const
+{
+  return m_snd_stats;
+}
+
+void Native_socket_stream_impl::blob_send_stats_reset()
+{
+  flow::util::stat::stats_reset(&m_snd_stats, Blob_snd_stats{Native_socket_stream_cfg::S_MAX_META_BLOB_LENGTH});
+}
+
+stat::Blob_snd_stats Native_socket_stream_impl::native_handle_send_stats() const
+{
+  return blob_send_stats();
+}
+
+void Native_socket_stream_impl::native_handle_send_stats_reset()
+{
+  blob_send_stats_reset();
 }
 
 } // namespace ipc::transport::sync_io

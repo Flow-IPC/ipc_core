@@ -20,6 +20,7 @@
 
 #include "ipc/transport/transport_fwd.hpp"
 #include "ipc/transport/native_socket_stream.hpp"
+#include "ipc/transport/native_socket_stream_cfg.hpp"
 #include "ipc/transport/asio_local_stream_socket_fwd.hpp"
 #include "ipc/util/shared_name.hpp"
 #include <flow/async/single_thread_task_loop.hpp>
@@ -161,7 +162,7 @@ public:
    *        other reason we could not predict here, but whatever it was was logged).
    */
   explicit Native_socket_stream_acceptor(flow::log::Logger* logger_ptr, const Shared_name& absolute_name,
-                                         Error_code* err_code = 0);
+                                         Error_code* err_code = nullptr);
 
   /**
    * Destroys this acceptor which will stop listening in the background and cancel any pending
@@ -193,7 +194,7 @@ public:
    * Asynchronously awaits for a peer connection to be established and calls `on_done_func()`,
    * once the connection occurs, or an error occurs, in the former case move-assigning a PEER-state
    * Native_socket_stream object to the passed-in Native_socket_stream `*target_peer`.
-   * `on_done_func(Error_code())` is called on success.  `on_done_func(E)`, where `E` is a non-success
+   * `on_done_func(Error_code{})` is called on success.  `on_done_func(E)`, where `E` is a non-success
    * error code, is called otherwise.  In the latter case `*this` has met an unrecoverable error and should
    * be shut down via the destructor, as no further `async_accept()`s
    * will succeed (they'll quickly yield the same error).
@@ -366,7 +367,7 @@ private:
    * Unix domain socket acceptor.  It is only accessed in thread W.  Assuming successful setup, it's listening
    * continuously in thread W, via async loop #m_worker.
    */
-  boost::movelib::unique_ptr<asio_local_stream_socket::Acceptor> m_acceptor;
+  boost::movelib::unique_ptr<asio_local_stream_socket::Acceptor<Native_socket_stream_cfg::Protocol>> m_acceptor;
 
   /**
    * Unix domain peer socket, always empty/unconnected while a background `m_acceptor.async_accept()` is proceeding;
@@ -385,7 +386,7 @@ private:
    *
    * @todo Perform a rigorous analysis of the perf and style trade-offs between move-construction-based patterns
    * versus `shared_ptr`-based ones, possibly focusing on boost.asio socket objects in particular. */
-  asio_local_stream_socket::Peer_socket m_next_peer_socket;
+  asio_local_stream_socket::Peer_socket<Native_socket_stream_cfg::Protocol> m_next_peer_socket;
 }; // class Native_socket_stream_acceptor
 
 // Free functions: in *_fwd.hpp.
@@ -395,7 +396,7 @@ private:
 template<typename Task_err>
 void Native_socket_stream_acceptor::async_accept(Peer* target_peer, Task_err&& on_done_func)
 {
-  async_accept_impl(target_peer, On_peer_accepted_func(std::move(on_done_func)));
+  async_accept_impl(target_peer, On_peer_accepted_func{std::move(on_done_func)});
 }
 
 } // namespace ipc::transport

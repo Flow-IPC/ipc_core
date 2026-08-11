@@ -77,7 +77,7 @@ Shared_name& Shared_name::operator+=(const char* raw_name_to_append)
 Shared_name& Shared_name::operator+=(const Shared_name& to_append)
 {
   using util::String_view;
-  return operator+=(String_view(to_append.str()));
+  return operator+=(String_view{to_append.str()});
 }
 
 Shared_name& Shared_name::operator/=(const char* raw_name_to_append)
@@ -85,13 +85,13 @@ Shared_name& Shared_name::operator/=(const char* raw_name_to_append)
   // Existence/impl rationale: This is faster than if they had to: `/= Shared_name::ct(raw_name_to_append)`.
 
   using util::String_view;
-  return operator/=(String_view(raw_name_to_append)); // Requires a strlen() internally but gets .reserve() in return.
+  return operator/=(String_view{raw_name_to_append}); // Requires a strlen() internally but gets .reserve() in return.
 }
 
 Shared_name& Shared_name::operator/=(const Shared_name& to_append)
 {
   using util::String_view;
-  return operator/=(String_view(to_append.str()));
+  return operator/=(String_view{to_append.str()});
 }
 
 Shared_name operator+(const Shared_name& src1, const char* raw_src2)
@@ -99,7 +99,7 @@ Shared_name operator+(const Shared_name& src1, const char* raw_src2)
   // Existence/impl rationale: This is faster than if they had to: `src1 + Shared_name::ct(raw_src2)`.
 
   using util::String_view;
-  return operator+(src1, String_view(raw_src2)); // Requires a strlen() internally but gets .reserve() in return.
+  return operator+(src1, String_view{raw_src2}); // Requires a strlen() internally but gets .reserve() in return.
 }
 
 Shared_name operator+(const char* raw_src1, const Shared_name& src2)
@@ -107,13 +107,13 @@ Shared_name operator+(const char* raw_src1, const Shared_name& src2)
   // Existence rationale: For symmetry with overload: (src1, raw_src2).
 
   using util::String_view;
-  return operator+(String_view(raw_src1), src2);
+  return operator+(String_view{raw_src1}, src2);
 }
 
 Shared_name operator+(const Shared_name& src1, const Shared_name& src2)
 {
   using util::String_view;
-  return src1 + String_view(src2.str());
+  return src1 + String_view{src2.str()};
 }
 
 Shared_name operator/(const Shared_name& src1, const char* raw_src2)
@@ -121,7 +121,7 @@ Shared_name operator/(const Shared_name& src1, const char* raw_src2)
   // Existence/impl rationale: This is faster than if they had to: `src1 / Shared_name::ct(raw_src2)`.
 
   using util::String_view;
-  return operator/(src1, String_view(raw_src2));
+  return operator/(src1, String_view{raw_src2});
 }
 
 Shared_name operator/(const char* raw_src1, const Shared_name& src2)
@@ -129,7 +129,7 @@ Shared_name operator/(const char* raw_src1, const Shared_name& src2)
   // Existence rationale: For symmetry with overload: (src1, raw_src2).
 
   using util::String_view;
-  return operator/(String_view(raw_src1), src2);
+  return operator/(String_view{raw_src1}, src2);
 }
 
 Shared_name operator/(const Shared_name& src1, const Shared_name& src2)
@@ -386,7 +386,7 @@ bool operator==(const Shared_name& val1, util::String_view val2)
    * Existence rationale: It's also nice to be able to write: `val1 == "something"` (String_view implicitly cted). */
 
   using util::String_view;
-  return std::operator==(String_view(val1.str()), val2);
+  return std::operator==(String_view{val1.str()}, val2);
 }
 
 bool operator!=(const Shared_name& val1, util::String_view val2)

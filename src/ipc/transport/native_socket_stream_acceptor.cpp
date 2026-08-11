@@ -17,6 +17,7 @@
 
 /// @file
 #include "ipc/transport/native_socket_stream_acceptor.hpp"
+#include "ipc/transport/native_socket_stream_cfg.hpp"
 #include "ipc/transport/sync_io/native_socket_stream_acceptor.hpp"
 #include "ipc/transport/sync_io/native_socket_stream.hpp"
 #include "ipc/transport/error.hpp"
@@ -45,8 +46,9 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
            flow::util::ostream_op_string("NSSA-", m_absolute_name.str())),
   m_next_peer_socket(*(m_worker.task_engine())) // Steady state: start it as empty, per doc header.
 {
-  using asio_local_stream_socket::Acceptor;
-  using asio_local_stream_socket::Endpoint;
+  using Protocol = Native_socket_stream_cfg::Protocol;
+  using Acceptor = asio_local_stream_socket::Acceptor<Protocol>;
+  using Endpoint = asio_local_stream_socket::Endpoint<Protocol>;
   using asio_local_stream_socket::endpoint_at_shared_name;
   using util::String_view;
   using flow::error::Runtime_error;
@@ -68,8 +70,8 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
 
     FLOW_LOG_INFO("Acceptor [" << *this << "]: Starting (am in worker thread).");
 
-    const auto local_endpoint = endpoint_at_shared_name(get_logger(), m_absolute_name, &sys_err_code);
-    assert((local_endpoint == Endpoint()) == bool(sys_err_code));
+    const auto local_endpoint = endpoint_at_shared_name<Protocol>(get_logger(), m_absolute_name, &sys_err_code);
+    assert((local_endpoint == Endpoint{}) == bool(sys_err_code));
     if (sys_err_code) // It logged.
     {
       return; // Escape the start() callback, that is.
@@ -81,7 +83,7 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
     try
     {
       // Throws on error.  (It's annoying there's no error-code-returning API; but it's normal in boost.asio ctors.)
-      m_acceptor.reset(new Acceptor(*asio_engine, local_endpoint));
+      m_acceptor.reset(new Acceptor{*asio_engine, local_endpoint});
       // @todo Is reuse_addr appropriate?  Do we run into the already-exists error in practice?  Revisit.
     }
     catch (const system_error& exc)
@@ -126,7 +128,7 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
       return;
     }
     // else
-    throw Runtime_error(sys_err_code, FLOW_UTIL_WHERE_AM_I_STR());
+    throw Runtime_error{sys_err_code, FLOW_UTIL_WHERE_AM_I_STR()};
   }
   // else
   assert(!sys_err_code);
@@ -145,15 +147,15 @@ Native_socket_stream_acceptor::~Native_socket_stream_acceptor()
   FLOW_LOG_INFO("Acceptor [" << *this << "]: Shutting down.  Next acceptor socket will close; all our internal "
                 "async handlers will be canceled; and worker thread thread will be joined.");
 
-  // stop() logic is similar to what happens in Native_socket_stream::Impl dtor.  Keeping cmnts light.
+  // stop() logic is similar to what happens in Native_socket_stream_impl dtor.  Keeping cmnts light.
   m_worker.stop();
   // Thread W is (synchronously!) no more.
 
-  // Post-stop() poll() logic is similar to what happens in Native_socket_stream::Impl dtor.  Keeping cmnts light.
+  // Post-stop() poll() logic is similar to what happens in Native_socket_stream_impl dtor.  Keeping cmnts light.
 
   FLOW_LOG_INFO("Acceptor [" << *this << "]: Continuing shutdown.  Next we will run pending handlers from some "
                 "other thread.  In this user thread we will await those handlers' completion and then return.");
-  Single_thread_task_loop one_thread(get_logger(), ostream_op_string("NSSADeinit-", m_absolute_name.str()));
+  Single_thread_task_loop one_thread{get_logger(), ostream_op_string("NSSADeinit-", m_absolute_name.str())};
 
   one_thread.start([&]()
   {
@@ -191,7 +193,6 @@ Native_socket_stream_acceptor::~Native_socket_stream_acceptor()
 
 void Native_socket_stream_acceptor::on_next_peer_socket_or_error(const Error_code& sys_err_code)
 {
-  using asio_local_stream_socket::Peer_socket;
   using flow::util::ostream_op_string;
   using std::holds_alternative;
 
@@ -277,7 +278,7 @@ void Native_socket_stream_acceptor::on_next_peer_socket_or_error(const Error_cod
                            "the next thing assumes not-Win-<8.1.");
 #endif
     // Could store a raw handle too, but this is exactly as fast and adds some logging niceties.
-    Native_handle native_peer_socket(m_next_peer_socket.release());
+    Native_handle native_peer_socket{m_next_peer_socket.release()};
     assert(!m_next_peer_socket.is_open()); // Non-exhaustive sanity check that it's back in empty/unconnected state.
     FLOW_LOG_TRACE("Acceptor [" << *this << "]: "
                    "Ejected ownership of new incoming peer socket [" << native_peer_socket << "].");
@@ -379,7 +380,7 @@ void Native_socket_stream_acceptor::async_accept_impl(Peer* target_peer, On_peer
                      "and there is surplus in the form of a new peer handle.  Will feed handle to the request.  "
                      "Queue size will become [" << (m_pending_results_q.size() - 1) << "].");
 
-      Peer_ptr peer(std::move(get<Peer_ptr>(peer_or_err_code)));
+      Peer_ptr peer{std::move(get<Peer_ptr>(peer_or_err_code))};
       m_pending_results_q.pop();
       feed_success_result_to_deficit(std::move(peer));
     }
@@ -435,7 +436,7 @@ void Native_socket_stream_acceptor::finalize_q_surplus_on_success()
    * Violates our pre-condition. */
   assert(m_pending_results_q.size() == 1);
 
-  Peer_ptr peer(std::move(get<Peer_ptr>(m_pending_results_q.front())));
+  Peer_ptr peer{std::move(get<Peer_ptr>(m_pending_results_q.front()))};
   m_pending_results_q.pop();
   FLOW_LOG_TRACE("Acceptor [" << *this << "]: New peer socket handle pushed onto surplus queue; "
                  "and there is deficit (1+ pending requests).  Will feed to next pending request, having "
@@ -469,7 +470,7 @@ void Native_socket_stream_acceptor::feed_success_result_to_deficit(Peer_ptr&& pe
                  "[" << (m_pending_user_requests_q.size() - 1) << "].");
   auto& head_request = m_pending_user_requests_q.front();
   *head_request->m_target_peer = std::move(*peer);
-  head_request->m_on_done_func(Error_code());
+  head_request->m_on_done_func(Error_code{});
   m_pending_user_requests_q.pop();
 } // Native_socket_stream_acceptor::feed_success_result_to_deficit()
 

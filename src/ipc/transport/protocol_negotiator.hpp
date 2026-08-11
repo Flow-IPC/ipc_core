@@ -318,7 +318,7 @@ public:
    * @return `false` if pre-condition was `negotiated_proto_ver() != S_VER_UNKNOWN`, so we no-oped;
    *         `true` otherwise (unless exception thrown, only if `err_code == nullptr`.
    */
-  bool compute_negotiated_proto_ver(proto_ver_t opposing_max_proto_ver, Error_code* err_code = 0);
+  bool compute_negotiated_proto_ver(proto_ver_t opposing_max_proto_ver, Error_code* err_code = nullptr);
 
   /**
    * To be called at most once, this returns `local_max_proto_ver` from ctor the first time and

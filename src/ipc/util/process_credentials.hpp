@@ -40,7 +40,7 @@ class Process_credentials
 public:
   // Constructors/destructor.
 
-  /// Default ctor: each value is initialized to zero or equivalent.
+  /// Default ctor: each value is initialized to zero/OS-appropriate equivalent.
   Process_credentials();
 
   /**
@@ -132,7 +132,7 @@ public:
    *         empty string.  Caution: If error is *not* emitted, returned value *might* still be empty,
    *         if the process overrode its own command line (see above).
    */
-  std::string process_invoked_as(Error_code* err_code = 0) const;
+  std::string process_invoked_as(Error_code* err_code = nullptr) const;
 
   /**
    * Obtains the calling process's process_id().  This value will never change.
@@ -168,5 +168,10 @@ private:
 }; // class Process_credentials
 
 // Free functions: in *_fwd.hpp.
+
+// Constants.
+
+/// A (default-cted) Process_credentials.  May be useful for functions returning `const Process_credentials&`.
+extern const Process_credentials NULL_PROCESS_CREDENTIALS;
 
 } // namespace ipc::util

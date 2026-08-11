@@ -18,6 +18,9 @@
 /// @file
 #pragma once
 
+#include "ipc/transport/sync_io/detail/native_socket_stream_impl.hpp"
+#include "ipc/transport/sync_io/detail/native_socket_stream_impl_rcv.hpp"
+#include "ipc/transport/native_socket_stream_cfg.hpp"
 #include "ipc/transport/transport_fwd.hpp"
 #include "ipc/util/shared_name.hpp"
 #include "ipc/util/process_credentials.hpp"
@@ -33,7 +36,7 @@ namespace ipc::transport::sync_io
 
 /**
  * Implements both sync_io::Native_handle_sender and sync_io::Native_handle_receiver concepts by using
- * a stream-oriented Unix domain socket, allowing high-performance but non-zero-copy transmission of
+ * a Unix domain socket, allowing high-performance but non-zero-copy transmission of
  * discrete messages, each containing a native handle, a binary blob, or both.  This is the `sync_io`-pattern
  * counterpart to transport::Native_socket_stream -- and in fact the latter use an instance of the present
  * class as its core.
@@ -133,12 +136,12 @@ namespace ipc::transport::sync_io
  *
  * @internal
  * ### Implementation design/rationale ###
- * Notes for transport::Native_socket_stream apply: the pImpl stuff; and the fact that:
+ * Notes for transport::Native_socket_stream apply: the pImpl-lite stuff; and the fact that:
  *
- * The rest of the implementation is inside sync_io::Native_socket_stream::Impl and is discussed in that class's
+ * The rest of the implementation is inside sync_io::Native_socket_stream_impl and is discussed in that class's
  * doc header.
  *
- * @see sync_io::Native_socket_stream::Impl doc header.
+ * @see sync_io::Native_socket_stream_impl doc header.
  *
  * @endinternal
  *
@@ -149,6 +152,12 @@ namespace ipc::transport::sync_io
  */
 class Native_socket_stream
 {
+private:
+  // Types.
+
+  /// Short-hand for the impl type we're wrapping.  Cannot simply forward-declare as in pImpl; we do pImpl-lite.
+  using Impl = Native_socket_stream_impl;
+
 public:
   // Types.
 
@@ -156,6 +165,22 @@ public:
   using Async_io_obj = transport::Native_socket_stream;
   /// You may disregard.
   using Sync_io_obj = Null_peer;
+
+  /// Implements Native_handle_receiver concept API.
+  template<typename Msg_resource>
+  using Native_handle_batch_in = typename Impl::template Native_handle_batch_in<Msg_resource>;
+  /// Implements Blob_receiver concept API.
+  template<typename Msg_resource>
+  using Blob_batch_in = typename Impl::template Blob_batch_in<Msg_resource>;
+
+  /// Implements sync_io::Blob_sender concept API.
+  using Blob_snd_stats = transport::stat::Blob_snd_stats;
+  /// Implements sync_io::Native_handle_sender concept API.  Identical to #Blob_snd_stats for this impl.
+  using Native_handle_snd_stats = transport::stat::Blob_snd_stats;
+  /// Implements sync_io::Blob_receiver concept API.
+  using Blob_rcv_stats = transport::stat::Blob_rcv_stats;
+  /// Implements sync_io::Native_handle_receiver concept API.  Identical to #Blob_rcv_stats for this impl.
+  using Native_handle_rcv_stats = transport::stat::Blob_rcv_stats;
 
   // Constants.
 
@@ -176,25 +201,54 @@ public:
    * @see Native_handle_receiver::S_BLOB_UNDERFLOW_ALLOWED: implemented concept.  Accordingly also see
    *      "Blob underflow semantics" in transport::Native_handle_receiver doc header.
    */
-  static constexpr bool S_BLOB_UNDERFLOW_ALLOWED = true;
+  static constexpr bool S_BLOB_UNDERFLOW_ALLOWED = S_META_BLOB_UNDERFLOW_ALLOWED;
+
+  /**
+   * Implements concept API.  As of this writing this value depends on
+   * Native_socket_stream_cfg::S_USE_OS_DGRAM_BATCH_SUPPORT and `S_USE_OS_DGRAM_SUPPORT`; iff and only if both are
+   * `true`, then this value is `> 1`; otherwise it is `1`.
+   *
+   * @internal
+   * ### Value to choose ###
+   * This paragraph is a quote from the concept doc:
+   * This is "only" a recommendation, though other parts of Flow-IPC may well take it to heart
+   * (struc::Channel does in particular, as of this writing, when deciding whether to even use the batching code
+   * path -- when this is not set to 1 -- and if so then the batch-size value is taken from here).
+   *
+   * It is hopefully straightforward why the conservative decision is to set this to 1, unless
+   * `USE_OS_DGRAM_SUPPORT` is in effect.  As for what value (at least 2) to use, when it *is* in effect:
+   *
+   * In typical code out there one tends to see 32 or 64 in this context.  Larger values would not be particularly
+   * wasteful, as proper full use of Msg_batch_in concept (most importantly: reuse from receive call to receive call)
+   * means zero cost (other than some memory) for unused slots.  However in practice such large in-batches are rare
+   * in our experience, and 64 (or 32) is a nice vanilla choice for "big batch."
+   */
+  static constexpr size_t S_RCV_NATIVE_HANDLE_BATCH_SZ_RECOMMENDATION
+    = (Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT && Native_socket_stream_cfg::S_USE_OS_DGRAM_BATCH_SUPPORT)
+        ? 64 : 1;
+
+  /**
+   * Implements concept API.
+   *
+   * @see Blob_receiver::S_RCV_BLOB_BATCH_SZ_RECOMMENDATION: implemented concept.  One transport, one value:
+   *      it serves both of our receiver-concept personas equally (batch-receiving mechanics do not depend on
+   *      whether native handles ride along).
+   */
+  static constexpr size_t S_RCV_BLOB_BATCH_SZ_RECOMMENDATION = S_RCV_NATIVE_HANDLE_BATCH_SZ_RECOMMENDATION;
 
   /**
    * Useful for generic programming: `true` to indicate a `*this` has a send_native_handle()
    * and an async_receive_native_handle().
+   *
+   * @todo Shouldn't Native_socket_stream::S_TRANSMIT_NATIVE_HANDLES and its peer concept impls
+   * be formally generalized in the appopriate concept?  E.g., as of this writing the Async_adapter_receiver impl
+   * relies on it, so trying to use that guy to implement a custom `..._receiver` in terms of a custom
+   * `sync_io::..._receiver` would cause a build error, unless the writer of the latter hypothetical custom guy
+   * added a `S_TRANSMIT_NATIVE_HANDLES` member.  In practice they'd probably know to do so upon seeing the error
+   * and the present code; but formally a relevant concept should specify it, so the custom-guy writer would've known
+   * to do so from the start.
    */
   static constexpr bool S_TRANSMIT_NATIVE_HANDLES = true;
-
-  /**
-   * The maximum length of a blob that can be sent by this protocol.
-   * send_native_handle() shall synchronously emit a particular error, if `meta_blob.size()` exceeds this.
-   * send_blob() shall do similarly for `blob` arg.  The same is accurate of
-   * their async-I/O-pattern transport::Native_socket_stream counterparts.
-   *
-   * @internal
-   * Why is it a reference?  Answer: To provide for strict pImpl adherence without exploding due to
-   * indeterminate order of static initializations across translation units (.cpp files).
-   */
-  static const size_t& S_MAX_META_BLOB_LENGTH;
 
   // Constructors/destructor.
 
@@ -253,11 +307,6 @@ public:
   /**
    * Implements Native_handle_sender *and* Native_handle_receiver APIs at the same time, per their concept contracts.
    * (Also implements Blob_sender *and* Blob_receiver APIs; they are identical.)
-   *
-   * @see Native_handle_sender::~Native_handle_sender(): implemented concept.
-   * @see Native_handle_receiver::~Native_handle_receiver(): implemented concept.
-   * @see Blob_sender::~Blob_sender(): alternatively implemented concept.
-   * @see Blob_receiver::~Blob_receiver(): alternatively implemented concept.
    */
   ~Native_socket_stream();
 
@@ -303,11 +352,6 @@ public:
    * @param create_ev_wait_hndl_func
    *        See above.
    * @return See above.
-   *
-   * @see Native_handle_sender::replace_event_wait_handles(): implemented concept.
-   * @see Native_handle_receiver::replace_event_wait_handles(): implemented concept.
-   * @see Blob_sender::replace_event_wait_handles(): alternatively implemented concept.
-   * @see Blob_receiver::replace_event_wait_handles(): alternatively implemented concept.
    */
   template<typename Create_ev_wait_hndl_func>
   bool replace_event_wait_handles(const Create_ev_wait_hndl_func& create_ev_wait_hndl_func);
@@ -323,7 +367,7 @@ public:
    *        See above.
    * @return See above.
    */
-  bool sync_connect(const Shared_name& absolute_name, Error_code* err_code = 0);
+  bool sync_connect(const Shared_name& absolute_name, Error_code* err_code = nullptr);
 
   // Send-ops API.
 
@@ -331,8 +375,6 @@ public:
    * Implements Native_handle_sender API per contract.  Notes for transport::Native_handle_sender apply.
    *
    * @return See above.
-   *
-   * @see Native_handle_sender::send_meta_blob_max_size(): implemented concept.
    */
   size_t send_meta_blob_max_size() const;
 
@@ -340,8 +382,6 @@ public:
    * Implements Blob_sender API per contract.  Notes for transport::Blob_sender apply.
    *
    * @return See above.
-   *
-   * @see Blob_sender::send_blob_max_size(): implemented concept.
    */
   size_t send_blob_max_size() const;
 
@@ -353,8 +393,6 @@ public:
    * @param ev_wait_func
    *        See above.
    * @return See above.  In addition return `false`/WARNING/no-op, if start_send_blob_ops() earlier succeeded.
-   *
-   * @see Native_handle_sender::start_send_native_handle_ops(): implemented concept.
    */
   template<typename Event_wait_func_t>
   bool start_send_native_handle_ops(Event_wait_func_t&& ev_wait_func);
@@ -369,8 +407,6 @@ public:
    * @param ev_wait_func
    *        See above.
    * @return See above.  In addition return `false`/WARNING/no-op, if start_send_native_handle_ops() earlier succeeded.
-   *
-   * @see Blob_sender::start_send_blob_ops(): implemented concept.
    */
   template<typename Event_wait_func_t>
   bool start_send_blob_ops(Event_wait_func_t&& ev_wait_func);
@@ -387,11 +423,9 @@ public:
    *        detected during handling of a *preceding* send_native_handle() call but after it returned.
    *        #Error_code generated: See #Async_io_obj counterpart doc header.
    * @return See above.
-   *
-   * @see Native_handle_sender::send_native_handle(): implemented concept.
    */
   bool send_native_handle(Native_handle hndl_or_null, const util::Blob_const& meta_blob,
-                          Error_code* err_code = 0);
+                          Error_code* err_code = nullptr);
 
   /**
    * Implements Blob_sender API per contract.  Reminder: Please peruse "Thread safety" in class doc header.
@@ -403,10 +437,8 @@ public:
    *        detected during handling of a *preceding* send_native_handle() call but after it returned.
    *        #Error_code generated: See #Async_io_obj counterpart doc header.
    * @return See above.
-   *
-   * @see Blob_sender::send_blob(): implemented concept.
    */
-  bool send_blob(const util::Blob_const& blob, Error_code* err_code = 0);
+  bool send_blob(const util::Blob_const& blob, Error_code* err_code = nullptr);
 
   /**
    * Implements Native_handle_sender, Blob_sender API per contract.
@@ -428,9 +460,6 @@ public:
    *        See above.
    * @return See above.  Reminder: If and only if it returns `false`, we're in NULL state, or `*end_sending()` has
    *         already been called; and `on_done_func()` will never be called, nor will an error be emitted.
-   *
-   * @see Native_handle_sender::async_end_sending(): implemented concept.
-   * @see Blob_sender::async_end_sending(): alternatively implemented concept.
    */
   template<typename Task_err>
   bool async_end_sending(Error_code* sync_err_code, Task_err&& on_done_func);
@@ -439,9 +468,6 @@ public:
    * Implements Native_handle_sender, Blob_sender API per contract.
    *
    * @return See above.
-   *
-   * @see Native_handle_sender::end_sending(): implemented concept.
-   * @see Blob_sender::end_sending(): alternatively implemented concept.
    */
   bool end_sending();
 
@@ -451,11 +477,26 @@ public:
    * @param period
    *        See above.
    * @return See above.
-   *
-   * @see Native_handle_sender::auto_ping(): implemented concept.
-   * @see Blob_sender::auto_ping(): alternatively implemented concept.
    */
-  bool auto_ping(util::Fine_duration period = boost::chrono::seconds(2));
+  bool auto_ping(util::Fine_duration period = boost::chrono::seconds{2});
+
+  /**
+   * Implements sync_io::Blob_sender API per contract.  Notes for transport::Native_socket_stream apply.
+   * @return See above.
+   */
+  Blob_snd_stats blob_send_stats() const;
+
+  /// Implements sync_io::Blob_sender API per contract.
+  void blob_send_stats_reset();
+
+  /**
+   * Implements sync_io::Native_handle_sender API per contract.  Identical to blob_send_stats() for this impl.
+   * @return See above.
+   */
+  Blob_snd_stats native_handle_send_stats() const;
+
+  /// Implements sync_io::Native_handle_sender API per contract.  Identical to blob_send_stats_reset().
+  void native_handle_send_stats_reset();
 
   // Receive-ops API.
 
@@ -463,8 +504,6 @@ public:
    * Implements Native_handle_receiver API per contract.  Notes for transport::Native_handle_receiver apply.
    *
    * @return See above.
-   *
-   * @see Native_handle_receiver::receive_meta_blob_max_size(): implemented concept.
    */
   size_t receive_meta_blob_max_size() const;
 
@@ -472,8 +511,6 @@ public:
    * Implements Blob_receiver API per contract.  Notes for transport::Blob_receiver apply.
    *
    * @return See above.
-   *
-   * @see Blob_receiver::receive_blob_max_size(): implemented concept.
    */
   size_t receive_blob_max_size() const;
 
@@ -485,8 +522,6 @@ public:
    * @param ev_wait_func
    *        See above.
    * @return See above.  In addition return `false`/WARNING/no-op, if start_receive_blob_ops() earlier succeeded.
-   *
-   * @see Native_handle_receiver::receive_blob_max_size(): implemented concept.
    */
   template<typename Event_wait_func_t>
   bool start_receive_native_handle_ops(Event_wait_func_t&& ev_wait_func);
@@ -502,8 +537,6 @@ public:
    *        See above.
    * @return See above.  In addition return `false`/WARNING/no-op, if start_receive_native_handle_ops() earlier
    *         succeeded.
-   *
-   * @see Native_handle_receiver::start_receive_blob_ops(): implemented concept.
    */
   template<typename Event_wait_func_t>
   bool start_receive_blob_ops(Event_wait_func_t&& ev_wait_func);
@@ -513,7 +546,7 @@ public:
    *
    * #Error_code generated and passed to `on_done_func()` or emitted synchronously:
    * See `Async_io_obj::async_receive_native_handle()` doc header
-   * (but not `S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER`).
+   * (but not `S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER`; and add `S_SYNC_IO_WOULD_BLOCK`).
    *
    * @tparam Task_err_sz
    *         See above.
@@ -530,8 +563,6 @@ public:
    * @param on_done_func
    *        See above.
    * @return See above.
-   *
-   * @see Native_handle_receiver::async_receive_native_handle(): implemented concept.
    */
   template<typename Task_err_sz>
   bool async_receive_native_handle(Native_handle* target_hndl, const util::Blob_mutable& target_meta_blob,
@@ -543,7 +574,7 @@ public:
    *
    * #Error_code generated and passed to `on_done_func()` or emitted synchronously:
    * See `Async_io_obj::async_receive_blob()` doc header
-   * (but not `S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER`).
+   * (but not `S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER`; and add `S_SYNC_IO_WOULD_BLOCK`).
    *
    * @tparam Task_err_sz
    *         See above.
@@ -558,12 +589,64 @@ public:
    * @param on_done_func
    *        See above.
    * @return See above.
-   *
-   * @see Blob_receiver::async_receive_blob(): implemented concept.
    */
   template<typename Task_err_sz>
   bool async_receive_blob(const util::Blob_mutable& target_blob, Error_code* sync_err_code, size_t* sync_sz,
                           Task_err_sz&& on_done_func);
+
+  /**
+   * Implements Native_handle_receiver API per contract.  Reminder: Please peruse "Thread safety" in class doc header.
+   *
+   * #Error_code generated and passed to `on_done_func()` or emitted synchronously:
+   * See `Async_io_obj::async_receive_native_handle_batch()` doc header
+   * (but not `S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER`; and add `S_SYNC_IO_WOULD_BLOCK`).
+   *
+   * @tparam Msg_resource
+   *         See above.
+   * @tparam Task_err
+   *         See above.
+   * @param batch
+   *        See above.
+   * @param assume_would_block
+   *        See above.
+   * @param sync_err_code
+   *        See above.
+   *        Do realize error::Code::S_SYNC_IO_WOULD_BLOCK *is* still an error, so if this pointer is null, then
+   *        would-block *will* make this throw.
+   * @param on_done_func
+   *        See above.
+   * @return See above.
+   */
+  template<typename Msg_resource, typename Task_err>
+  bool async_receive_native_handle_batch(Native_handle_batch_in<Msg_resource>* batch, bool assume_would_block,
+                                         Error_code* sync_err_code, Task_err&& on_done_func);
+
+  /**
+   * Implements Blob_receiver API per contract.  Reminder: Please peruse "Thread safety" in class doc header.
+   *
+   * #Error_code generated and passed to `on_done_func()` or emitted synchronously:
+   * See `Async_io_obj::async_receive_blob_batch()` doc header
+   * (but not `S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER`; and add `S_SYNC_IO_WOULD_BLOCK`).
+   *
+   * @tparam Msg_resource
+   *         See above.
+   * @tparam Task_err
+   *         See above.
+   * @param batch
+   *        See above.
+   * @param assume_would_block
+   *        See above.
+   * @param sync_err_code
+   *        See above.
+   *        Do realize error::Code::S_SYNC_IO_WOULD_BLOCK *is* still an error, so if this pointer is null, then
+   *        would-block *will* make this throw.
+   * @param on_done_func
+   *        See above.
+   * @return See above.
+   */
+  template<typename Msg_resource, typename Task_err>
+  bool async_receive_blob_batch(Blob_batch_in<Msg_resource>* batch, bool assume_would_block, Error_code* sync_err_code,
+                                Task_err&& on_done_func);
 
   /**
    * Implements Native_handle_receiver, Blob_receiver API per contract.  Reminder: Please peruse "Thread safety"
@@ -572,11 +655,26 @@ public:
    * @param timeout
    *        See above.
    * @return See above.
-   *
-   * @see Blob_receiver::idle_timer_run(): implemented concept.
-   * @see Native_handle_receiver::idle_timer_run(): alternatively implemented concept.
    */
-  bool idle_timer_run(util::Fine_duration timeout = boost::chrono::seconds(5));
+  bool idle_timer_run(util::Fine_duration timeout = boost::chrono::seconds{5});
+
+  /**
+   * Implements sync_io::Blob_receiver API per contract.
+   * @return See above.
+   */
+  Blob_rcv_stats blob_receive_stats() const;
+
+  /// Implements sync_io::Blob_receiver API per contract.
+  void blob_receive_stats_reset();
+
+  /**
+   * Implements sync_io::Native_handle_receiver API per contract.  Identical to blob_receive_stats() for this impl.
+   * @return See above.
+   */
+  Blob_rcv_stats native_handle_receive_stats() const;
+
+  /// Implements sync_io::Native_handle_receiver API per contract.  Identical to blob_receive_stats_reset().
+  void native_handle_receive_stats_reset();
 
   // Misc API.
 
@@ -587,7 +685,7 @@ public:
    *        See transport::Native_socket_stream counterpart.
    * @return See transport::Native_socket_stream counterpart.
    */
-  util::Process_credentials remote_peer_process_credentials(Error_code* err_code = 0) const;
+  const util::Process_credentials& remote_peer_process_credentials(Error_code* err_code = nullptr) const;
 
   /**
    * See transport::Native_socket_stream counterpart.
@@ -601,18 +699,13 @@ public:
 private:
   // Types.
 
-  // Forward declare the pImpl-idiom true implementation of this class.  See native_socket_stream_impl.hpp.
-  class Impl;
-
-  /// Short-hand for `const`-respecting wrapper around Native_socket_stream::Impl for the pImpl idiom.
+  /// Short-hand for `const`-respecting wrapper around #Impl for the pImpl-lite idiom.
   using Impl_ptr = std::experimental::propagate_const<boost::movelib::unique_ptr<Impl>>;
 
   // Friends.
 
   /// Friend of Native_socket_stream.
   friend std::ostream& operator<<(std::ostream& os, const Native_socket_stream& val);
-  /// Friend of Native_socket_stream.
-  friend std::ostream& operator<<(std::ostream& os, const Impl& val);
 
   // Methods.
 
@@ -627,106 +720,7 @@ private:
    */
   Impl_ptr& impl() const;
 
-  /**
-   * Template-free version of replace_event_wait_handles() as required by pImpl idiom.
-   *
-   * @param create_ev_wait_hndl_func
-   *        See replace_event_wait_handles().
-   * @return See replace_event_wait_handles().
-   */
-  bool replace_event_wait_handles_fwd
-         (const Function<util::sync_io::Asio_waitable_native_handle ()>& create_ev_wait_hndl_func);
-
-  /**
-   * Template-free version of start_send_native_handle_ops() as required by pImpl idiom.
-   *
-   * @param ev_wait_func
-   *        See above.
-   * @return See above.
-   */
-  bool start_send_native_handle_ops_fwd(util::sync_io::Event_wait_func&& ev_wait_func);
-
-  /**
-   * Template-free version of start_send_blob_ops() as required by pImpl idiom.
-   *
-   * @param ev_wait_func
-   *        See above.
-   * @return See above.
-   */
-  bool start_send_blob_ops_fwd(util::sync_io::Event_wait_func&& ev_wait_func);
-
-  /**
-   * Template-free version of async_end_sending() as required by pImpl idiom.
-   *
-   * @param sync_err_code
-   *        See above.
-   *        Do realize error::Code::S_SYNC_IO_WOULD_BLOCK *is* still an error, so if this pointer is null, then
-   *        would-block *will* make this throw.
-   * @param on_done_func
-   *        See above.
-   * @return See above.
-   */
-  bool async_end_sending_fwd(Error_code* sync_err_code, flow::async::Task_asio_err&& on_done_func);
-
-  /**
-   * Template-free version of start_receive_native_handle_ops() as required by pImpl idiom.
-   *
-   * @param ev_wait_func
-   *        See above.
-   * @return See above.
-   */
-  bool start_receive_native_handle_ops_fwd(util::sync_io::Event_wait_func&& ev_wait_func);
-
-  /**
-   * Template-free version of start_receive_blob_ops() as required by pImpl idiom.
-   *
-   * @param ev_wait_func
-   *        See above.
-   * @return See above.
-   */
-  bool start_receive_blob_ops_fwd(util::sync_io::Event_wait_func&& ev_wait_func);
-
-  /**
-   * Template-free version of async_receive_native_handle() as required by pImpl idiom.
-   *
-   * @param target_hndl
-   *        See above.
-   * @param target_meta_blob
-   *        See above.
-   * @param sync_err_code
-   *        See above.
-   *        Do realize error::Code::S_SYNC_IO_WOULD_BLOCK *is* still an error, so if this pointer is null, then
-   *        would-block *will* make this throw.
-   * @param sync_sz
-   *        See above.
-   * @param on_done_func
-   *        See above.
-   * @return See above.
-   */
-  bool async_receive_native_handle_fwd(Native_handle* target_hndl, const util::Blob_mutable& target_meta_blob,
-                                       Error_code* sync_err_code, size_t* sync_sz,
-                                       flow::async::Task_asio_err_sz&& on_done_func);
-
-  /**
-   * Template-free version of async_receive_blob() as required by pImpl idiom.
-   *
-   * @param target_blob
-   *        See above.
-   * @param sync_err_code
-   *        See above.
-   *        Do realize error::Code::S_SYNC_IO_WOULD_BLOCK *is* still an error, so if this pointer is null, then
-   *        would-block *will* make this throw.
-   * @param sync_sz
-   *        See above.
-   * @param on_done_func
-   *        See above.
-   * @return See above.
-   */
-  bool async_receive_blob_fwd(const util::Blob_mutable& target_blob, Error_code* sync_err_code, size_t* sync_sz,
-                              flow::async::Task_asio_err_sz&& on_done_func);
-
-  
-  // Please see transport::Native_socket_stream::Impl similar doc header; explains why this is dead code but remains.
+  // Please see transport::Native_socket_stream_impl similar doc header; explains why this is dead code but remains.
 #if 0
   /**
    * In PEER state only, with no prior send or receive ops, returns an object of this same type
@@ -765,53 +759,37 @@ private:
 template<typename Create_ev_wait_hndl_func>
 bool Native_socket_stream::replace_event_wait_handles(const Create_ev_wait_hndl_func& create_ev_wait_hndl_func)
 {
-  using util::sync_io::Asio_waitable_native_handle;
-
-  return replace_event_wait_handles_fwd(create_ev_wait_hndl_func);
+  return impl()->replace_event_wait_handles(create_ev_wait_hndl_func);
 }
 
 template<typename Event_wait_func_t>
 bool Native_socket_stream::start_send_native_handle_ops(Event_wait_func_t&& ev_wait_func)
 {
-  using util::sync_io::Event_wait_func;
-
-  return start_send_native_handle_ops_fwd(Event_wait_func(std::move(ev_wait_func)));
+  return impl()->start_send_native_handle_ops(std::move(ev_wait_func));
 }
 
 template<typename Event_wait_func_t>
 bool Native_socket_stream::start_send_blob_ops(Event_wait_func_t&& ev_wait_func)
 {
-  using util::sync_io::Event_wait_func;
-
-  return start_send_blob_ops_fwd(Event_wait_func(std::move(ev_wait_func)));
+  return impl()->start_send_blob_ops(std::move(ev_wait_func));
 }
 
 template<typename Task_err>
 bool Native_socket_stream::async_end_sending(Error_code* sync_err_code, Task_err&& on_done_func)
 {
-  using flow::async::Task_asio_err;
-
-  /* Perf note: In all cases, as of this writing, Impl would wrap the various handler parameterized args in
-   * concrete Function<>s anyway for its own impl ease; so we change nothing by doing this higher up in the call stack
-   * in this template and its siblings below. */
-
-  return async_end_sending_fwd(sync_err_code, Task_asio_err(std::move(on_done_func)));
+  return impl()->async_end_sending(sync_err_code, std::move(on_done_func));
 }
 
 template<typename Event_wait_func_t>
 bool Native_socket_stream::start_receive_native_handle_ops(Event_wait_func_t&& ev_wait_func)
 {
-  using util::sync_io::Event_wait_func;
-
-  return start_receive_native_handle_ops_fwd(Event_wait_func(std::move(ev_wait_func)));
+  return impl()->start_receive_native_handle_ops(std::move(ev_wait_func));
 }
 
 template<typename Event_wait_func_t>
 bool Native_socket_stream::start_receive_blob_ops(Event_wait_func_t&& ev_wait_func)
 {
-  using util::sync_io::Event_wait_func;
-
-  return start_receive_blob_ops_fwd(Event_wait_func(std::move(ev_wait_func)));
+  return impl()->start_receive_blob_ops(std::move(ev_wait_func));
 }
 
 template<typename Task_err_sz>
@@ -820,19 +798,37 @@ bool Native_socket_stream::async_receive_native_handle(Native_handle* target_hnd
                                                        Error_code* sync_err_code, size_t* sync_sz,
                                                        Task_err_sz&& on_done_func)
 {
-  using flow::async::Task_asio_err_sz;
+  /* Perf note: In all cases, as of this writing, Native_socket_stream_impl would wrap the various handler
+   * parameterized args in concrete Function<>s anyway for its own impl ease; so we change nothing by
+   * (implicitly, if needed) constructing flow::async::Task_asio_err_sz higher up in the call stack in this
+   * template and its siblings below. */
 
-  return async_receive_native_handle_fwd(target_hndl, target_meta_blob, sync_err_code, sync_sz,
-                                         Task_asio_err_sz(std::move(on_done_func)));
+  return impl()->async_receive_native_handle(target_hndl, target_meta_blob, sync_err_code, sync_sz,
+                                             std::move(on_done_func));
 }
 
 template<typename Task_err_sz>
 bool Native_socket_stream::async_receive_blob(const util::Blob_mutable& target_blob,
                                               Error_code* sync_err_code, size_t* sync_sz, Task_err_sz&& on_done_func)
 {
-  using flow::async::Task_asio_err_sz;
+  return impl()->async_receive_blob(target_blob, sync_err_code, sync_sz, std::move(on_done_func));
+}
 
-  return async_receive_blob_fwd(target_blob, sync_err_code, sync_sz, Task_asio_err_sz(std::move(on_done_func)));
+template<typename Msg_resource, typename Task_err>
+bool Native_socket_stream::async_receive_native_handle_batch(Native_handle_batch_in<Msg_resource>* batch,
+                                                             bool assume_would_block,
+                                                             Error_code* sync_err_code, Task_err&& on_done_func)
+{
+  return impl()->async_receive_native_handle_batch<Msg_resource>(batch, assume_would_block, sync_err_code,
+                                                                 std::move(on_done_func));
+}
+
+template<typename Msg_resource, typename Task_err>
+bool Native_socket_stream::async_receive_blob_batch(Blob_batch_in<Msg_resource>* batch, bool assume_would_block,
+                                                    Error_code* sync_err_code, Task_err&& on_done_func)
+{
+  return impl()->async_receive_blob_batch<Msg_resource>(batch, assume_would_block, sync_err_code,
+                                                        std::move(on_done_func));
 }
 
 } // namespace ipc::transport::sync_io

@@ -73,7 +73,7 @@ void op_with_possible_bipc_exception(flow::log::Logger* logger_ptr, Error_code* 
     // else
     if (native_code_raw != 0)
     {
-      const auto& sys_err_code = *err_code = Error_code(native_code_raw, system_category());
+      const auto& sys_err_code = *err_code = {native_code_raw, system_category()};
       FLOW_ERROR_SYS_ERROR_LOG_WARNING();
       return;
     }
@@ -117,7 +117,7 @@ void for_each_persistent_impl(const fs::path& persistent_obj_dev_dir_path, const
 #endif
     Error_code err_code;
     const auto dir_entry_status = dir_entry.status(err_code);
-    if (err_code || !fs::is_regular_file(dir_entry_status))
+    if (err_code || (!fs::is_regular_file(dir_entry_status)))
     {
       continue;
     }

@@ -236,8 +236,7 @@ public:
    */
   explicit Persistent_mq_handle(flow::log::Logger* logger_ptr, const Shared_name& absolute_name,
                                 util::Create_only mode_tag, size_t max_n_msg, size_t max_msg_sz,
-                                const util::Permissions& perms = util::Permissions(),
-                                Error_code* err_code = 0);
+                                const util::Permissions& perms = {}, Error_code* err_code = nullptr);
 
   /**
    * Construct handle to existing named MQ, or else if it does not exist creates it first and opens it (atomically).
@@ -265,8 +264,7 @@ public:
    */
   explicit Persistent_mq_handle(flow::log::Logger* logger_ptr, const Shared_name& absolute_name,
                                 util::Open_or_create mode_tag, size_t max_n_msg_on_create, size_t max_msg_sz_on_create,
-                                const util::Permissions& perms_on_create = util::Permissions(),
-                                Error_code* err_code = 0);
+                                const util::Permissions& perms_on_create = {}, Error_code* err_code = nullptr);
 
   /**
    * Construct handle to existing named MQ.  If it does not exist, it is an error.
@@ -284,7 +282,7 @@ public:
    *        various.  Most likely it already existed.
    */
   explicit Persistent_mq_handle(flow::log::Logger* logger_ptr, const Shared_name& absolute_name,
-                                util::Open_only mode_tag, Error_code* err_code = 0);
+                                util::Open_only mode_tag, Error_code* err_code = nullptr);
 
   /**
    * Constructs handle from the source handle while making the latter invalid.
@@ -349,7 +347,7 @@ public:
    *        various.
    */
   static void remove_persistent(flow::log::Logger* logger_ptr, const Shared_name& name,
-                                Error_code* err_code = 0);
+                                Error_code* err_code = nullptr);
 
   /**
    * Lists all named persistent MQs currently persisting, invoking the given handler synchronously on each one.
@@ -385,7 +383,7 @@ public:
    * @return `true` on success; `false` on failure; in the latter case `*err_code` distinguishes
    *         between would-block and fatal error.
    */
-  bool try_send(const util::Blob_const& blob, Error_code* err_code = 0);
+  bool try_send(const util::Blob_const& blob, Error_code* err_code = nullptr);
 
   /**
    * Blocking send: pushes copy of message to queue; if queue is full blocks until it is not.
@@ -405,7 +403,7 @@ public:
    *        max_msg_size()).
    *        error::Code::S_INTERRUPTED (preempted or interrupted by interrupt_sends()).
    */
-  void send(const util::Blob_const& blob, Error_code* err_code = 0);
+  void send(const util::Blob_const& blob, Error_code* err_code = nullptr);
 
   /**
    * Blocking timed send: pushes copy of message to queue; if queue is full blocks until it is not, or the
@@ -437,7 +435,7 @@ public:
    * @return `true` on success; `false` on failure; in the latter case `*err_code` distinguishes
    *         between timeout and fatal error.
    */
-  bool timed_send(const util::Blob_const& blob, util::Fine_duration timeout_from_now, Error_code* err_code = 0);
+  bool timed_send(const util::Blob_const& blob, util::Fine_duration timeout_from_now, Error_code* err_code = nullptr);
 
   /**
    * Equivalent to try_send() except stops short of writing anything, with `true` result indicating that
@@ -453,7 +451,7 @@ public:
    *        error::Code::S_INTERRUPTED (preempted by interrupt_sends()).
    * @return `true` if transmissible; `false` if not, or on error.
    */
-  bool is_sendable(Error_code* err_code = 0);
+  bool is_sendable(Error_code* err_code = nullptr);
 
   /**
    * Equivalent to send() except stops short of writing anything, with non-error return indicating that
@@ -469,7 +467,7 @@ public:
    *        various.  Would-block shall not be emitted.
    *        error::Code::S_INTERRUPTED (preempted or interrupted by interrupt_sends()).
    */
-  void wait_sendable(Error_code* err_code = 0);
+  void wait_sendable(Error_code* err_code = nullptr);
 
   /**
    * Equivalent to timed_send() except stops short of writing anything, with `true` result indicating that
@@ -489,7 +487,7 @@ public:
    * @return `true` if transmissible; `false` if not, or on error or timeout; in the latter case `*err_code`
    *         distinguishes between timeout and fatal error.
    */
-  bool timed_wait_sendable(util::Fine_duration timeout_from_now, Error_code* err_code = 0);
+  bool timed_wait_sendable(util::Fine_duration timeout_from_now, Error_code* err_code = nullptr);
 
   /**
    * Non-blocking receive: pops copy of message from queue into buffer and returns `true`; if queue is empty then no-op
@@ -512,7 +510,7 @@ public:
    * @return `true` on success; `false` on failure; in the latter case `*err_code` distinguishes
    *         between would-block and fatal error.
    */
-  bool try_receive(util::Blob_mutable* blob, Error_code* err_code = 0);
+  bool try_receive(util::Blob_mutable* blob, Error_code* err_code = nullptr);
 
   /**
    * Blocking receive: pops copy of message from queue into buffer; if queue is empty blocks until it is not.
@@ -534,7 +532,7 @@ public:
    *        max_msg_size()).
    *        error::Code::S_INTERRUPTED (preempted or interrupted by interrupt_receives()).
    */
-  void receive(util::Blob_mutable* blob, Error_code* err_code = 0);
+  void receive(util::Blob_mutable* blob, Error_code* err_code = nullptr);
 
   /**
    * Blocking timed receive: pops copy of message from queue into buffer; if queue is empty blocks until it is not, or
@@ -561,7 +559,7 @@ public:
    * @return `true` on success; `false` on failure; in the latter case `*err_code` distinguishes
    *         between timeout and fatal error.
    */
-  bool timed_receive(util::Blob_mutable* blob, util::Fine_duration timeout_from_now, Error_code* err_code = 0);
+  bool timed_receive(util::Blob_mutable* blob, util::Fine_duration timeout_from_now, Error_code* err_code = nullptr);
 
   /**
    * Equivalent to try_receive() except stops short of reading anything, with `true` result indicating that
@@ -577,7 +575,7 @@ public:
    *        error::Code::S_INTERRUPTED (preempted by interrupt_receives()).
    * @return `true` if transmissible; `false` if not, or on error.
    */
-  bool is_receivable(Error_code* err_code = 0);
+  bool is_receivable(Error_code* err_code = nullptr);
 
   /**
    * Equivalent to receive() except stops short of reading anything, with non-error return indicating that
@@ -593,7 +591,7 @@ public:
    *        various.  Would-block shall not be emitted.
    *        error::Code::S_INTERRUPTED (preempted or interrupted by interrupt_receives()).
    */
-  void wait_receivable(Error_code* err_code = 0);
+  void wait_receivable(Error_code* err_code = nullptr);
 
   /**
    * Equivalent to timed_receive() except stops short of reading anything, with `true` result indicating that
@@ -613,7 +611,7 @@ public:
    * @return `true` if transmissible; `false` if not, or on error or timeout; in the latter case `*err_code`
    *         distinguishes between timeout and fatal error.
    */
-  bool timed_wait_receivable(util::Fine_duration timeout_from_now, Error_code* err_code = 0);
+  bool timed_wait_receivable(util::Fine_duration timeout_from_now, Error_code* err_code = nullptr);
 
   /**
    * Enables sends-interrupted mode: is_sendable() (future calls), send() (future or concurrent calls),

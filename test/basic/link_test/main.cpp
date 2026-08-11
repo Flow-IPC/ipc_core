@@ -87,10 +87,10 @@ int main(int argc, char const * const * argv)
     const string PAYLOAD = "Hello, world!";
     Blob target(&log_logger, SZ);
 
-    mq_snd_stream.send_blob(Blob_const(static_cast<const void*>(&PAYLOAD[0]), PAYLOAD.size()));
+    mq_snd_stream.send_blob(Blob_const{static_cast<const void*>(&PAYLOAD[0]), PAYLOAD.size()});
     FLOW_LOG_INFO("Send message over MQ: [" << PAYLOAD << "].");
 
-    mq_rcv_stream.async_receive_blob(Blob_mutable(static_cast<void*>(target.begin()), target.size()),
+    mq_rcv_stream.async_receive_blob(Blob_mutable{static_cast<void*>(target.begin()), target.size()},
                                      [&](const Error_code& err_code, size_t n_rcvd)
     {
       if (err_code)

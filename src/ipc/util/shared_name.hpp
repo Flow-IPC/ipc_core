@@ -20,6 +20,8 @@
 
 #include "ipc/util/shared_name_fwd.hpp"
 #include "ipc/common.hpp"
+#include <type_traits>
+#include <charconv>
 
 namespace ipc::util
 {
@@ -36,7 +38,7 @@ namespace ipc::util
  * context referenced only as needed.  Then, below that, there's an architecture discussion about naming in general.
  *
  * ### Construction/assignment from and conversion to strings/similar ###
- * Interanally it stores an `std::string`.
+ * Internally it stores an `std::string`.
  *
  * Conversion: That `string` is accessible by `const&` via str() and similarly the NUL-terminated native_str().
  * Also there is an `ostream<<` printer; do note it does not simply print str() but rather a beautified version.
@@ -215,7 +217,7 @@ namespace ipc::util
  * ### Rationale for max length handling ###
  * As noted in the public section of this doc header: #S_MAX_LENGTH is a part of sanitized() criteria; it is not
  * enforced by Shared_name itself outside of sanitized() and sanitize().  It is up to the Shared_name user (which
- * may, and usually is, internal Flow-IPC code) to actually ensure sanitized() is `true` -- or otherwise avoid system
+ * may be, and usually is, internal Flow-IPC code) to actually ensure sanitized() is `true` -- or otherwise avoid system
  * API errors on account of bad names.  All *we* choose to do, regarding the length aspect, is choose one conservatively
  * low so that:
  *   - At least it is no greater than the *lowest* inherent limit out of all the known resource types to which
@@ -395,6 +397,21 @@ public:
    * @return The new object.
    */
   static Shared_name ct(std::string&& src_moved);
+
+  /**
+   * Constructs from a value of an integer type, efficiently converting to a string representation of the number's
+   * in base 10.
+   *
+   * @tparam Integer
+   *         Signed or unsigned integer type of bit width 8, 16, 32, or 64.
+   *         In particular `bool` is not supported (will not compile); `char`/`int8_t` and `unsigned char`/`uint8_t`
+   *         are supported.
+   * @param src
+   *        Integer to convert.
+   * @return The new object.
+   */
+  template<typename Integer>
+  static Shared_name ct_from_int(Integer src);
 
   // Methods.
 
@@ -683,6 +700,45 @@ Shared_name Shared_name::ct(const Source& src) // Static.
   return result;
 }
 
+template<typename Integer>
+Shared_name Shared_name::ct_from_int(Integer src) // Static.
+{
+  using std::is_same_v;
+  using std::is_integral_v;
+  using std::make_unsigned_t;
+  using std::errc;
+  using std::to_chars;
+
+  using int_t = Integer;
+  static_assert(is_integral_v<int_t>, "Use an integer type please.");
+  static_assert(!is_same_v<int_t, bool>, "Just use actual integer types please (char/uchar/int8_t/uint8_t are fine).");
+  using unsigned_t = make_unsigned_t<int_t>;
+
+  // Use to_chars() which is mega-fast in a couple ways.  Overkill?  Maybe.
+
+  Shared_name result;
+  auto& name = result.m_raw_name;
+
+  /* Subtlety: is_same_v<> can yield surprising results such as `long` (or `int64_t`) and `long long` being
+   * "not the same type," even though they're both signed 64-bit types that behave identically in terms
+   * or arithmetic, storage, etc.  So, e.g., different overloads/specializations might apply.  That's why
+   * here we use sizeof() comparisons instead of is_same_v<>. */
+  static_assert(sizeof(unsigned_t) <= (64 / 8),
+                "Please use one of the integer types of bit width in [8, 64].");
+  if constexpr(sizeof(unsigned_t) == sizeof(uint8_t)) { name.resize(4); } // Include space for minus sign.
+  else if constexpr(sizeof(unsigned_t) == sizeof(uint16_t)) { name.resize(6); } // Ditto for all.
+  else if constexpr(sizeof(unsigned_t) == sizeof(uint32_t)) { name.resize(11); }
+  else if constexpr(sizeof(unsigned_t) == sizeof(uint64_t)) { name.resize(20); }
+
+  const auto start_ptr = &(name.front());
+  const auto to_chars_result = to_chars(start_ptr, &(name.back()) + 1, src);
+  assert((to_chars_result.ec == errc{}) && "Did we not reserve enough space in target string?!");
+
+  name.resize(to_chars_result.ptr - start_ptr);
+
+  return result;
+} // Shared_name::ct_from_int()
+
 template<typename Source>
 Shared_name& Shared_name::operator+=(const Source& raw_name_to_append)
 {
@@ -770,10 +826,10 @@ unsigned int remove_each_persistent_with_name_prefix(flow::log::Logger* logger_p
   FLOW_LOG_TRACE("Will attempt to remove-persistent objects (type [" << typeid(Persistent_object).name() << "]) with "
                  "prefix [" << name_prefix_or_empty.str() << "] (<-- may be blank; then all are removed).");
 
-  const String_view name_prefix_view(name_prefix_or_empty.str());
+  const String_view name_prefix_view{name_prefix_or_empty.str()};
   const auto count = remove_each_persistent_if<Persistent_object>(get_logger(), [&](const Shared_name& name)
   {
-    return name_prefix_view.empty() || String_view(name.str()).starts_with(name_prefix_view);
+    return name_prefix_view.empty() || String_view{name.str()}.starts_with(name_prefix_view);
   });
 
   if (count != 0)

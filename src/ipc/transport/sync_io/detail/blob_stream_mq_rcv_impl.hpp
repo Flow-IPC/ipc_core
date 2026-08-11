@@ -19,6 +19,8 @@
 #pragma once
 
 #include "ipc/transport/protocol_negotiator.hpp"
+#include "ipc/transport/blob_transport_stats.hpp"
+#include "ipc/transport/sync_io/batch.hpp"
 #include "ipc/transport/detail/blob_stream_mq_impl.hpp"
 #include "ipc/util/sync_io/detail/timer_ev_emitter.hpp"
 #include "ipc/util/sync_io/sync_io_fwd.hpp"
@@ -70,6 +72,7 @@ namespace ipc::transport::sync_io
 template<typename Persistent_mq_handle>
 class Blob_stream_mq_receiver_impl :
   public Blob_stream_mq_base_impl<Persistent_mq_handle>,
+  public Blob_stream_mq_receiver_base,
   public flow::log::Log_context,
   private boost::noncopyable // And non-movable.
 {
@@ -81,6 +84,10 @@ public:
 
   /// Short-hand for template arg for underlying MQ handle type.
   using Mq = typename Base::Mq;
+
+  /// See Blob_stream_mq_receiver counterpart.
+  template<typename Msg_resource>
+  using Blob_batch_in = Blob_stream_mq_receiver_base::Blob_batch_in<Msg_resource>;
 
   // Constructors/destructor.
 
@@ -153,11 +160,37 @@ public:
   /**
    * See Blob_stream_mq_receiver counterpart, but assuming PEER state.
    *
+   * @param batch
+   *        See Blob_stream_mq_receiver counterpart.
+   * @param assume_would_block
+   *        See Blob_stream_mq_receiver counterpart.
+   * @param sync_err_code
+   *        See Blob_stream_mq_receiver counterpart.
+   * @param on_done_func
+   *        See Blob_stream_mq_receiver counterpart.
+   * @return See Blob_stream_mq_receiver counterpart.
+   */
+  template<typename Msg_resource, typename Task_err>
+  bool async_receive_blob_batch(Blob_batch_in<Msg_resource>* batch, bool assume_would_block,
+                                Error_code* sync_err_code, Task_err&& on_done_func);
+
+  /**
+   * See Blob_stream_mq_receiver counterpart, but assuming PEER state.
+   *
    * @param timeout
    *        See Blob_stream_mq_receiver counterpart.
    * @return See Blob_stream_mq_receiver counterpart.
    */
   bool idle_timer_run(util::Fine_duration timeout);
+
+  /**
+   * See Blob_stream_mq_receiver counterpart.
+   * @return See Blob_stream_mq_receiver counterpart.
+   */
+  stat::Blob_rcv_stats blob_receive_stats() const;
+
+  /// See Blob_stream_mq_receiver counterpart.
+  void blob_receive_stats_reset();
 
   /**
    * See Blob_stream_mq_receiver counterpart, but assuming PEER state.
@@ -176,17 +209,21 @@ private:
   // Types.
 
   /**
-   * Identical to sync_io::Async_adapter_receiver::User_request, except we only keep at most 1 of these
+   * Identical to sync_io::Async_adapter_receiver::User_request_one, except we only keep at most 1 of these
    * and thus don't need a `Ptr` alias inside; and we need not worry about transmitting `Native_handle`s.
    * As in that other class, this records the args from an async_receive_blob() call.
+   *
+   * @note If you're wondering why there is no batch-receive equivalent of this, the reason is that
+   *       we use the async_receive_batch_emulation() pattern so as to build async_receive_blob_batch() as a
+   *       series of async_receive_blob_impl().  So User_request is again used.
    */
   struct User_request
   {
     // Data.
 
-    /// Same as in sync_io::Async_adapter_receiver::User_request.
+    /// Same as in sync_io::Async_adapter_receiver::User_request_one.
     util::Blob_mutable m_target_blob;
-    /// Same as in sync_io::Async_adapter_receiver::User_request.
+    /// Same as in sync_io::Async_adapter_receiver::User_request_one.
     flow::async::Task_asio_err_sz m_on_done_func;
   }; // struct User_request
 
@@ -194,6 +231,44 @@ private:
   using Control_cmd = typename Base::Control_cmd;
 
   // Methods.
+
+  /**
+   * Core of either async_receive_blob() (user invoked single-message receiving directly) or
+   * the function passed to async_receive_batch_emulation() (user invoked batch-receiving, so we're emulating
+   * it as a series of single-receives).
+   *
+   * Generally it is almost equal to async_receive_blob() but to support both scenarios cleanly
+   * it has these subtractions and additions:
+   *
+   * Additions:
+   *   - It allows for mode `assume_would_block == true`; in this case it does not attempt any nb-read and
+   *     immediately issues an async-wait.  This helps perf in a certain situation.
+   *   - It allows for `on_done_func_or_none.empty()`; in this case *if* while trying to read the next in-message
+   *     would-block is encountered, *then* (while it synchronously emits would-block by `*sync_err_code` as normal)
+   *     no async-wait is issued, and the current receive-op is ended (#m_user_request is nullified).
+   *     - `m_control_state` might be `false` in this case; the next async_receive_blob_impl() will start in that
+   *       state.  See #m_control_state doc header for some discussion about that.
+   *
+   * Subtractions:
+   *   - `sync_err_code` must not be null (caller must do the standard exception/code dichotomy wrapping).
+   *   - The boring checks that would prevent the async-receive from proceeding at all must have all passed
+   *     already: PEER state, `start_*_ops()` done, no ongoing async-receive, #m_pending_err_code falsy,
+   *     blob-size `>= this->receive_blob_max_size()`.
+   *
+   * @param assume_would_block
+   *        See above.
+   * @param target_blob
+   *        See async_receive_blob().
+   * @param sync_err_code
+   *        See async_receive_blob().
+   * @param sync_sz
+   *        See async_receive_blob().
+   * @param on_done_func_or_none
+   *        See async_receive_blob() but note additional semantic (`.empty()`) above.
+   */
+  void async_receive_blob_impl(bool assume_would_block, const util::Blob_mutable& target_blob,
+                               Error_code* sync_err_code, size_t* sync_sz,
+                               flow::async::Task_asio_err_sz&& on_done_func_or_none);
 
   /**
    * Handler for the async-wait, via util::sync_io::Timer_event_emitter, of the idle timer firing;
@@ -219,11 +294,15 @@ private:
    * Begins read chain (completing it as synchronously as possible, async-completing the rest) for the next
    * in-message.
    *
-   * Given the pre-condition that (1) async_receive_blob() is oustanding (#m_user_request not null),
-   * (2) in the pipe we expect payload 1 (of 1 or 2) of the next in-message next, (3) there is no known pipe error
-   * already detected, and (4) there is no known would-block condition on the in-pipe: this reads (asynchronously
-   * if would-block is encountered at some point in there) the next message.
+   * Given the pre-condition that (1) async_receive_blob() is outstanding (#m_user_request not null),
+   * (2) in the pipe we expect payload 1 (of 1 or 2) or payload 2 of the next in-message next, (3) there is no known
+   * pipe error already detected, and (4) there is no known would-block condition on the in-pipe
+   * (unless `assume_would_block`): this reads (asynchronously if would-block is encountered at some point in
+   * there; or `assume_would_block`) the next message.
    *
+   * @param assume_would_block
+   *        If and only if `true`, which should be so set, for perf, if you know in-pipe is in would-block:
+   *        we skip the initial nb-read and act as-if we did it and got would-block.
    * @param sync_err_code
    *        Outcome out-arg: error::Code::S_SYNC_IO_WOULD_BLOCK if async-wait triggered, as message could not be
    *        fully read synchronously; falsy if message fully read synchronously; non-would-block truthy value,
@@ -231,7 +310,7 @@ private:
    * @param sync_sz
    *        Outcome out-arg: If `*sync_err_code` truthy then zero; else size of completed in-message.
    */
-  void read_msg(Error_code* sync_err_code, size_t* sync_sz);
+  void read_msg(bool assume_would_block, Error_code* sync_err_code, size_t* sync_sz);
 
   /**
    * Helper that returns `true` silently if `start_*_ops()` has been called; else
@@ -242,6 +321,15 @@ private:
    * @return See above.
    */
   bool op_started(util::String_view context) const;
+
+  /**
+   * INFO-logs current stats.  Same notes apply as for sync_io::Native_socket_stream_impl::log_stats() --
+   * see its doc header -- except we have only the one pipe (in-pipe).
+   *
+   * @param context
+   *        For logging: the algorithmic context (function name or whatever).
+   */
+  void log_stats(util::String_view context) const;
 
   // Data.
 
@@ -311,7 +399,7 @@ private:
    *
    * Important subtlety: We might be tempted to also nullify it upon detecting an error on the queue, so as to
    * early-return a resource to the OS.  However, for the same reason detailed in doc header for
-   * Native_socket_stream::Impl::m_peer_socket_hosed, we must not do so until dtor runs.
+   * Native_socket_stream_impl::m_peer_socket_hosed, we must not do so until dtor runs.
    * (Technically this is only the case if `Mq::S_HAS_NATIVE_HANDLE == true`, as only then would the user be
    * potentially directly performing async-waits on the underlying native-handle... but let's not get overly cute
    * and entropy-laden.)
@@ -391,6 +479,20 @@ private:
    * At steady-state `false`, becomes `true` if a low-level "escape" payload (empty message) was last received
    * meaning the next message will be the encoding of a #Control_cmd enumeration value, receiving which shall
    * reset this to `false`.
+   *
+   * Note that a corner-case use of async_receive_blob_impl() (via async_receive_blob_batch() and therefore
+   * async_receive_batch_emulation()) can lead to `m_control_state == false` at the start of the next
+   * async_receive_blob_impl().  Namely this sequence of events would do it:
+   *   - async_receive_blob_batch() => async_receive_batch_emulation() => async_receive_blob_impl();
+   *   - (optional) encounter would-block => async-wait => wait succeeded;
+   *   - receive 1 in-message successfully => async_receive_blob_impl() with args such that
+   *     `on_done_func_or_none.empty()`;
+   *   - (optional) receive 1+ more in-messages successfully;
+   *   - receive payload 1 such that it causes entry to CONTROL state (e.g., half of an auto-ping); hence
+   *     `m_control_state == true`;
+   *   - encounter would-block;
+   *   - emit the 1+ in-messages accumulated above to user of async_receive_blob_batch(); end async-receive op
+   *     as instructed because `on_done_func_or_none.empty()`.
    */
   bool m_control_state;
 
@@ -398,22 +500,21 @@ private:
    * Used only when #m_control_state is `true`, this is where payload 2 (the #Control_cmd) is placed.
    * Though in reality it should only require `sizeof(Control_cmd)` bytes, #m_mq receive will emit an error
    * if it cannot hold #m_mq_max_msg_sz bytes (that is just how Persistent_mq_handle works; though we do not care
-   * why here the reason is that's how both ipc and POSIX MQ APIs work).
+   * why, here the reason is that's how at least both boost.interprocess and POSIX MQ APIs work).
    *
    * We could also abuse #m_user_request `m_target_blob`; but that seems uncool.
    *
    * @todo Maybe we should indeed use `m_user_request->m_target_blob` (instead of locally stored
-   *       #m_target_control_blob) to save RAM/a few cycles?  Technically at least user should not care if some garbage
-   *       is temporarily placed there (after PING a real message should arrive and replace it; or else on error
-   *       or graceful-close who cares?).
+   * `m_target_control_blob`) to save RAM/a few cycles?  Technically at least user should not care if some garbage
+   * is placed there.
    */
   flow::util::Blob m_target_control_blob;
 
   /**
    * The first and only MQ-hosing error condition detected when attempting to low-level-read on
    * #m_mq; or falsy if no such error has yet been detected.  Among possible other uses, it is emitted
-   * to the ongoing-at-the-time async_receive_blob()'s completion handler (if one is indeed outstanding)
-   * and immediately to any subsequent async_receive_blob().
+   * to the ongoing-at-the-time async_receive_blob() or async_receive_blob_batch()'s completion handler (if one
+   * is indeed outstanding) and immediately to any subsequent `async_receive_blob*()`.
    */
   Error_code m_pending_err_code;
 
@@ -457,6 +558,9 @@ private:
    * doc header for a refresher on this mechanic.
    */
   util::sync_io::Event_wait_func m_ev_wait_func;
+
+  /// Stats.
+  stat::Blob_rcv_stats m_stats;
 
   /**
    * Worker thread W always in one of 2 states: idle; or (when #m_mq is in would-block condition) executing an
@@ -509,7 +613,8 @@ Blob_stream_mq_receiver_impl<Persistent_mq_handle>::Blob_stream_mq_receiver_impl
   // And this is its watchee mirror for outside event loop (sync_io pattern).
   m_ev_wait_hndl_idle_timer_fired_peer
     (m_ev_hndl_task_engine_unused,
-     Native_handle(m_idle_timer_fired_peer->native_handle()))
+     Native_handle{m_idle_timer_fired_peer->native_handle()}),
+  m_stats(m_mq_max_msg_sz)
 {
   using flow::error::Runtime_error;
   using flow::util::ostream_op_string;
@@ -560,7 +665,7 @@ Blob_stream_mq_receiver_impl<Persistent_mq_handle>::Blob_stream_mq_receiver_impl
       else
       {
         // Lastly load up the read-end FD into the watchee mirror.  See also replace_event_wait_handles().
-        m_ev_wait_hndl_mq.assign(Native_handle(m_mq_ready_reader->native_handle()));
+        m_ev_wait_hndl_mq.assign(Native_handle{m_mq_ready_reader->native_handle()});
       }
     } // if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
   } // if (!sys_err_code) (but it may have become truthy inside)
@@ -578,7 +683,7 @@ Blob_stream_mq_receiver_impl<Persistent_mq_handle>::Blob_stream_mq_receiver_impl
       return;
     }
     // else
-    throw Runtime_error(sys_err_code, "Blob_stream_mq_receiver(): ensure_unique_peer()");
+    throw Runtime_error{sys_err_code, "Blob_stream_mq_receiver(): ensure_unique_peer()"};
   }
   // else: took over `mq` ownership.
   assert(!sys_err_code);
@@ -604,7 +709,12 @@ Blob_stream_mq_receiver_impl<Persistent_mq_handle>::~Blob_stream_mq_receiver_imp
       m_mq->interrupt_receives();
     }
   } // if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
-}
+
+  if (!m_pending_err_code)
+  {
+    log_stats("dtor/pipe healthy");
+  }
+} // Blob_stream_mq_receiver_impl::~Blob_stream_mq_receiver_impl()
 
 template<typename Persistent_mq_handle>
 template<typename Create_ev_wait_hndl_func>
@@ -622,7 +732,7 @@ bool Blob_stream_mq_receiver_impl<Persistent_mq_handle>::replace_event_wait_hand
   if (m_pending_err_code)
   {
     /* Ctor failed (without throwing, meaning they used the non-null-err_code semantic).
-     * It is tempting to... <see comment in _sender_impl same place.  @todo Code reuse. */
+     * It is tempting to... <see comment in _sender_impl same place>.  @todo Code reuse. */
     FLOW_LOG_WARNING("Blob_stream_mq_sender [" << *this << "]: Cannot replace event-wait handles as requested: "
                      "ctor failed earlier ([" << m_pending_err_code << "] [" << m_pending_err_code.message() << "].  "
                      "Any transmission attempts will fail in civilized fashion, so we will just no-op here.");
@@ -636,7 +746,7 @@ bool Blob_stream_mq_receiver_impl<Persistent_mq_handle>::replace_event_wait_hand
   assert(m_ev_wait_hndl_mq.is_open());
   assert(m_ev_wait_hndl_idle_timer_fired_peer.is_open());
 
-  Native_handle saved(m_ev_wait_hndl_mq.release());
+  Native_handle saved{m_ev_wait_hndl_mq.release()};
   m_ev_wait_hndl_mq = create_ev_wait_hndl_func();
   m_ev_wait_hndl_mq.assign(saved);
 
@@ -682,37 +792,22 @@ bool Blob_stream_mq_receiver_impl<Persistent_mq_handle>::op_started(util::String
 template<typename Persistent_mq_handle>
 template<typename Task_err_sz>
 bool Blob_stream_mq_receiver_impl<Persistent_mq_handle>::async_receive_blob
-       (const util::Blob_mutable& target_blob, Error_code* sync_err_code_ptr, size_t* sync_sz,
+       (const util::Blob_mutable& target_blob, Error_code* err_code, size_t* sync_sz,
         Task_err_sz&& on_done_func)
 {
   using util::Blob_mutable;
+
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool,
+                                     async_receive_blob<Task_err_sz>,
+                                     target_blob, _1, sync_sz, std::move(on_done_func));
+  // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
+  auto& sync_err_code = *err_code;
 
   if (!op_started("async_receive_blob()"))
   {
     return false;
   }
   // else
-
-  /* We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
-   *
-   * Briefly though: If you understand opposing send_blob() impl, then this will be easy in comparison:
-   * no more than one async_receive_blob() can be outstanding at a time; they are not allowed to
-   * invoke it until we invoke their completion handler.  (Rationale is shown in detail elsewhere.)
-   * So there is no queuing of requests (deficit); nor reading more messages beyond what has been requested
-   * (surplus).
-   *
-   * That said, we must inform them of completion via on_done_func(), whereas send_blob() has no
-   * such requirement; easy enough -- we just save it as needed.  In that sense it is much like
-   * opposing async_end_sending().
-   *
-   * ...Well, no, there's one more complicating matter -- though it's nowhere near as hairy as what rcv-side of
-   * Native_socket_stream::Impl has to deal with:  Sure, there is no queuing of requests, but the outgoing-direction
-   * algorithm makes the low-level payloads and then just sends them out -- what's inside doesn't matter (almost).
-   * Incoming-direction is harder, because we need to read payload 1, interpret it, possibly read payload 2.
-   * So there is a bit of tactical nonsense about async-waiting and then resuming from the same spot and so on.
-   * However, unlike with Native_socket_stream::Impl our message boundaries are always preserved, so it is a ton
-   * simpler.  Basically it's just a matter of keeping track of the flag m_control_state and acting differently
-   * depending on whether it's true or not (when analyzing an incoming low-level payload). */
 
   if (m_user_request)
   {
@@ -723,8 +818,6 @@ bool Blob_stream_mq_receiver_impl<Persistent_mq_handle>::async_receive_blob
     return false;
   }
   // else
-
-  Error_code sync_err_code;
 
   FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: User async-receive request for "
                  "blob (located @ [" << target_blob.data() << "] of max size [" << target_blob.size() << "]).");
@@ -739,56 +832,190 @@ bool Blob_stream_mq_receiver_impl<Persistent_mq_handle>::async_receive_blob
     sync_err_code = m_pending_err_code;
     *sync_sz = 0;
   }
-  else // if (!m_pending_err_code)
+  else if (target_blob.size() < receive_blob_max_size())
   {
     // This next check: background can be found by following the comment on this concept constant.
     static_assert(!Blob_stream_mq_receiver<Mq>::S_BLOB_UNDERFLOW_ALLOWED,
-                   "MQs disallow even trying to receive into a buffer that could underflow "
-                     "with the largest *possible* message -- even if the actual message "
-                     "happens to be small enough to fit.");
-    if (target_blob.size() < receive_blob_max_size())
-    {
-      FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: User async-receive request for "
-                       "blob (located @ [" << target_blob.data() << "] of "
-                       "max size [" << target_blob.size() << "]): "
-                       "that size underflows MQ size limit [" << receive_blob_max_size() << "].  "
-                       "Emitting error immediately; but pipe continues.  Note that if we don't do this, "
-                       "then the low-level MQ will behave this way anyway.");
-      // As mandated by concept *do not* hose pipe by setting m_pending_err_code given INVALID_ARGUMENT.  Just emit.
+                  "MQs disallow even trying to receive into a buffer that could underflow "
+                    "with the largest *possible* message -- even if the actual message "
+                    "happens to be small enough to fit.");
 
-      sync_err_code = error::Code::S_INVALID_ARGUMENT;
-      *sync_sz = 0;
+    FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: User async-receive request for "
+                     "blob (located @ [" << target_blob.data() << "] of "
+                     "max size [" << target_blob.size() << "]): "
+                     "that size underflows MQ size limit [" << receive_blob_max_size() << "].  "
+                     "Emitting error immediately; but pipe continues.  Note that if we don't do this, "
+                     "then the low-level MQ will behave this way anyway.");
+    // As mandated by concept *do not* hose pipe by setting m_pending_err_code given INVALID_ARGUMENT.  Just emit.
+
+    sync_err_code = error::Code::S_INVALID_ARGUMENT;
+    *sync_sz = 0;
+  }
+  else
+  {
+    async_receive_blob_impl(false, target_blob, &sync_err_code, sync_sz, std::move(on_done_func));
+
+    /* See log_stats() doc header for basic background behind the logic here.
+     * (Per the "subtlety" in said doc header which we should avoid: on_done_func() won't be called anywhere
+     * above; that would be later (if ever) and only if we hit would-block now.)
+     * Note also: the m_pending_err_code pre-check above guarantees it was falsy on entry to this branch. */
+    if (m_pending_err_code)
+    {
+      log_stats("async_receive_blob(): while sync-processing rcv-pipe hosed");
     }
-    else
-    {
-      m_user_request.emplace();
-      m_user_request->m_target_blob = target_blob;
-      m_user_request->m_on_done_func = std::move(on_done_func);
-
-      read_msg(&sync_err_code, sync_sz);
-    } // else if (target_blob.size() is fine)
-  } // else if (!m_pending_err_code)
-
-  if ((!sync_err_code) || (sync_err_code != error::Code::S_SYNC_IO_WOULD_BLOCK))
-  {
-    FLOW_LOG_TRACE("Async-request completed synchronously (result "
-                    "[" << sync_err_code << "] [" << sync_err_code.message() << "]); emitting synchronously and "
-                    "disregarding handler.");
-    m_user_request.reset(); // No-op if we didn't set it up due to early error being detected above.
   }
-  // else { Other stuff logged enough. }
-
-  // Standard error-reporting semantics.
-  if ((!sync_err_code_ptr) && sync_err_code)
-  {
-    throw flow::error::Runtime_error(sync_err_code, "Blob_stream_mq_receiver_impl::async_receive_blob()");
-  }
-  // else
-  sync_err_code_ptr && (*sync_err_code_ptr = sync_err_code);
-  // And if (!sync_err_code_ptr) + no error => no throw.
 
   return true;
 } // Blob_stream_mq_receiver_impl::async_receive_blob()
+
+template<typename Persistent_mq_handle>
+template<typename Msg_resource, typename Task_err>
+bool
+  Blob_stream_mq_receiver_impl<Persistent_mq_handle>::async_receive_blob_batch(Blob_batch_in<Msg_resource>* batch,
+                                                                               bool assume_would_block,
+                                                                               Error_code* err_code,
+                                                                               Task_err&& on_done_func)
+{
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool,
+                                     (async_receive_blob_batch<Msg_resource, Task_err>),
+                                     batch, assume_would_block, _1, std::move(on_done_func));
+  // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
+  auto& sync_err_code = *err_code;
+
+  // Do these checks one time, similarly to the user-facing single-message async_receive_blob().
+
+  if (!op_started("async_receive_blob_batch()"))
+  {
+    return false;
+  }
+  // else
+  if (m_user_request)
+  {
+    FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: Async-receive-batch requested "
+                     "(batch [" << *batch << "]), but the preceding such "
+                     "request is still in progress; the message has not arrived yet (we are awaiting "
+                     "readability, before we can get the rest of it).  Likely a user error, but who are "
+                     "we to judge?  Ignoring.");
+    return false;
+  }
+  // else
+  FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: User async-receive-batch requested "
+                 "(batch [" << *batch << "]); assume would-block (skip first read attempt)? = "
+                 "[" << assume_would_block << "].");
+
+  if (m_pending_err_code)
+  {
+    FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: User async-receive requested "
+                     "(batch [" << *batch << "]): Error already encountered earlier.  Emitting via sync-args.  "
+                     "Note this is not necessarily "
+                     "the user acting oddly; in batch-receive case it is normal to detect an error like "
+                     "graceful-close just after 1+ user in-messages -- in which case we cache the error but "
+                     "emit the message(s) plus success; so we might be emitting the cached error now.");
+
+    sync_err_code = m_pending_err_code;
+  }
+  else if (!batch->initialized())
+  {
+    FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: User async-receive requested "
+                     "(batch [" << *batch << "]), but batch object is not initialized() (not all slots "
+                     "have been prepare_target_payload()ed); emitting INVALID_ARGUMENT.");
+    sync_err_code = error::Code::S_INVALID_ARGUMENT;
+  }
+  else if (batch->full())
+  {
+    FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: User async-receive requested "
+                     "(batch [" << *batch << "]), but batch object is already full; "
+                     "emitting INVALID_ARGUMENT.");
+    sync_err_code = error::Code::S_INVALID_ARGUMENT;
+  }
+  else if (batch->target_payload_size() < receive_blob_max_size())
+  {
+    // This next check: background can be found by following the comment on this concept constant.
+    static_assert(!Blob_stream_mq_receiver<Mq>::S_BLOB_UNDERFLOW_ALLOWED,
+                  "MQs disallow even trying to receive into a buffer that could underflow "
+                    "with the largest *possible* message -- even if the actual message "
+                    "happens to be small enough to fit.");
+
+    FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: User async-receive requested "
+                     "(batch [" << *batch << "]) (see blob-sz[]), but its blob-sz "
+                     "underflows MQ size limit [" << receive_blob_max_size() << "].  "
+                     "Emitting error immediately; but pipe continues.  Note that if we don't do this, "
+                     "then the low-level MQ will behave this way anyway.");
+    sync_err_code = error::Code::S_INVALID_ARGUMENT;
+  }
+  else
+  {
+    async_receive_batch_emulation<true>(get_logger(), batch, assume_would_block,
+                                        &sync_err_code, std::move(on_done_func),
+                                        [this](auto&&... args)
+    {
+      async_receive_blob_impl(std::forward<decltype(args)>(args)...);
+    });
+
+    /* See log_stats() doc header for basic background behind the logic here.
+     * (Per the "subtlety" in said doc header which we should avoid: on_done_func() won't be called anywhere
+     * above; that would be later (if ever) and only if we hit would-block now.)
+     * Note also: the m_pending_err_code pre-check above guarantees it was falsy on entry to this branch. */
+    if (m_pending_err_code)
+    {
+      log_stats("async_receive_blob_batch(): while sync-processing rcv-pipe hosed");
+    }
+  }
+
+  return true;
+} // Blob_stream_mq_receiver_impl::async_receive_blob_batch()
+
+template<typename Persistent_mq_handle>
+void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::async_receive_blob_impl
+                                                           (bool assume_would_block,
+                                                            const util::Blob_mutable& target_blob,
+                                                            Error_code* sync_err_code, size_t* sync_sz,
+                                                            flow::async::Task_asio_err_sz&& on_done_func_or_none)
+{
+  assert(sync_err_code);
+
+  /* We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
+   *
+   * Briefly though: If you understand opposing send_blob() impl, then this will be easy in comparison:
+   * no more than one async_receive_blob_impl() can be outstanding at a time; they are not allowed to
+   * invoke it until we invoke their completion handler if any.  (Rationale is shown in detail elsewhere.)
+   * So there is no queuing of requests (deficit); nor reading more messages beyond what has been requested
+   * (surplus).
+   *
+   * That said, we must inform them of completion via on_done_func_or_none() (if any), whereas send_blob() has no
+   * such requirement; easy enough -- we just save it as needed.  In that sense it is much like
+   * opposing async_end_sending().
+   *
+   * ...Well, no, there's one more complicating matter -- though it's nowhere near as hairy as what rcv-side of
+   * Native_socket_stream_impl has to deal with:  Sure, there is no queuing of requests, but the outgoing-direction
+   * algorithm makes the low-level payloads and then just sends them out -- what's inside doesn't matter (almost).
+   * Incoming-direction is harder, because we need to read payload 1, interpret it, possibly read payload 2.
+   * So there is a bit of tactical nonsense about async-waiting and then resuming from the same spot and so on.
+   * However, unlike with Native_socket_stream_impl our message boundaries are always preserved, so it is a ton
+   * simpler.  (Update: Native_socket_stream_impl also has datagram-based code-paths, where things are also
+   * simple.  It has the complex code-paths too; it depends on what is available via the OS, for that guy.)
+   * Basically it's just a matter of keeping track of the flag m_control_state and acting differently
+   * depending on whether it's true or not (when analyzing an incoming low-level payload). */
+
+  m_user_request.emplace();
+  m_user_request->m_target_blob = target_blob;
+  if (!on_done_func_or_none.empty())
+  {
+    m_user_request->m_on_done_func = std::move(on_done_func_or_none);
+  }
+
+  read_msg(assume_would_block, sync_err_code, sync_sz);
+
+  if (m_user_request->m_on_done_func.empty() // Would-block ends op, if no on-done function provided (as advertised).
+      || (*sync_err_code != error::Code::S_SYNC_IO_WOULD_BLOCK)) // Success or any other error always ends op.
+  {
+    FLOW_LOG_TRACE("Async-request completed synchronously (result "
+                   "[" << *sync_err_code << "] [" << sync_err_code->message() << "]); emitting synchronously and "
+                   "disregarding handler.");
+    m_user_request.reset();
+  }
+  // else { Other stuff logged enough. }
+} // Blob_stream_mq_receiver_impl::async_receive_blob_impl()
 
 template<typename Persistent_mq_handle>
 bool Blob_stream_mq_receiver_impl<Persistent_mq_handle>::idle_timer_run(util::Fine_duration timeout)
@@ -863,16 +1090,26 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::on_ev_idle_timer_fired(
   // else
 
   m_pending_err_code = error::Code::S_RECEIVER_IDLE_TIMEOUT;
+  ++m_stats.m_idle_timeouts;
 
   FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: Idle timer fired: There's been 0 traffic past idle "
                    "timeout.  Will not proceed with any further low-level receiving.  If a user async-receive request "
                    "is pending (is it? = [" << bool(m_user_request) << "]) will emit to completion handler.");
+
+  /* See log_stats() doc header for basic background behind the logic here.
+   * Note we put this ahead of any handler-call to avoid reentrant hellishness. */
+  log_stats("on_ev_idle_timer_fired(): idle timeout fired, pipe hosed");
 
   if (m_user_request)
   {
     // Prevent stepping on our own toes: move/clear it first / invoke handler second.
     const auto on_done_func = std::move(m_user_request->m_on_done_func);
     m_user_request.reset();
+
+    assert((!on_done_func.empty())
+           && "Empty m_on_done_func => that m_user_request should have been nullified before returning "
+                "from the async-receive API, hence before the timer fired and we were called.  Bug.");
+
     on_done_func(m_pending_err_code, 0);
     FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: Handler completed.");
   }
@@ -919,7 +1156,8 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::not_idle()
 } // Blob_stream_mq_receiver_impl::not_idle()
 
 template<typename Persistent_mq_handle>
-void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sync_err_code, size_t* sync_sz)
+void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(bool assume_would_block,
+                                                                  Error_code* sync_err_code, size_t* sync_sz)
 {
   using util::Task;
   using util::Blob_mutable;
@@ -929,20 +1167,33 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
   assert(!m_pending_err_code);
   assert(m_user_request);
 
-  /* We just entered possibly-not-would-block state of m_mq; and are about to nb-read message (which might would-block
-   * and other possibilities).  Pre-condition is m_user_request is truthy -- has not been satisfied.  Lastly
-   * m_control_state may be true or false depending on the last payload (if any).
+  /* We are in possibly-not-would-block state of m_mq; and are about to nb-read message (which might would-block
+   * and other possibilities).  Pre-condition is m_user_request is truthy -- has not been satisfied.
+   * m_control_state may be true or false depending on the last payload (if any).  Lastly
+   * there are two modes regarding how to treat would-block:
    *
-   *   -# MQ error or protocol error (invalid ctl msg) or graceful-close ctl msg => m_pending_err_code becomes true;
-   *      emit to m_user_request; GTFO.
-   *   -# Would-block => async-wait for readability, when ready read_msg() (us) again (unless
-   *                     idle-timeout in the meantime, so be sure to not read_msg() in that case).  GTFO here
-   *                     (algorithm continues asynchronously).
-   *   -# Valid msg:
-   *      -# If m_control_state already: So then it's PING => m_control_state=false; register non-idleness; go again*.
-   *      -# Else:
-   *         -# If empty msg => m_control_state=true; go again*.
-   *         -# Else: regular user msg => emit to m_user_request; GTFO.
+   *   - m_user_request->m_on_done_func.empty() => It's part of the tail end of a batch-receive, meaning 1+
+   *     messages have already been accumulated.  Would-block means we got everything we could; read chain ends.
+   *   - Otherwise => It's a regular single-receive (or batch-receive before any in-messages seen).  Would-block
+   *     means async-wait for readability and resume all this asynchronously later.
+   *
+   * So then, for a given iteration (or just think about iteration 1 for now):
+   *
+   *   -# MQ error or protocol error (invalid ctl msg) or graceful-close ctl msg
+   *      => m_pending_err_code becomes true; emit via *sync_err_code; GTFO.
+   *   -# Would-block w/ on_done_func:
+   *      => Async-wait for readability (when ready read_msg() (us) again -- unless idle-timeout in the meantime,
+   *         so be sure to not read_msg() in that case).
+   *      => m_pending_err_code remains false; emit would-block via *sync_err_code; GTFO.
+   *   -# Would-block w/o on_done_func:
+   *      => m_pending_err_code remains false; emit would-block via *sync_err_code; GTFO.
+   *   -# Valid msg when !m_control_state:
+   *      -# Non-empty msg (regular user msg):
+   *         => m_pending_err_code remains false; emit false and <msg size> via *sync_{err_code|sz}; GTFO.
+   *      -# Empty msg:
+   *         => m_control_state=true; go again*.
+   *   -# Valid msg when m_control_state already:
+   *      => So then it's PING => m_control_state=false; register non-idleness; go again*.
    *
    * (*) - What is "go again"?  It means repeat the above steps.  One way to structure this would be for read_msg()
    *       to then call read_msg().  That is algorithmically sound conceptually, but for example suppose there are
@@ -950,21 +1201,25 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
    *       do-while loop, with the above steps being one iteration.
    *
    * Let us consider the possible outcomes of an iteration as listed above.
-   *   -# m_pending_err_code truthy, emit-to-user, do not reiterate.
-   *   -# m_pending_err_code falsy, emit-to-user, do not reiterate.
-   *   -# Async-wait started, do not emit-to-user, do not reiterate.
-   *   -# Reiterate.  (m_control_state would have changes to true or to false.)
+   *   -# m_pending_err_code truthy, emit it via *sync_..., do not reiterate.
+   *   -# m_pending_err_code falsy, emit it via *sync_..., do not reiterate.
+   *   -# m_pending_err_code falsy, BUT emit would-block via *sync_..., do not reiterate.
+   *     -# (Possibly) async-wait started.
+   *   -# Reiterate.  (m_control_state would have changed to true or to false.)
    *
-   * Here is how we structure the flow control then.  Firstly, outcome (3) stylistically we normally handle in various
-   * places by `return`ing after starting async-wait.  It's nice visually to show that when the algorithm continues
-   * asynchronously, then we don't do anything at the tail end (after the async-wait).  So, that's that for outcome (3).
+   * (There's also protocol negotiation, but let's just ignore it here to avoid blather.  It's handled fine below
+   * and is similar to illegal-message error and auto-ping, depending.)
+   *
+   * Here is how we structure the flow control then.  Firstly, of the 3 loop-ending outcomes (1-3) outcome (3) is
+   * arguably the odd man out: m_pending_err_code is not what is emitted via *sync_... out-arg(s).
+   * (Also stylistically we normally in various places `return` after starting async-wait.)  So as the "odd"
+   * case, we will emit the would-block and `return`.  So that's that for outcome (3).
    *
    * That leaves 2 possibilities if end of iteration is reached:
-   *   - emit-to-user, stop loop;
-   *   - do not emit-to-user, continue loop.
+   *   - emit-to-user, stop loop (1, 2);
+   *   - do not emit-to-user, continue loop (4).
    *
-   * Hence track it with `bool emit`; and end the do-while() once it becomes true.
-   */
+   * Hence track it with `bool emit`; and end the do-while() once it becomes true. */
   bool emit = false;
   Blob_mutable target_blob;
 
@@ -972,20 +1227,22 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
   {
     FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: Async-receive: Start of payload: "
                    "Either user message or CONTROL-state escape message; unless already in CONTROL state "
-                   "(are we? = [" << m_control_state << "]) -- then the CONTROL command enum value.");
+                   "(are we? = [" << m_control_state << "]) -- then the CONTROL command enum value.  "
+                   "Assume would-block (skip actual read attempt)? = [" << assume_would_block << "].");
 
-    target_blob = m_control_state ? Blob_mutable(m_target_control_blob.data(),
-                                                 m_target_control_blob.size())
+    target_blob = m_control_state ? m_target_control_blob.mutable_buffer()
                                   : m_user_request->m_target_blob;
 
     const bool rcvd_else_would_block_or_error
-      = m_mq->try_receive(&target_blob, &m_pending_err_code);
+      = assume_would_block ? false // !m_pending_err_code at this time; so this being false => as-if would-block.
+                           : m_mq->try_receive(&target_blob, &m_pending_err_code);
 
     if (!m_pending_err_code)
     {
       if (rcvd_else_would_block_or_error)
       {
         // Not error, not would block: got low-level message.  Interpret it.
+        m_stats.m_total_low_lvl_bytes += target_blob.size();
 
         /* Let's discuss protocol negotiation, as it applies to us.  Simply, the first thing we must receive
          * (though there's no requirement as to how soon it happens -- it just needs to precede anything else)
@@ -1006,8 +1263,7 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
 
         if (m_control_state)
         {
-          // Do not forget!
-          m_control_state = false;
+          m_control_state = false; // Do not forget!
 
           if (target_blob.size() == sizeof(Control_cmd))
           {
@@ -1026,8 +1282,8 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
               proto_negotiating = false; // Just in case (maintainability).
 
               /* Cool, so now either all is cool, and we should keep reading; or m_pending_err_code contains how
-               * negotiation failed, and loop will exit.  The general code before the } in `if (m_control) {}` will
-               * handle it either way. */
+               * negotiation failed, and loop will exit.  The general code before the } in `if (m_control_state) {}`
+               * will handle it either way. */
             } // if (proto_negotiating)
             else if (raw_cmd >= raw_ctl_cmd_enum_t(Control_cmd::S_END_SENTINEL)) // && !proto_negotiating
             {
@@ -1047,6 +1303,7 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
                 // As of this writing also INFO-level on sender side.   @todo Reconsider that and this too.
                 FLOW_LOG_INFO("Blob_stream_mq_receiver [" << *this << "]: In CONTROL state got PING.  Ignoring "
                               "other than registering non-idle activity.  Back in non-CONTROL state.");
+                ++m_stats.m_auto_pings;
                 not_idle();
 
                 // Like it said -- ignore it.  Just go for the next message.
@@ -1086,7 +1343,7 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
             {
               /* In non-CONTROL state -- at start -- before protocol has been negotiated, the first message *must*
                * be a CONTROL message.  Formally speaking we'll never be able to parse the negotiated version, because
-               * it is not coming first according to the protocol.  So, per it API, we can just give
+               * it is not coming first according to the protocol.  So, per its API, we can just give
                * Protocol_negotiator an invalid version, so it'll emit the proper error. */
               FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: In non-CONTROL state got regular "
                                "user message.  However this is the start of the comm-pathway, and by protocol "
@@ -1108,6 +1365,9 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
               FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: In non-CONTROL state got regular "
                              "user message.  Will emit to user (possibly via sync-args, namely if this is "
                              "synchronously within async-receive API).  Also registering non-idle activity.");
+              ++m_stats.m_total_msgs;
+              m_stats.m_total_bytes += target_blob.size();
+              m_stats.m_histo_payload_sz.record_value(target_blob.size());
               not_idle();
             }
 
@@ -1118,114 +1378,136 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
       } // if (rcvd_else_would_block_or_error) (and !m_pending_err_code, but it may have become truthy inside)
       else // if (!rcvd_else_would_block_or_error) (and !m_pending_err_code, so in fact would-block)
       {
-        FLOW_LOG_TRACE("Got would-block.  Awaiting readability.");
-
-        /* Conceptually we'd like to do m_mq->async_wait(readable, F), where F() would perform
-         * read_msg() (the present method: nb-receive over m_mq).  However this is the sync_io pattern, so
-         * the user will be performing the conceptual async_wait() for us.  We must ask them to do so
-         * via m_ev_wait_func(), giving them m_mq's FD -- m_ev_wait_hndl_mq -- to wait-on.  */
-
-        if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
+        if (m_user_request->m_on_done_func.empty())
         {
-          /* In this case, though, m_mq has no FD; so we simulate it by awaiting readability in thread W
-           * (which exists only for this purpose and is currently idle); and once that is detected we make the
-           * pipe-read-end m_mq_ready_reader readable (by writing to write end):
-           * *that* is watched by m_ev_wait_hndl_mq. */
-
-          // So step 1 then; start the blocking wait in thread W.
-          m_blocking_worker->post([this]()
-          {
-            // We are in thread W (the one and only code snippet that runs there).
-
-            /* m_mq thread safety: See its doc header.  Spoiler alert: m_user_request not empty, so by posting
-             * this onto thread W, thread U promises not to touch m_mq until *we* tell it to via m_ev_wait_hndl_mq.
-             * async_receive_blob() will see m_user_request is non-empty and refuse to proceed.
-             * The only other thing that would touch m_mq (outside of dtor's m_mq->interrupt_receives()) is the
-             * async-wait-handler below -- but that will only run if *we* signal it to.  So it's safe.  (That spoiler
-             * was very spoiler-y.  More of a restatement.) */
-
-            Error_code err_code;
-            m_mq->wait_receivable(&err_code); // This will TRACE-log plenty.
-            if (err_code == error::Code::S_INTERRUPTED)
-            {
-              FLOW_LOG_INFO("Blob_stream_mq_receiver [" << *this << "]: Blocking-worker was awaiting MQ "
-                            "transmissibility; interrupted (presumably by dtor).  Bailing out.");
-              return; // Dtor is shutting is down.  GTFO.
-            }
-            // else
-
-            if (err_code)
-            {
-              FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: Blocking-worker thread was awaiting MQ "
-                               "transmissibility; yield error (not interrupted) -- details likely in WARNING above.  "
-                               "We lack the means (well, the will mostly) to transmit the fact of the error "
-                               "to user-land; so we will just report MQ-readability and let "
-                               "user-land code uncover whatever is wrong with the MQ.  This is unusual generally.");
-            }
-            // else { No problem!  It logged enough; let us signal it. }
-            FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: Blocking-worker thread was awaiting MQ "
-                           "transmissibility; success; now pinging user-land via IPC-pipe.");
-
-            util::pipe_produce(get_logger(), &(*m_mq_ready_writer));
-            // m_mq_read_reader now has a byte to read!  m_ev_wait_hndl_mq will be event-active.
-          }); // m_blocking_worker->post()
-        } // if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
-        // else if (Mq::S_HAS_NATIVE_HANDLE) { m_ev_wait_hndl_mq has the MQ's kernel-waitable handle!  Sw33t! }
-
-        m_ev_wait_func(&m_ev_wait_hndl_mq,
-                       false, // Wait for read (whether pipe or actual MQ!).
-                       // Once readable do this:
-                       boost::make_shared<Task>
-                         ([this]()
+          FLOW_LOG_TRACE("Got would-block while tacking-on in-message(s) after initial in-message.  Will *not* "
+                         "await readability; in-message batch is ready to emit.");
+        }
+        else // if (!m_user_request->m_on_done_func)
         {
-          // We are back in *not* thread W!
+          FLOW_LOG_TRACE("Got would-block (possibly pre-assumed).  Awaiting readability.");
+
+          /* Conceptually we'd like to do m_mq->async_wait(readable, F), where F() would perform
+           * read_msg() (the present method: nb-receive over m_mq).  However this is the sync_io pattern, so
+           * the user will be performing the conceptual async_wait() for us.  We must ask them to do so
+           * via m_ev_wait_func(), giving them m_mq's FD -- m_ev_wait_hndl_mq -- to wait-on.  */
 
           if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
           {
-            util::pipe_consume(get_logger(), &(*m_mq_ready_reader)); // Consume the byte to get to steady-state.
-          }
-          // else { No byte was written.  In fact there's no pipe even. }
+            /* In this case, though, m_mq has no FD; so we simulate it by awaiting readability in thread W
+             * (which exists only for this purpose and is currently idle); and once that is detected we make the
+             * pipe-read-end m_mq_ready_reader readable (by writing to write end):
+             * *that* is watched by m_ev_wait_hndl_mq. */
 
-          FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: User-performed wait-for-readable finished "
-                         "(readable or error, we do not know which yet).  We endeavour to receive->pop->receive->... "
-                         "as much of the MQ as we can until would-block, or we have a full message (so either "
-                         "1 message, or if in CONTROL state then 2 messages).");
-          if (m_pending_err_code)
+            // So step 1 then; start the blocking wait in thread W.
+            m_blocking_worker->post([this]()
+            {
+              // We are in thread W (the one and only code snippet that runs there).
+
+              /* m_mq thread safety: See its doc header.  Spoiler alert: m_user_request not empty, so by posting
+               * this onto thread W, thread U promises not to touch m_mq until *we* tell it to via m_ev_wait_hndl_mq.
+               * async_receive_blob() will see m_user_request is non-empty and refuse to proceed.
+               * The only other thing that would touch m_mq (outside of dtor's m_mq->interrupt_receives()) is the
+               * async-wait-handler below -- but that will only run if *we* signal it to.  So it's safe.  (That spoiler
+               * was very spoiler-y.  More of a restatement.) */
+
+              Error_code err_code;
+              m_mq->wait_receivable(&err_code); // This will TRACE-log plenty.
+              if (err_code == error::Code::S_INTERRUPTED)
+              {
+                FLOW_LOG_INFO("Blob_stream_mq_receiver [" << *this << "]: Blocking-worker was awaiting MQ "
+                              "transmissibility; interrupted (presumably by dtor).  Bailing out.");
+                return; // Dtor is shutting is down.  GTFO.
+              }
+              // else
+
+              if (err_code)
+              {
+                FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: Blocking-worker thread was awaiting MQ "
+                                 "transmissibility; yield error (not interrupted) -- details likely in WARNING above.  "
+                                 "We lack the means (well, the will mostly) to transmit the fact of the error "
+                                 "to user-land; so we will just report MQ-readability and let "
+                                 "user-land code uncover whatever is wrong with the MQ.  This is unusual generally.");
+              }
+              // else { No problem!  It logged enough; let us signal it. }
+              FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: Blocking-worker thread was awaiting MQ "
+                             "transmissibility; success; now pinging user-land via IPC-pipe.");
+
+              util::pipe_produce(get_logger(), &(*m_mq_ready_writer));
+              // m_mq_read_reader now has a byte to read!  m_ev_wait_hndl_mq will be event-active.
+            }); // m_blocking_worker->post()
+          } // if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
+          // else if (Mq::S_HAS_NATIVE_HANDLE) { m_ev_wait_hndl_mq has the MQ's kernel-waitable handle!  Sw33t! }
+
+          m_ev_wait_func(&m_ev_wait_hndl_mq,
+                         false, // Wait for read (whether pipe or actual MQ!).
+                         // Once readable do this:
+                         boost::make_shared<Task>
+                           ([this]()
           {
-            FLOW_LOG_TRACE("However error (presumably idle-timeout) occurred in the meantime; "
-                           "hence stopping read-chain forever.");
+            // We are back in *not* thread W!
 
-            assert((!m_user_request) // Sanity-check.
-                   && "If rcv-error emitted during low-level async-wait, we should have fed it to any "
-                        "pending async-receive.");
-            return;
-          }
-          // else if (!m_pending_err_code)
-          assert(m_user_request && "Only an error, or we ourselves here, can satisfy user request."); // Sanity check.
+            if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
+            {
+              util::pipe_consume(get_logger(), &(*m_mq_ready_reader)); // Consume the byte to get to steady-state.
+            }
+            // else { No byte was written.  In fact there's no pipe even. }
 
-          // Will potentially emit these (if and only if message-read completes due to this successful async-wait).
-          Error_code sync_err_code;
-          size_t sync_sz;
+            FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: User-performed wait-for-readable finished "
+                           "(readable or error, we do not know which yet).  We endeavour to receive->pop->receive->... "
+                           "as much of the MQ as we can until would-block, or we have a full message (so either "
+                           "1 message, or if in CONTROL state then 2 messages).");
+            if (m_pending_err_code)
+            {
+              FLOW_LOG_TRACE("However error (presumably idle-timeout) occurred in the meantime; "
+                             "hence stopping read-chain forever.");
 
-          // Would-not-block, as far as we know.  Try again.
-          read_msg(&sync_err_code, &sync_sz);
+              assert((!m_user_request) // Sanity-check.
+                     && "If rcv-error emitted during low-level async-wait, we should have fed it to any "
+                          "pending async-receive.");
+              return;
+            }
+            // else if (!m_pending_err_code)
+            assert(m_user_request && "Only an error, or we ourselves here, can satisfy user request."); // Sanity check.
 
-          if (sync_err_code == error::Code::S_SYNC_IO_WOULD_BLOCK)
-          {
-            // Another async-wait is pending now.  We've logged enough.  Live to fight another day.
-            return;
-          }
-          // else: Message completed/error!
+            // Will potentially emit these (if and only if message-read completes due to this successful async-wait).
+            Error_code sync_err_code;
+            size_t sync_sz;
 
-          FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: Async-op result ready after successful "
-                         "async-wait.  Executing handler now.");
+            // Would-not-block, as far as we know.  Try again.
+            read_msg(false, &sync_err_code, &sync_sz);
 
-          // Prevent stepping on our own toes: move/clear it first / invoke handler second.
-          const auto on_done_func = std::move(m_user_request->m_on_done_func);
-          m_user_request.reset();
-          on_done_func(sync_err_code, sync_sz);
-          FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: Handler completed.");
-        })); // m_ev_wait_func(): on_active_ev_func arg
+            if (sync_err_code == error::Code::S_SYNC_IO_WOULD_BLOCK)
+            {
+              // Another async-wait is pending now.  We've logged enough.  Live to fight another day.
+              return;
+            }
+            // else: Message completed/error!
+
+            /* See log_stats() doc header for basic background behind the logic here.
+             * Note we put this ahead of any handler-call to avoid reentrant hellishness. */
+            if (m_pending_err_code) // Note we would've returned already if it was not already truthy at handler start.
+            {
+              log_stats("read_msg() (async-wait completion): while processing ev-ready pipe hosed");
+            }
+
+            FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: Async-op result ready after successful "
+                           "async-wait.  Executing handler now.");
+
+            // Prevent stepping on our own toes: move/clear it first / invoke handler second.
+            const auto on_done_func = std::move(m_user_request->m_on_done_func);
+            m_user_request.reset();
+
+            assert((!on_done_func.empty())
+                   && "Empty m_on_done_func => that m_user_request should have been nullified without async-waiting, "
+                        "so we should not have been called.  Bug.");
+
+            on_done_func(sync_err_code, sync_sz);
+            FLOW_LOG_TRACE("Blob_stream_mq_receiver [" << *this << "]: Handler completed.");
+          })); // m_ev_wait_func(): on_active_ev_func arg
+        } // else // if (m_user_request->m_on_done_func)
+
+        // As discussed: either way we emit would-block now; and `return` as the "exception" code path.
 
         *sync_err_code = error::Code::S_SYNC_IO_WOULD_BLOCK;
         *sync_sz = 0;
@@ -1240,19 +1522,32 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(Error_code* sy
   }
   while (!emit);
 
-  // Passed the gauntlet.  Emit whatever happened to user.
+  // Passed the gauntlet (a non-would-block loop termination).  Emit whatever happened to user.
 
-  assert(m_pending_err_code || // Sanity-check: Either error/closed, or we got a nice non-empty message.
-         ((!m_control_state) && (target_blob.size() != 0)));
+  // Sanity-check: Either true error/closed, or we got a nice non-empty message.
+  assert((m_pending_err_code && (m_pending_err_code != error::Code::S_SYNC_IO_WOULD_BLOCK))
+         || ((!m_control_state) && (target_blob.size() != 0)));
 
   *sync_err_code = m_pending_err_code;
-  *sync_sz = m_pending_err_code ? 0 : target_blob.size();
+  *sync_sz = (m_pending_err_code ? 0 : target_blob.size());
 } // Blob_stream_mq_receiver_impl::read_msg()
 
 template<typename Persistent_mq_handle>
 size_t Blob_stream_mq_receiver_impl<Persistent_mq_handle>::receive_blob_max_size() const
 {
   return m_mq_max_msg_sz; // As promised in concept API: never changes in PEER state.
+}
+
+template<typename Persistent_mq_handle>
+stat::Blob_rcv_stats Blob_stream_mq_receiver_impl<Persistent_mq_handle>::blob_receive_stats() const
+{
+  return m_stats;
+}
+
+template<typename Persistent_mq_handle>
+void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::blob_receive_stats_reset()
+{
+  flow::util::stat::stats_reset(&m_stats, stat::Blob_rcv_stats{m_mq_max_msg_sz});
 }
 
 template<typename Persistent_mq_handle>
@@ -1265,6 +1560,19 @@ template<typename Persistent_mq_handle>
 const std::string& Blob_stream_mq_receiver_impl<Persistent_mq_handle>::nickname() const
 {
   return m_nickname;
+}
+
+template<typename Persistent_mq_handle>
+void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::log_stats(util::String_view context) const
+{
+  using flow::util::stat::print;
+
+  if (m_mq)
+  {
+    FLOW_LOG_INFO("Blob_stream_mq_receiver [" << *this << "]: In context [" << context << "]: Stats: "
+                  "rcv[" << print(m_stats) << "].");
+  }
+  // else { Ctor failed; nothing useful to log. }
 }
 
 template<typename Persistent_mq_handle>

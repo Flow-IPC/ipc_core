@@ -96,13 +96,13 @@ struct Native_handle
   Native_handle(handle_t native_handle = S_NULL_HANDLE);
 
   /**
-   * Constructs object equal to `src`, while making `src == null()`.
+   * Constructs object equal to `src`, while making `src.null() == true`.
    *
    * ### Rationale ###
    * This is move construction, but it's not about performance at all (as this is all quite cheap anyway);
    * more to allow for the pattern of making an object from another object without propagating more copies of the
-   * underlying handle.  Won't the default move ctor take care of it?  No, because it'll just copy the handle and not
-   * nullify it.
+   * underlying handle.  Wouldn't the auto-generated move ctor take care of it?  No, because it'd just copy the handle
+   * and not nullify the source.
    *
    * @param src
    *        Source object which will be made `null() == true`.
@@ -119,9 +119,9 @@ struct Native_handle
   // Methods.
 
   /**
-   * Move assignment; acts similarly to move ctor; but no-op if `*this == src`.
+   * Move assignment; acts similarly to move ctor; but no-op if `this == &src`.
    * @param src
-   *        Source object which will be made `null() == true`, unles `*this == src`.
+   *        Source object which will be made `.null() == true`, unless `this == &src`.
    * @return `*this`.
    */
   Native_handle& operator=(Native_handle&& src);
@@ -139,6 +139,24 @@ struct Native_handle
    * @return See above.
    */
   bool null() const;
+
+  /**
+   * Little utility that returns #m_native_handle to the OS.
+   * This is helpful to close, without invoking a native API (`close()` really), a value returned by
+   * `transport::asio_local_stream_socket::Peer_socket::release()` or, perhaps, received over a
+   * `transport::Native_socket_stream`.
+   *
+   * `*this` is nullified (null() shall return `true`).  No-op if already so at entry.
+   *
+   * Nothing is logged; no errors are emitted.  This is intended for no-questions-asked cleanup.
+   *
+   * @note The Native_handle destructor, such as it is, absolutely does not release() or anything similar.
+   *       Similarly move ctor/assignment does not either.  In fact nothing else in Native_handle does.
+   *       If you want to do it, you must call release() yourself.  It is a utility; and Native_handle as a whole
+   *       intentionaly features minimal intelligence; it is merely an object wrapper around a raw handle.
+   *       Movt ctor/assignment nullifying the source object is as "intelligent" as we get.
+   */
+  void release();
 }; // struct Native_handle
 
 // Free functions.
@@ -192,6 +210,20 @@ bool operator<(Native_handle val1, Native_handle val2);
  * @return See above.
  */
 size_t hash_value(Native_handle val);
+
+/**
+ * Standard swap.  (Proper pattern is `using std::swap;` and then `swap()` in any using function.)
+ *
+ * ### Rationale for existence ###
+ * `std::swap()` would perform 3 move-assigns; Native_handle move-assignment/construction involves nullifying
+ * the source Native_handle::m_native_handle; that's not necessary in a swap and wastes cycles.
+ *
+ * @param val1
+ *        Object to swap.
+ * @param val2
+ *        Object to swap.
+ */
+void swap(Native_handle& val1, Native_handle& val2);
 
 /**
  * Prints string representation of the given Native_handle to the given `ostream`.

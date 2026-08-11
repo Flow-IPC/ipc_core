@@ -32,21 +32,21 @@ namespace ipc::util
 const boost::array<Permissions, size_t(Permissions_level::S_END_SENTINEL)>
   SHARED_RESOURCE_PERMISSIONS_LVL_MAP
     = {
-        Permissions(0), // <= NO_ACCESS
-        Permissions(0b110000000), // <= USER_ACCESS.  Value a/k/a 0600.
-        Permissions(0b110110000), // <= GROUP_ACCESS.  Value a/k/a 660.
-        Permissions(0b110110110) // <= UNRESTRICTED.  Value a/k/a 666.
+        Permissions{0}, // <= NO_ACCESS
+        Permissions{0b110000000}, // <= USER_ACCESS.  Value a/k/a 0600.
+        Permissions{0b110110000}, // <= GROUP_ACCESS.  Value a/k/a 660.
+        Permissions{0b110110110} // <= UNRESTRICTED.  Value a/k/a 666.
       };
 const boost::array<Permissions, size_t(Permissions_level::S_END_SENTINEL)>
   PRODUCER_CONSUMER_RESOURCE_PERMISSIONS_LVL_MAP
     = {
-        Permissions(0), // <= NO_ACCESS
+        Permissions{0}, // <= NO_ACCESS
         /* Note: creator must be able to write, so no choice but to allow any app running-as that user to write.
          * Typically some trust is required that the consumer apps won't use this ability to, in fact, write. */
-        Permissions(0b110000000), // <= USER_ACCESS.  Value a/k/a 0600.
+        Permissions{0b110000000}, // <= USER_ACCESS.  Value a/k/a 0600.
         // Other users can read.
-        Permissions(0b110100000), // <= GROUP_ACCESS.  Value a/k/a 0640.
-        Permissions(0b110100100) // <= UNRESTRICTED.  Value a/k/a 0644.
+        Permissions{0b110100000}, // <= GROUP_ACCESS.  Value a/k/a 0640.
+        Permissions{0b110100100} // <= UNRESTRICTED.  Value a/k/a 0644.
       };
 
 /**
@@ -79,7 +79,7 @@ void pipe_produce(flow::log::Logger* logger_ptr, Pipe_writer* pipe)
   const uint8_t PAYLOAD = '\0';
 
   Error_code sys_err_code;
-  const bool ok = pipe->write_some(Blob_const(&PAYLOAD, 1), sys_err_code) == 1;
+  const bool ok = pipe->write_some(Blob_const{&PAYLOAD, 1}, sys_err_code) == 1;
 
   if (sys_err_code || (!ok))
   {
@@ -102,7 +102,7 @@ void pipe_consume(flow::log::Logger* logger_ptr, Pipe_reader* pipe)
   uint8_t payload;
 
   Error_code sys_err_code;
-  const bool ok = pipe->read_some(Blob_mutable(&payload, 1), sys_err_code) == 1;
+  const bool ok = pipe->read_some(Blob_mutable{&payload, 1}, sys_err_code) == 1;
 
   if (sys_err_code || (!ok))
   {
@@ -142,13 +142,13 @@ void remove_persistent_shm_pool(flow::log::Logger* logger_ptr, const Shared_name
   }
   /* smo::remove() is strangely gimped -- though I believe so are the other kernel-persistent remove()s
    * throughout bipc -- it does not throw and merely returns true or false and no code.  Odd, since there can
-   * be at least a couple of reasons one would fail to delete....  However, in POSIX, the Boost 1.78 source code
-   * shows that smo::remove() calls shared_memory_object::remove() which calls some internal
-   * ipcdetail::delete_file() which calls... drumroll... freakin' ::unlink(const char*).  Hence we haxor: */
+   * be at least a couple of reasons one would fail to delete....  However, on POSIX (non-filesystem-based path),
+   * the Boost 1.84 source code shows that smo::remove() calls ipcdetail::add_leading_slash() on the name
+   * and then ::shm_unlink() on the result.  shm_unlink() sets errno on failure.  Hence we haxor: */
 #ifndef FLOW_OS_LINUX // @todo Should maybe check Boost version or something too?
-  static_assert(false, "Code in remove_persistent_shm_pool() relies on Boost invoking Linux unlink() with errno.");
+  static_assert(false, "Code in remove_persistent_shm_pool() relies on Boost invoking Linux shm_unlink() with errno.");
 #endif
-  const auto& sys_err_code = *err_code = Error_code(errno, system_category());
+  const auto& sys_err_code = *err_code = {errno, system_category()};
   FLOW_ERROR_SYS_ERROR_LOG_WARNING();
 } // remove_persistent_shm_pool()
 

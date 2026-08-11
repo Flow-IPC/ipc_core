@@ -20,7 +20,7 @@
 
 #include "ipc/transport/sync_io/blob_stream_mq_snd.hpp"
 #include "ipc/transport/detail/blob_stream_mq_impl.hpp"
-#include "ipc/transport/sync_io/detail/async_adapter_snd.hpp"
+#include "ipc/transport/sync_io/async_adapter_snd.hpp"
 #include "ipc/transport/error.hpp"
 #include "ipc/util/sync_io/sync_io_fwd.hpp"
 #include <flow/async/single_thread_task_loop.hpp>
@@ -150,6 +150,15 @@ public:
   bool auto_ping(util::Fine_duration period);
 
   /**
+   * See Blob_stream_mq_sender counterpart.
+   * @return See Blob_stream_mq_sender counterpart.
+   */
+  stat::Blob_snd_stats blob_send_stats() const;
+
+  /// See Blob_stream_mq_sender counterpart.
+  void blob_send_stats_reset();
+
+  /**
    * See Blob_stream_mq_sender counterpart, but assuming PEER state.
    * @return See Blob_stream_mq_sender counterpart.
    */
@@ -253,8 +262,8 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
 #ifndef NDEBUG
   bool ok =
 #endif
-  m_sync_io.replace_event_wait_handles([this]() -> Asio_waitable_native_handle
-                                         { return Asio_waitable_native_handle(*(m_worker.task_engine())); });
+  m_sync_io.replace_event_wait_handles([this]() -> auto
+                                         { return Asio_waitable_native_handle{*(m_worker.task_engine())}; });
   assert(ok && "Did you break contract by passing-in a non-fresh sync_io core object to ctor?");
 
   /* Have to do this after .replace_event_wait_handles() by the adapter's ctor's contract.
@@ -294,7 +303,7 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::~Blob_stream_mq_sender_impl()
                 "from some other thread.  In this user thread we will await those handlers' completion and then "
                 "return.");
 
-  Single_thread_task_loop one_thread(get_logger(), ostream_op_string("MQSdDeinit-", nickname()));
+  Single_thread_task_loop one_thread{get_logger(), ostream_op_string("MQSdDeinit-", nickname())};
   one_thread.start([&]()
   {
     reset_thread_pinning(get_logger()); // Don't inherit any strange core-affinity.  Float free.
@@ -327,8 +336,7 @@ template<typename Persistent_mq_handle>
 bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::end_sending()
 {
   using flow::async::Task_asio_err;
-
-  return async_end_sending(Task_asio_err());
+  return async_end_sending(Task_asio_err{});
 }
 
 template<typename Persistent_mq_handle>
@@ -345,9 +353,21 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::auto_ping(util::Fine_dura
 }
 
 template<typename Persistent_mq_handle>
+stat::Blob_snd_stats Blob_stream_mq_sender_impl<Persistent_mq_handle>::blob_send_stats() const
+{
+  return m_sync_io_adapter->blob_send_stats();
+}
+
+template<typename Persistent_mq_handle>
+void Blob_stream_mq_sender_impl<Persistent_mq_handle>::blob_send_stats_reset()
+{
+  m_sync_io_adapter->blob_send_stats_reset();
+}
+
+template<typename Persistent_mq_handle>
 size_t Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob_max_size() const
 {
-  /* Never changes (always in PEER state); no need to lock.  Contrast with transport::Native_socket_stream::Impl
+  /* Never changes (always in PEER state); no need to lock.  Contrast with transport::Native_socket_stream_impl
    * which has to rationalize somewhat harder... but also locks nothing here. */
   return m_sync_io.send_blob_max_size();
 }

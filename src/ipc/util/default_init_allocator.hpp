@@ -82,7 +82,7 @@ namespace ipc::util
  * @tparam Allocator
  *         The `Allocator` being adapted.  Usually one uses the heap-allocating `std::allocator` which is the default
  *         arg for STL-compliant containers usually.  However it may well be something more advanced
- *         such as SHM-allocating ipc::shm::stl::Stateless_allocator or alias ipc::shm::classic::Pool_arena_allocator.
+ *         such as SHM-allocating ipc::shm::stl::Stateless_allocator or alias ipc::shm::classic::Pool_arena::Allocator.
  */
 template <typename T, typename Allocator>
 class Default_init_allocator : public Allocator
