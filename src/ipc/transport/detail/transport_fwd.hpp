@@ -89,7 +89,7 @@ namespace ipc::transport::sync_io
 
 // Find doc headers near the bodies of these compound types.
 
-struct Native_socket_stream_impl;
+class Native_socket_stream_impl;
 template<typename Core_t>
 class Async_adapter_receiver;
 template<typename Core_t>
