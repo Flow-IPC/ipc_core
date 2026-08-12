@@ -395,6 +395,12 @@ void test_send_receive_stats()
    * send(fd), receive(fd).  We however -- as noted in the header comment of the present function -- want
    * Flow-IPC to operate an entire event loop + thread for it.  So: X.async_io_obj() creates and returns
    * an object representing this entire system, and it feeds move(X) into the returned object. */
+  /* Declared before the channels below on purpose: their worker-thread handlers post() onto this loop, so it
+   * must outlive them.  (A post() onto a stopped loop belays harmlessly; onto a destroyed one = race on freed
+   * innards.) */
+  Single_thread_task_loop loop{logger, "U1"};
+  loop.start();
+
   auto cli_channel = sync_io_pair.m_cli_channels.front().async_io_obj();
   auto srv_channel = sync_io_pair.m_srv_channels.front().async_io_obj();
 
@@ -419,9 +425,6 @@ void test_send_receive_stats()
   }();
 
   using Rcv_t = std::remove_reference_t<decltype(rcv)>;
-
-  Single_thread_task_loop loop{logger, "U1"};
-  loop.start();
 
   boost::promise<void> test_done;
 
