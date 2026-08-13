@@ -156,7 +156,7 @@ bool Native_socket_stream_impl::async_receive_batch_impl(Batch* batch,
    * that would be later (if ever) and only if we hit would-block now.) */
   if (m_rcv_pending_err_code) // Note we would've returned already had it been already truthy at the start.
   {
-    log_stats("async_receive_batch_impl(): while sync-processing rcv-pipe hosed");
+    rcv_log_stats("async_receive_batch_impl(): while sync-processing rcv-pipe hosed");
   }
 
   return true;
@@ -385,7 +385,8 @@ void Native_socket_stream_impl::rcv_on_ev_peer_socket_pkt_stream_batch_readable_
    * Note we put this ahead of any handler-call to avoid reentrant hellishness. */
   if (m_rcv_pending_err_code) // Note we would've returned already had it been already truthy at the start.
   {
-    log_stats("rcv_on_ev_peer_socket_pkt_stream_batch_readable_or_error(): while processing ev-ready rcv-pipe hosed");
+    rcv_log_stats("rcv_on_ev_peer_socket_pkt_stream_batch_readable_or_error(): "
+                  "while processing ev-ready rcv-pipe hosed");
   }
 
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: Async-op (batch) result for in-batch [" << *batch << "] "
