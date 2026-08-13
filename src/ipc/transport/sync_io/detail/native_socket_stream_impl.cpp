@@ -520,9 +520,9 @@ void Native_socket_stream_impl::save_peer_process_creds()
   {
     FLOW_LOG_FATAL("Socket stream [" << *this << "]: Get-sock-option call for Opt_peer_process_credentials failed.  "
                    "For an ever-connected endpoint this should never happen.  If this endpoint originated inside "
-                   "Flow-IPC, there is a bug; please investigate call stack/etc.  If it originated from somewhat-exotic "
-                   "user code -- e.g., manual socketpair() -- then probably it is user error passing in invalid FD "
-                   "or some-such.  In that case perhaps @todo nicer error reporting.");
+                   "Flow-IPC, there is a bug; please investigate call stack/etc.  If it originated from "
+                   "somewhat-exotic user code -- e.g., manual socketpair() -- then probably it is user error "
+                   "passing in invalid FD or some-such.  In that case perhaps @todo nicer error reporting.");
     FLOW_ERROR_SYS_ERROR_LOG_FATAL();
     assert(false
              && "Get-sock-option call for Opt_peer_process_credentials failed.  "

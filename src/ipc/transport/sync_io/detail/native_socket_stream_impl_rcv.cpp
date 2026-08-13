@@ -114,7 +114,7 @@ bool Native_socket_stream_impl::async_receive_impl(Native_handle* target_hndl_or
     // See log_stats() doc header for basic background behind the logic here.
     if (m_rcv_pending_err_code) // Note we wouldn't be in this branch had it been already truthy at the start.
     {
-      log_stats("async_receive_impl(): while sync-processing rcv-pipe hosed");
+      rcv_log_stats("async_receive_impl(): while sync-processing rcv-pipe hosed");
     }
   }
 
@@ -301,7 +301,7 @@ void Native_socket_stream_impl::rcv_on_ev_idle_timer_fired()
 
   /* See log_stats() doc header for basic background behind the logic here.
    * Note we put this ahead of any handler-call to avoid reentrant hellishness. */
-  log_stats("rcv_on_ev_idle_timer_fired(): idle timeout fired, rcv-pipe hosed");
+  rcv_log_stats("rcv_on_ev_idle_timer_fired(): idle timeout fired, rcv-pipe hosed");
 
   if (m_rcv_user_request)
   {
@@ -722,7 +722,7 @@ void Native_socket_stream_impl::rcv_on_ev_peer_socket_pkt_stream_readable_or_err
    * Note we put this ahead of any handler-call to avoid reentrant hellishness. */
   if (m_rcv_pending_err_code) // Note we would've returned already had it been already truthy at the start.
   {
-    log_stats("rcv_on_ev_peer_socket_pkt_stream_readable_or_error(): while processing ev-ready rcv-pipe hosed");
+    rcv_log_stats("rcv_on_ev_peer_socket_pkt_stream_readable_or_error(): while processing ev-ready rcv-pipe hosed");
   }
 
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: Async-op result ready after successful async-wait.  "
@@ -1150,7 +1150,7 @@ void Native_socket_stream_impl::rcv_on_ev_peer_socket_byte_stream_readable_or_er
    * Note we put this ahead of any handler-call to avoid reentrant hellishness. */
   if (m_rcv_pending_err_code) // Note we would've returned already had it been already truthy at the start.
   {
-    log_stats("rcv_on_ev_peer_socket_byte_stream_readable_or_error(): while processing ev-ready rcv-pipe hosed");
+    rcv_log_stats("rcv_on_ev_peer_socket_byte_stream_readable_or_error(): while processing ev-ready rcv-pipe hosed");
   }
 
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: Async-op result ready after successful async-wait.  "
@@ -1737,6 +1737,18 @@ size_t Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_byte_stream
 
   return n_rcvd_or_zero;
 } // Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_byte_stream()
+
+void Native_socket_stream_impl::rcv_log_stats(util::String_view context) const
+{
+  using flow::util::stat::print;
+
+  if (m_state == State::S_PEER)
+  {
+    FLOW_LOG_INFO("Socket stream [" << *this << "]: In context [" << context << "]: Stats: "
+                  "rcv[" << print(m_rcv_stats) << "].");
+  }
+  // else { It'd all be zeroes anyway. }
+}
 
 size_t Native_socket_stream_impl::receive_meta_blob_max_size() const
 {

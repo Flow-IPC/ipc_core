@@ -1210,6 +1210,14 @@ private:
                                       const util::Blob_const& blob1, const util::Blob_const& blob2_or_none,
                                       Error_code* err_code);
 
+  /**
+   * INFO-logs current snd-half stats: as log_stats() but callable from send-op context (see "Which halves?" in doc).
+   *
+   * @param context
+   *        See log_stats().
+   */
+  void snd_log_stats(util::String_view context) const;
+
   // Receive-ops.
 
   /**
@@ -1706,6 +1714,14 @@ private:
   template<typename Batch>
   void rcv_on_ev_peer_socket_pkt_stream_batch_readable_or_error(Batch* batch);
 
+  /**
+   * INFO-logs current rcv-half stats: as log_stats() but callable from receive-op context (see "Which halves?" in doc).
+   *
+   * @param context
+   *        See log_stats().
+   */
+  void rcv_log_stats(util::String_view context) const;
+
   // Utilities.
 
   /**
@@ -1779,9 +1795,9 @@ private:
   /**
    * INFO-logs current stats.  See below regarding when it's best to invoke this.
    *
-   * ### Rationale ###
-   * It just INFO-logs the stats (if in PEER state; otherwise not much to log); but how/why should this be called
-   * as of this writing?  Answer: In dtor is an obvious place, near the already-present INFO-log there.  However
+   * ### Rationale (applies to snd_log_stats() and rcv_log_stats() too) ###
+   * `*log_stats()` just INFO-logs the stats (if in PEER state; otherwise not much to log); but how/why should they be
+   * called as of this writing?  Answer: In dtor is an obvious place, near the already-present INFO-log there.  However
    * a `*this` often sits around for a while, even though really it's for practical purposes useless, in one or
    * both directions, because (although forever in PEER state) it is hosed (#m_snd_pending_err_code or
    * #m_rcv_pending_err_code has become truthy).  So the other type of situation we'd want to call this is when
@@ -1806,12 +1822,18 @@ private:
    * (very tactically speaking) as to how we touch those data members, so (yes, it is subjective) the resulting
    * logic would be more spaghetti-like.
    *
-   * ### Subtlety ###
+   * ### Subtlety 1: Versus user handler ###
    * In cases where the impl invokes a user handler before returning (e.g., `sync_io`-pattern event handlers
-   * calling on_done_func()), do the truthy-`m_*_pending_err_code` check + possible log_stats() call *before*
+   * calling on_done_func()), do the truthy-`m_*_pending_err_code` check + possible `*log_stats()` call *before*
    * (not after) the handler call; so re-entrant impl calls from within the handler won't double-log.  Plus
    * that's just a mess.  (In general it is best, for reasons like this subtlety, to leave handler-calling
    * to last.)
+   *
+   * ### Subtlety 2: Which halves? ###
+   * By public contract (see "Thread safety" in sync_io::Native_socket_stream class doc header) a send-op and a
+   * receive-op may execute concurrently; and each stats-half is touched only by its own ops.  Hence this
+   * both-halves dump is only for fully-exclusive contexts (dtor); from a send-op or receive-op context use
+   * snd_log_stats() or rcv_log_stats() respectively.
    *
    * @param context
    *        For logging: the algorithmic context (function name or whatever).

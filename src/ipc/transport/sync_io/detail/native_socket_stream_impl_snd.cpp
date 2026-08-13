@@ -83,7 +83,7 @@ bool Native_socket_stream_impl::start_send_native_handle_ops(util::sync_io::Even
   // See log_stats() doc header for basic background behind the logic here.
   if (m_snd_pending_err_code) // Note we've asserted it was not already truthy at the start.
   {
-    log_stats("start_send_native_handle_ops(): while sync-processing: proto-neg-send => snd-pipe hosed");
+    snd_log_stats("start_send_native_handle_ops(): while sync-processing: proto-neg-send => snd-pipe hosed");
   }
 
   return true;
@@ -303,7 +303,7 @@ bool Native_socket_stream_impl::send_native_handle(Native_handle hndl_or_null, c
   // See log_stats() doc header for basic background behind the logic here.
   if ((!was_hosed_already) && m_snd_pending_err_code)
   {
-    log_stats("send_native_handle(): while sync-processing snd-pipe hosed");
+    snd_log_stats("send_native_handle(): while sync-processing snd-pipe hosed");
   }
 
   return true;
@@ -462,7 +462,7 @@ bool Native_socket_stream_impl::async_end_sending_impl(Error_code* sync_err_code
   // See log_stats() doc header for basic background behind the logic here.
   if (became_hosed)
   {
-    log_stats("async_end_sending_impl(): while sync-processing snd-pipe hosed");
+    snd_log_stats("async_end_sending_impl(): while sync-processing snd-pipe hosed");
   }
 
   return true;
@@ -547,7 +547,7 @@ bool Native_socket_stream_impl::auto_ping(util::Fine_duration period)
 
     /* See log_stats() doc header for basic background behind the logic here.
      * Note we would've returned already had m_snd_pending_err_code been already truthy at the start. */
-    log_stats("auto_ping(): while sync-processing: auto-ping-send => snd-pipe hosed");
+    snd_log_stats("auto_ping(): while sync-processing: auto-ping-send => snd-pipe hosed");
 
     return true;
   }
@@ -640,7 +640,7 @@ void Native_socket_stream_impl::snd_on_ev_auto_ping_now_timer_fired()
 
     /* See log_stats() doc header for basic background behind the logic here.
      * Note we would've returned already had m_snd_pending_err_code been already truthy at the start. */
-    log_stats("snd_on_ev_auto_ping_now_timer_fired(): while attempting to send auto-ping snd-pipe hosed");
+    snd_log_stats("snd_on_ev_auto_ping_now_timer_fired(): while attempting to send auto-ping snd-pipe hosed");
     return;
   }
   // else
@@ -1155,7 +1155,7 @@ void Native_socket_stream_impl::snd_on_ev_peer_socket_writable_or_error()
    * Note we put this ahead of any handler-call to avoid reentrant hellishness. */
   if (m_snd_pending_err_code) // Note we've asserted it was not already truthy at the start.
   {
-    log_stats("snd_on_ev_peer_socket_writable_or_error(): while processing ev-ready snd-pipe hosed");
+    snd_log_stats("snd_on_ev_peer_socket_writable_or_error(): while processing ev-ready snd-pipe hosed");
   }
 
   if (invoke_on_done)
@@ -1168,6 +1168,18 @@ void Native_socket_stream_impl::snd_on_ev_peer_socket_writable_or_error()
     FLOW_LOG_TRACE("Handler completed.");
   }
 } // Native_socket_stream_impl::snd_on_ev_peer_socket_writable_or_error()
+
+void Native_socket_stream_impl::snd_log_stats(util::String_view context) const
+{
+  using flow::util::stat::print;
+
+  if (m_state == State::S_PEER)
+  {
+    FLOW_LOG_INFO("Socket stream [" << *this << "]: In context [" << context << "]: Stats: "
+                  "snd[" << print(m_snd_stats) << "].");
+  }
+  // else { It'd all be zeroes anyway. }
+}
 
 size_t Native_socket_stream_impl::send_meta_blob_max_size() const
 {
