@@ -194,7 +194,7 @@ public:
 
   /**
    * Type sufficient to store a protocol version; positive values identify newer versions of a protocol;
-   * while non-positive values S_VER_UNKNOWN and S_VER_UNSUPPORTED are special values.
+   * while non-positive values `S_VER_UNKNOWN` and `S_VER_UNSUPPORTED` are special values.
    */
   using proto_ver_t = int16_t;
 
@@ -308,7 +308,7 @@ public:
    *        Value that the opposing Protocol_negotiator (or equivalent) sent to us over pathway:
    *        their `local_max_proto_ver`.  Any value is allowed (we will check that it's positive and
    *        report negotiation failure if not).  Informal advice: if you were unable to parse
-   *        it from your in-message, you should pass S_VER_UNKNOWN.
+   *        it from your in-message, you should pass `S_VER_UNKNOWN`.
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
    *        error::Code::S_PROTOCOL_NEGOTIATION_OPPOSING_VER_TOO_OLD (incompatible protocol version -- we're more

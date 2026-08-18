@@ -346,7 +346,7 @@ public:
    *
    *   - Socket-hosing error or `INVALID_ARGUMENT`: emitted via standard flow error semantics.
    *     - Subtle exception: error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE and
-   *       error::Code::error::Code::S_LOW_LVL_UNEXPECTED_STREAM_PAYLOAD_BEYOND_HNDL are not socket-hosing.  Further I/O
+   *       error::Code::S_LOW_LVL_UNEXPECTED_STREAM_PAYLOAD_BEYOND_HNDL are not socket-hosing.  Further I/O
    *       can be attempted.  However:
    *       - In-direction: Informally, it is ill-advised to continue work in this direction.  In-messages potentially
    *         following the overflowing one, in this batch, would have been dropped.  In most protocols it would be
@@ -422,7 +422,7 @@ public:
    *        messages received (as reflected via n_used()) were followed by graceful-close in the in-message stream;
    *        to `false` if the 1+ messages received were not followed by graceful-close.  Untouched otherwise.
    * @param err_code
-   *        See flow::Error_code docs for error reporting semantics.  Generated codes:
+   *        See `flow::Error_code` docs for error reporting semantics.  Generated codes:
    *        error::Code::S_INVALID_ARGUMENT (`!this->initialized()` at entry);
    *        `boost::asio::error::would_block` (socket not readable: not even 1 message or graceful-close pending);
    *        those emitted by nb_read_some_with_native_handle()

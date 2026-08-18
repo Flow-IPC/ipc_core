@@ -359,7 +359,7 @@ private:
    *        means user in-messages were received and thus => not idle.)  (Hence `false` means that given it's a
    *        would-block, also no traffic at all internally was received.)
    * @param err_code
-   *        See flow::Error_code docs for error reporting semantics.  Generated codes:
+   *        See `flow::Error_code` docs for error reporting semantics.  Generated codes:
    *        error::Code::S_INVALID_ARGUMENT (`!this->initialized()` at entry);
    *        error::Code::S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER (illegal in-dgram: other side misbehaved);
    *        error::Code::S_BLOB_RECEIVER_GOT_NON_BLOB (`no_hndls == true`, but other side sent a handle: misbehaved);
@@ -1384,7 +1384,8 @@ void Native_socket_stream_msg_batch_in<Msg_resource_t>::to_ostream(std::ostream*
 }
 
 template<typename Msg_resource_t>
-const flow::util::stat::Histogram_counter& Native_socket_stream_msg_batch_in<Msg_resource_t>::histo_raw_read_n_msgs() const
+const flow::util::stat::Histogram_counter&
+  Native_socket_stream_msg_batch_in<Msg_resource_t>::histo_raw_read_n_msgs() const
 {
   return m_histo_raw_read_n_msgs;
 }

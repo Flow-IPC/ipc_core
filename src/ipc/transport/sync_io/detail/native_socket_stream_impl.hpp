@@ -2003,7 +2003,7 @@ private:
    * section, so deadlock chance is nil.  However see the following to-do for an alternative approach.
    *
    * @todo `Peer_socket m_peer_socket` synchronous-read ops (`read_some()`) are actually
-   * documented in boost::asio to be thread-safe against concurrently invoked synchronous-write ops
+   * documented in `boost::asio` to be thread-safe against concurrently invoked synchronous-write ops
    * (`write_some()`), as are OS calls `"::recvmsg()"`, `"::sendmsg()"`; therefore for possible perf bump
    * consider never nullifying Native_socket_stream_impl::m_peer_socket; eliminating `m_peer_socket_mutex`; and
    * letting each direction's logic discover any socket-error independently.  (But, at the moment,
