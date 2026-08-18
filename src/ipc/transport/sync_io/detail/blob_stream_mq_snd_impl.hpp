@@ -1483,7 +1483,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(c
    * Now we have no choice.  As discussed in the class doc header, probabilistically speaking we should rarely (if
    * ever) get here (and do this annoying alloc, and copy, and later dealloc) under normal operation of both sides. */
 
-  auto& new_blob = new_low_lvl_payload->m_blob = Blob(get_logger());
+  auto& new_blob = new_low_lvl_payload->m_blob = Blob{get_logger()};
   if (orig_blob.size() != 0)
   {
     new_blob.assign_copy(orig_blob);

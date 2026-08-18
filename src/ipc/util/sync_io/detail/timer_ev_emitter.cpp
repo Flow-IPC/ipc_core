@@ -45,7 +45,7 @@ flow::util::Timer Timer_event_emitter::create_timer()
 {
   using flow::util::Timer;
 
-  return Timer(*(m_worker.task_engine()));
+  return Timer{*(m_worker.task_engine())};
 }
 
 Timer_event_emitter::Timer_fired_read_end* Timer_event_emitter::create_timer_signal_pipe()

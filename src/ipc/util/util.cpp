@@ -81,7 +81,7 @@ void set_resource_permissions(flow::log::Logger* logger_ptr, const fs::path& pat
     return;
   }
   // else
-  Native_handle handle(native_handle);
+  Native_handle handle{native_handle};
 
   // For nicer messaging add some more logging on error.  A little code duplication, but it's OK.
   set_resource_permissions(logger_ptr, handle, perms, err_code);

@@ -645,7 +645,7 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
   [[maybe_unused]] Fine_time_pt timeout_since_epoch;
   if constexpr(WAIT_TYPE == Wait_type::S_TIMED_WAIT)
   {
-    timeout_since_epoch = Fine_time_pt(time_since_posix_epoch() + timeout_from_now);
+    timeout_since_epoch = Fine_time_pt{time_since_posix_epoch() + timeout_from_now};
   }
 
   /* Most likely the below code will elicit a "WTF."  The background is that bipc::message_queue lacks anything like

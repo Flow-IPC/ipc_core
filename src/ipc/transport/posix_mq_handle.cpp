@@ -667,7 +667,7 @@ bool Posix_mq_handle::set_non_blocking(bool nb, Error_code* err_code)
 
   mq_attr attr;
   attr.mq_flags = nb ? O_NONBLOCK : 0;
-  return handle_mq_api_result(mq_setattr(m_mq.m_native_handle, &attr, 0),
+  return handle_mq_api_result(mq_setattr(m_mq.m_native_handle, &attr, nullptr),
                               err_code, "Posix_mq_handle::set_non_blocking(): mq_setattr()");
 } // Posix_mq_handle::set_non_blocking()
 

@@ -765,7 +765,7 @@ Shared_name operator+(const Shared_name& src1, const Source& raw_src2)
 {
   // Existence/impl rationale: This is faster than if they had to: `src1 + Shared_name::ct(raw_src2)`.
 
-  return Shared_name(src1) += raw_src2;
+  return Shared_name{src1} += raw_src2;
 }
 
 template<typename Source>
@@ -781,7 +781,7 @@ Shared_name operator/(const Shared_name& src1, const Source& raw_src2)
 {
   // Existence/impl rationale: This is faster than if they had to: `src1 / Shared_name::ct(raw_src2)`.
 
-  return Shared_name(src1) /= raw_src2;
+  return Shared_name{src1} /= raw_src2;
 }
 
 template<typename Source>

@@ -134,7 +134,7 @@ Shared_name operator/(const char* raw_src1, const Shared_name& src2)
 
 Shared_name operator/(const Shared_name& src1, const Shared_name& src2)
 {
-  return Shared_name(src1) /= src2;
+  return Shared_name{src1} /= src2;
 }
 
 const std::string& Shared_name::str() const

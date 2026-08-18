@@ -144,7 +144,7 @@ group_id_t Process_credentials::own_group_id() // Static.
 
 Process_credentials Process_credentials::own_process_credentials() // Static.
 {
-  return Process_credentials(own_process_id(), own_user_id(), own_group_id());
+  return Process_credentials{own_process_id(), own_user_id(), own_group_id()};
 }
 
 bool operator==(const Process_credentials& val1, const Process_credentials& val2)
