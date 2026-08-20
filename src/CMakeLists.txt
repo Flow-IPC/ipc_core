@@ -38,7 +38,7 @@ endif()
 # Mirror Flow's find_package() call from our root CMakeLists.txt.  As directed omit "REQUIRED."
 set(DEP_LIBS_PKG_ARG_LISTS "Flow 1.0 CONFIG")
 
-# (See above if wondering why we're not auto-searching for these.  There's a good reason.)
+# (See comment in FlowLikeLib.cmake if wondering why we're not auto-searching for these.  There's a good reason.)
 # Ideally keep this in `find -s` order.
 set(SRCS
     ipc/common.cpp

@@ -919,6 +919,7 @@ size_t Native_socket_stream_impl::snd_nb_write_low_lvl_payload(Native_handle hnd
             array<Blob_const, 2> buf_seq = { blob1, blob2_or_none };
             n_sent_or_zero = m_peer_socket->send(buf_seq, 0, *err_code);
           }
+          // Note: Does not log, hence does not WARN on error.  See below; we'll make up for it as needed.
         }
         // else if (*err_code) { *err_code is truthy; n_sent_or_zero == 0; cool. }
       } // if (hndl_or_null.null())
@@ -955,6 +956,21 @@ size_t Native_socket_stream_impl::snd_nb_write_low_lvl_payload(Native_handle hnd
       }
       else if (*err_code)
       {
+        if (hndl_or_null.null())
+        {
+          /* The no-handle path above (direct boost.asio ->send()) does not itself log on error, unlike
+           * nb_write_some_with_native_handle() (the with-handle path) which WARNs internally with details on any
+           * true-blue error.  Do so now.  Sanity checks: 1, Yes, non-would-block error+details are of great
+           * interest.  2, Is there double-logging (at WARNING level) at higher layers?  At least in some cases, no
+           * (so WARNing here becomes essential for those cases); and even if/when something would double-log, it's
+           * hardly a crime.  3, This is a once-per-connection event: not spam. */
+          FLOW_LOG_WARNING("Socket stream [" << *this << "]: Tried to write payload "
+                           "(sized [" << blob1.size() << "] + [" << blob2_or_none.size() << "] bytes, sans "
+                           "native handle) via plain boost.asio API; but an unrecoverable error "
+                           "[" << *err_code << "] [" << err_code->message() << "] occurred.  Nothing sent.");
+        }
+        // else { nb_write_some_with_native_handle() has already WARNed, with details. }
+
         /* True-blue system error.  Kill off *m_peer_socket (connection hosed).  We could simply nullify it, which would
          * give it back to the system (it's a resource), but see m_peer_socket_hosed doc header for explanation as
          * to why we cannot, and why instead we transfer it to "death row" until dtor executes, at which
