@@ -26,17 +26,17 @@
 #include <flow/log/log.hpp>
 #include <flow/common.hpp>
 #include <boost/array.hpp>
+#include <boost/io/ios_state.hpp>
 #include <type_traits>
 #include <algorithm>
+#include <stdexcept>
 #include <sys/types.h>
 #include <sys/socket.h>
 
 #ifndef FLOW_OS_LINUX // Sanity-re-check.  We'll be sending sockets through sockets, etc., which requires Linux.
-static_assert(false, "Should not have gotten to this line; should have required Linux; this .cpp file assumes it.  "
+static_assert(false, "Should not have gotten to this line; should have required Linux; this header assumes it.  "
                        "Might work in other POSIX OS (e.g., macOS) but must be checked/tested.");
 #endif
-#include <sys/types.h>
-#include <sys/socket.h>
 
 // See asio_local_stream_socket_fwd.hpp for doc header (intro) to this namespace.
 namespace ipc::transport::asio_local_stream_socket
@@ -55,7 +55,7 @@ static_assert(false, "asio_local_stream_socket::Msg_batch_in is based on Linux-s
  * There is a heavy focus on performance, including across multiple batched receives (nb_read()) on the same
  * `*this` without linear-time prep work ahead of each such receive op.
  *
- * @see Native_handle_receiver concept doc header for an explantion of receive-batching (including what
+ * @see Native_handle_receiver concept doc header for an explanation of receive-batching (including what
  *      native batching is; how `Msg_resource_t` template-param relates to things); and how the general design
  *      enables high perf.
  *
@@ -141,6 +141,7 @@ static_assert(false, "asio_local_stream_socket::Msg_batch_in is based on Linux-s
  *     identical to all others.
  *
  * @internal
+ *
  * ### Impl notes ###
  * Generally the details here are informed by the somewhat higher-level needs of Native_socket_stream and
  * Native_socket_stream_msg_batch_in which implement the protocol used by the former.  As such that protocol is
@@ -190,6 +191,7 @@ static_assert(false, "asio_local_stream_socket::Msg_batch_in is based on Linux-s
  *       area(s).  They do this by calling `prepare_target_payload(..., idx)`.
  *     - Any slots that were untouched by nb_read() or reuse_result_payloads() simply carry-over to the next nb_read().
  *       They need not be touched at all.
+ *
  * @endinternal
  *
  * @tparam Msg_resource_t
@@ -323,15 +325,15 @@ public:
    * at most `n_payloads` messages.  If no error but no in-messages are pending, it is would-block
    * (see specific code below).  If no error, and messages were pending, the number is not explicitly returned
    * but rather reflected in n_used() increasing by that # (at least 1, at most `n_payloads`).  If error,
-   * and no messages were pending, emits that error and leaves n_unused() unchanged.
+   * and no messages were pending, emits that error and leaves n_used() unchanged.
    *
-   * It is *not* a possible outcome that messages were emitted (n_unused() changed) *and* an error is emitted.
+   * It is *not* a possible outcome that messages were emitted (n_used() changed) *and* an error is emitted.
    * See section "Deferred errors" just below however.
    *
    * @note Be aware of the *implied would-block* condition.  See full() doc header.  Spoiler alert:
-   *       if we yielded data/no error, then it wasn't would-block... but if `full() == true` post-op, then
+   *       if we yielded data/no error, then it wasn't would-block... but if `full() == false` post-op, then
    *       the in-pipe is nevertheless in would-block state.  It would be wasteful to try another nb_read().
-   *       Conversely, though, if `!full()` then you can and should nb_read() again (assuming the goal is to
+   *       Conversely, though, if `full()` then you can and should nb_read() again (assuming the goal is to
    *       drain the in-pipe such as in edge-triggered loops).
    *
    * ### Special graceful-close (a/k/a EOF) semantics ###
@@ -427,7 +429,7 @@ public:
    *        `boost::asio::error::would_block` (socket not readable: not even 1 message or graceful-close pending);
    *        those emitted by nb_read_some_with_native_handle()
    *        (including error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE)
-   *        (except would-block which has dif meaning as noted; and
+   *        (except would-block which has different meaning as noted; and
    *        `boost::asio::error::eof` (graceful-close) which is communicated via
    *        `graceful_close` arg as noted).
    * @param message_flags
@@ -506,7 +508,7 @@ private:
      * actually is, the storage and access to the resulting `iovec`s is as performant as possible.  In particular
      * there are specializations for a single `Blob_mutable`; STL and Boost `array<2>` thereof; and (worst-case)
      * variable-length things such as `vector<Blob_mutable>`.  E.g., in Flow-IPC a major use-case is
-     * Native_socket_stream_msg_batch_in which in fact uses `Mutable_buffer_sequence = array<Blob_mutable, 2>.
+     * Native_socket_stream_msg_batch_in which in fact uses `Mutable_buffer_sequence = array<Blob_mutable, 2>`.
      *
      * ### Defense of using an internal (`detail`) boost.asio class ###
      * Well, it's useful.  We could roll "our own" by copy/pasting it instead, but in practice that's just
@@ -738,6 +740,13 @@ public:
   void resize(const Protocol& proto, size_t new_size_but_really_must_equal_current) const;
 }; // class Opt_peer_process_credentials
 
+/* data() and size() feed a util::Process_credentials to getsockopt() as if it were a `::ucred`; so the former
+ * must remain nothing but the latter, layout-wise. */
+static_assert(std::is_standard_layout_v<util::Process_credentials>
+                && (sizeof(util::Process_credentials) == sizeof(::ucred)),
+              "util::Process_credentials must remain layout-identical to a lone `::ucred`; "
+                "Opt_peer_process_credentials::data()/size() rely on it.");
+
 // Free functions: in *_fwd.hpp.
 
 // Msg_batch_in class template implementations.
@@ -937,7 +946,7 @@ void Msg_batch_in<Mutable_buffer_sequence_t, Msg_resource_t>::Mdt_per_payload::s
 template<typename Mutable_buffer_sequence_t, typename Msg_resource_t>
 template<typename Is_unused_func>
 void
-  Msg_batch_in<Mutable_buffer_sequence_t, Msg_resource_t>::reuse_result_payloads(size_t first,
+  Msg_batch_in<Mutable_buffer_sequence_t, Msg_resource_t>::reuse_result_payloads(size_t start_idx,
                                                                                  const Is_unused_func& is_unused_func)
 {
   using std::swap; // This is the proper ADL-friendly style (do *not* inline std::swap() instead).
@@ -948,6 +957,8 @@ void
    * types it would nullify them.  Our algorithm would instead yield "abcdefghi   ", the earlier-on spaces being
    * swap-moved to the back.)  Also we deal in indices and is_unused(idx) calls as opposed to iterators/F(*it); but
    * logically same thing. */
+
+  auto& first = start_idx; // (Mere alias so as to match the GNU STL impl more closely.)
 
   for (; (first != m_n_used) && (!is_unused_func(first)); ++first) {}
 
@@ -1085,6 +1096,7 @@ bool
 {
   using flow::log::Sev;
   using boost::system::system_category;
+  using boost::io::ios_all_saver;
   namespace sys_err_codes = boost::system::errc;
   using std::swap;
   using ::recvmmsg;
@@ -1098,7 +1110,8 @@ bool
   using ::MSG_CTRUNC;
   // using ::errno; // It's a macro apparently.
 
-  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, nb_read, logger_ptr, peer_socket_ptr, graceful_close, _1, message_flags);
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, nb_read, logger_ptr, peer_socket_ptr, graceful_close, _1, message_flags,
+                                     total_rcvd_bytes_or_null);
   // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
 
   FLOW_LOG_SET_CONTEXT(logger_ptr, Log_component::S_TRANSPORT);
@@ -1138,11 +1151,11 @@ bool
    *       - Instead there's one of these per msghdr, m_mdts[*].m_msg_control_as_union.
    *   - n_rcvd_or_error (bytes received into buf_seq, returned by recvmsg(), or -1 for error):
    *     - Instead recvmmsg() returns -1 for error, else the # of leading `msghdr`s that did receive data, and
-   *       for each of those the `n_rcvd` part, so to speak, is populated in that mmsghdr, m_mmsg_hdr[*].msg_len.
+   *       for each of those the `n_rcvd` part, so to speak, is populated in that mmsghdr, m_mmsg_hdrs[*].msg_len.
    *
    * Due to the design of *this class, we've been painstakingly maintaining all of those things, so we can
    * pretty much execute ::recvmmsg() right away with no linear-time prep.  Reminder: We don't target the
-   * *entire* m_mmsg_hdr+m_mdts vectors; but rather the trailing n_payloads of them, starting with
+   * *entire* m_mmsg_hdrs+m_mdts vectors; but rather the trailing n_payloads of them, starting with
    * m_...[m_n_used]. */
 
   assert(peer_socket_ptr);
@@ -1267,26 +1280,68 @@ bool
   const auto recvmmsg_hdr_end = recvmmsg_hdr_ptr + n_rcvd_msgs_or_error;
   auto mdt_ptr = &(m_mdts[m_n_used]);
 
-  /* Used inside the loop on any error; it just resets mmsg_hdr.msg_hdr.msg_controllen and .msg_flags for the reason
-   * explained inside the loop in the non-error case -- it does so for all the structs we hadn't gotten to
-   * yet.  This might be unnecessary paranoia -- generally user should not and possibly cannot use the socket
+  /* Used inside the loop on any error; essentially -- seeing as how we are emitting failure <=> no emitted msgs --
+   * it (1) cleans-up *this (m_mmsg_hdrs, m_mdts) that may have been set to non-unused-state before the
+   * current (recvmmsg_hdr_ptr, mdt_ptr) one that triggered the error; and (2) ensures no native-handles
+   * that may have been received in the batch get leaked (since we emit no msgs) -- it returns these to OS.
+   * (Subtlety: Un-emitted slots (i.e., ones starting with [m_n_used]) aren't required to have .m_result_hndl
+   * in any particular state, .null() or otherwise.  So this helper doesn't "formally" promise anything about that;
+   * only that any in-batch-contained raw handles get closed.)
+   *
+   * (1) might be unnecessary paranoia -- generally user should not and possibly cannot use the socket
    * after an error anyway -- but we've spent significant effort on ensuring msg_{controllen|flags} is in its in-arg
    * form as much as possible; this will make quite sure in the (relatively) rare error case.
+   *
+   * (2) accounts for an edge (given a sane opposing guy) scenario; but in general why not?
    *
    * Note this is only necessary for the slots recv*() actually touched.  So in particular no need to do this
    * at all unless `n_rcvd_msgs_or_error > 0`. */
   const auto clean_remaining_func = [&]() -> bool
   {
     assert((recvmmsg_hdr_ptr != recvmmsg_hdr_end) && "Internal pre-condition violated.");
+
+    /* (1), in short, is just resetting msg_{controllen|flags} to their init-values.  For pre-error slots it's
+     * already done; so we do it for the post-error (inclusive) slots.  This loop is over those.
+     *
+     * (2) needs to un-leak any handle-copies in the entire in-batch: the pre-error slots if any; and the
+     * post-error slots (inclusive; so at least 1).  In this loop therefore we do the latter half. */
     do
     {
-      auto& msg_hdr = recvmmsg_hdr_ptr->msg_hdr;
-      msg_hdr.msg_controllen = sizeof(Msg_control_as_union::m_buf);
-      msg_hdr.msg_flags = S_PER_MSG_FLAGS;
+      auto& recvmsg_hdr = recvmmsg_hdr_ptr->msg_hdr;
+
+      const auto recvmsg_hdr_cmsg_ptr = CMSG_FIRSTHDR(&recvmsg_hdr); // Half of (2).
+      if (recvmsg_hdr_cmsg_ptr
+          && (recvmsg_hdr_cmsg_ptr->cmsg_level == SOL_SOCKET)
+          && (recvmsg_hdr_cmsg_ptr->cmsg_type == SCM_RIGHTS))
+      {
+        Native_handle{*(reinterpret_cast<const Native_handle::handle_t*>(CMSG_DATA(recvmsg_hdr_cmsg_ptr)))}
+          .release();
+        /* Closed handle, as promised. / Did not touch *this (m_mdts[].m_result_hndl); allowed by our contract.
+         * (In practice, as of this writing, this is equivalent behavior to never having received the
+         * post-error slots; clearly sensible.  As of this writing that applies to the error-slot in particular too,
+         * as calling code below only touches .m_result_hndl last, after eliminating all error possibilities.) */
+      }
+
+      // (1).  Has to be done after the above (msg_controllen affects CMSG_FIRSTHDR() behavior).
+      recvmsg_hdr.msg_controllen = sizeof(Msg_control_as_union::m_buf);
+      recvmsg_hdr.msg_flags = S_PER_MSG_FLAGS;
     }
-    while (++recvmmsg_hdr_ptr != recvmmsg_hdr_end);
+    while ((++recvmmsg_hdr_ptr) != recvmmsg_hdr_end);
+
+    /* That leaves the other half of (2): Un-leaking the handle-copies in pre-error slots if any.  mdt_ptr points
+     * at the error-slot still, so we backtrack to the start of the target area of *this batch, closing any
+     * `Native_handle`s we'd recorded.  (We could *not* instead just loop through all of m_mmsg_hdrs as above,
+     * as msg_controllen would have been reset by the looping code below.  Even if we could:
+     * This is just nice, as we can also re-nullify pre-error `.m_result_hndl`s -- not required but cleaner
+     * than leaving bogus values in there.) */
+    const auto mdt_ptr_first = &(m_mdts[m_n_used]);
+    while (mdt_ptr != mdt_ptr_first)
+    {
+      (--mdt_ptr)->m_result_hndl.release(); // Close handle, as promised.  Nullify for bonus cleanliness.
+    }
+
     return true;
-  };
+  }; // clean_remaining_func =
 
   size_t n_rcvd_msgs_actual = n_rcvd_msgs_or_error; // For EOF-marker handling; you'll see.
   size_t total_rcvd_bytes = 0; // Running tally of msg_len across actual (non-EOF) dgrams; EOF markers contribute 0.
@@ -1339,31 +1394,37 @@ bool
 
     if (out_flags != 0)
     {
-      FLOW_LOG_INFO("Local_stream_batch [" << *this << "]: "
-                    "Connected local peer socket [" << peer_hndl << "] "
-                    "tried to batch-read up-to [" << n_payloads << "] in-messages, each "
-                    "potentially into a scattered-blob plus possibly a native handle per each; "
-                    "and it returned it read [" << n_rcvd_msgs_or_error << "] in-messages; and for message "
-                    "index [" << (n_rcvd_msgs_or_error - (recvmmsg_hdr_end - recvmmsg_hdr_ptr)) << "] (0-based) "
-                    "got [" << msg_len << "] bytes successfully but also returned raw "
-                    "out-flags value [0x" << std::hex << out_flags << std::dec << "].  "
-                    "Will check for relevant flags but otherwise "
-                    "ignoring if nothing bad.  "
-                    "Logging at elevated level because it's interesting; please investigate.");
+      if (logger_ptr && logger_ptr->should_log(Sev::S_INFO, get_log_component()))
+      {
+        ios_all_saver saver{*(logger_ptr->this_thread_ostream())}; // Revert std::hex/etc. soon.
+        FLOW_LOG_INFO_WITHOUT_CHECKING
+          ("Local_stream_batch [" << *this << "]: Connected local peer socket [" << peer_hndl << "] "
+           "tried to batch-read up-to [" << n_payloads << "] in-messages, each "
+           "potentially into a scattered-blob plus possibly a native handle per each; "
+           "and it returned it read [" << n_rcvd_msgs_or_error << "] in-messages; and for message "
+           "index [" << (n_rcvd_msgs_or_error - (recvmmsg_hdr_end - recvmmsg_hdr_ptr)) << "] (0-based) "
+           "got [" << msg_len << "] bytes successfully but also returned raw "
+           "out-flags value [0x" << std::hex << out_flags << "].  "
+           "Will check for relevant flags but otherwise ignoring if nothing bad.  "
+           "Logging at elevated level because it's interesting; please investigate.");
+      }
 
       if ((out_flags & MSG_CTRUNC) != 0)
       {
-        FLOW_LOG_WARNING("Local_stream_batch [" << *this << "]: "
-                         "Connected local peer socket [" << peer_hndl << "] "
-                         "tried to batch-read up-to [" << n_payloads << "] in-messages, "
-                         "each potentially into a scattered-blob plus possibly a native handle per each; "
-                         "and it returned it read [" << n_rcvd_msgs_or_error << "] in-messages; and for message "
-                         "index [" << (n_rcvd_msgs_or_error - (recvmmsg_hdr_end - recvmmsg_hdr_ptr)) << "] (0-based) "
-                         "got [" << msg_len << "] bytes successfully but also returned raw "
-                         "out-flags value [0x" << std::hex << out_flags << std::dec << "] "
-                         "which includes MSG_CTRUNC.  "
-                         "That flag indicates more stuff was sent as ancillary data; but we expect at most 1 native "
-                         "handle.  Other side sent something strange.  Acting as if nothing received + error.");
+        if (logger_ptr && logger_ptr->should_log(Sev::S_WARNING, get_log_component()))
+        {
+          ios_all_saver saver{*(logger_ptr->this_thread_ostream())}; // Revert std::hex/etc. soon.
+          FLOW_LOG_WARNING_WITHOUT_CHECKING
+            ("Local_stream_batch [" << *this << "]: Connected local peer socket [" << peer_hndl << "] "
+             "tried to batch-read up-to [" << n_payloads << "] in-messages, "
+             "each potentially into a scattered-blob plus possibly a native handle per each; "
+             "and it returned it read [" << n_rcvd_msgs_or_error << "] in-messages; and for message "
+             "index [" << (n_rcvd_msgs_or_error - (recvmmsg_hdr_end - recvmmsg_hdr_ptr)) << "] (0-based) "
+             "got [" << msg_len << "] bytes successfully but also returned raw "
+             "out-flags value [0x" << std::hex << out_flags << "] which includes MSG_CTRUNC.  "
+             "That flag indicates more stuff was sent as ancillary data; but we expect at most 1 native "
+             "handle.  Other side sent something strange.  Acting as if nothing received + error.");
+        }
 
         // Note/caution: Same as in the S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE case above.
 
@@ -1400,7 +1461,7 @@ bool
                          "and it returned it read [" << n_rcvd_msgs_or_error << "] in-messages; and for message "
                          "index [" << (n_rcvd_msgs_or_error - (recvmmsg_hdr_end - recvmmsg_hdr_ptr)) << "] (0-based) "
                          "got [" << msg_len << "] bytes successfully but also "
-                         "unexpected ancillary data of csmg_level|cmsg_type "
+                         "unexpected ancillary data of cmsg_level|cmsg_type "
                          "[" << recvmsg_hdr_cmsg_ptr->cmsg_level << '|' << recvmsg_hdr_cmsg_ptr->cmsg_type << "].  "
                          "Acting as if nothing received + error.");
 
@@ -1627,7 +1688,7 @@ size_t nb_write_some_with_native_handle(flow::log::Logger* logger_ptr,
                * API native_non_blocking() in boost.asio for setting this -- but feels like the less interaction between
                * portable boost.asio code we use and this native stuff, the better -- so just keep it local here. */
               MSG_DONTWAIT | MSG_NOSIGNAL);
-              // ^-- Dealing with SIGPIPE is a pointless pain; if conn closed that way just give as an EPIPE error.
+              // ^-- Dealing with SIGPIPE is a pointless pain; if conn closed that way just give us an EPIPE error.
 
   if (n_sent_or_error == -1)
   {
@@ -1702,6 +1763,7 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
 {
   using flow::log::Sev;
   using boost::asio::detail::buffer_sequence_adapter;
+  using boost::io::ios_all_saver;
   using boost::system::system_category;
   using boost::array;
   using std::is_same_v;
@@ -1786,8 +1848,8 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
 
   // Massage message_flags for our required purposes.  Re. message_flags please read notes in our doc header.
 
-  /* If socket is un-writable then don't block; EAGAIN/EWOULDBLOCK instead. ...Further comment omitted;
-   * see sendmsg() elsewhere in this .cpp.  Same thing here. */
+  /* If socket is un-readable then don't block; EAGAIN/EWOULDBLOCK instead. ...Further comment omitted;
+   * see sendmsg() elsewhere in this header.  Same thing here. */
   if constexpr(is_same_v<Protocol, Protocol_pkt_stream>)
   {
     // For dgram-based protocol: Also use MSG_TRUNC, so we can (at least) log some info on overflow.
@@ -1806,7 +1868,7 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
   if (n_rcvd_or_error == -1)
   {
     /* Not even 1 byte of a blob was read; and hence nor was any target_payload_hndl.  (See comment in similar
-     * sport in nb_write_some_with_native_handle(); applies here equally.) */
+     * spot in nb_write_some_with_native_handle(); applies here equally.) */
 
     const Error_code sys_err_code{errno, system_category()};
     if ((sys_err_code == sys_err_codes::operation_would_block) || // EWOULDBLOCK
@@ -1856,6 +1918,8 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
   }
   // else if (n_rcvd_or_error > 0):
 
+  err_code->clear(); // Used by some checks below to mean "no error condition found yet."
+
   // Check for in-dgram overflow (if applicable).
   if constexpr(is_same_v<Protocol, Protocol_pkt_stream>)
   {
@@ -1877,46 +1941,62 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
              && "In-dgram size overflows user-supplied buffer <=> MSG_TRUNC out-flag supposed to be set.");
 
       *err_code = error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE;
-      return 0; // target_payload_hndl already set.
+      /* target_payload_hndl already set.
+       * Would `return 0` here but want to avoid leaking received handles, so defer until below. */
     }
-    // else: No overflow.
+    // else { No overflow. }
   }
   // else { No overflow possible in stream mode. }
 
-  /* Next, buf_seq-pointed area... which is already written to (its first n_rcvd_or_error bytes).
+  /* Assuming no error found yet:
+   *
+   * Next, buf_seq-pointed area... which is already written to (its first n_rcvd_or_error bytes).  Nothing to do.
    *
    * Next, recvmsg_hdr.msg_flags.  Basically only the following is relevant: */
-  if (recvmsg_hdr.msg_flags != 0)
+  if ((!*err_code) && (recvmsg_hdr.msg_flags != 0))
   {
-    FLOW_LOG_INFO("Connected local peer socket tried to read into scattered-blob "
-                  "([" << buf_seq.count() << "] sub-blobs, "
-                  "up to total size [" << target_payload_blob_sz << "], "
-                  "first sub-blob at @[" << buf_seq.buffers()->iov_base << "]) "
-                  "plus possibly a native handle; "
-                  "and it returned it read [" << n_rcvd_or_error << "] bytes successfully but also returned raw "
-                  "out-flags value [0x" << std::hex << recvmsg_hdr.msg_flags << std::dec << "].  "
-                  "Will check for relevant flags but otherwise "
-                  "ignoring if nothing bad.  Logging at elevated level because it's interesting; please investigate.");
+    if (logger_ptr && logger_ptr->should_log(Sev::S_INFO, get_log_component()))
+    {
+      ios_all_saver saver{*(logger_ptr->this_thread_ostream())}; // Revert std::hex/etc. soon.
+      FLOW_LOG_INFO_WITHOUT_CHECKING
+        ("Connected local peer socket tried to read into scattered-blob "
+         "([" << buf_seq.count() << "] sub-blobs, "
+         "up to total size [" << target_payload_blob_sz << "], "
+         "first sub-blob at @[" << buf_seq.buffers()->iov_base << "]) "
+         "plus possibly a native handle; "
+         "and it returned it read [" << n_rcvd_or_error << "] bytes successfully but also returned raw "
+         "out-flags value [0x" << std::hex << recvmsg_hdr.msg_flags << "].  "
+         "Will check for relevant flags but otherwise "
+         "ignoring if nothing bad.  Logging at elevated level because it's interesting; please investigate.");
+    }
 
     if ((recvmsg_hdr.msg_flags & MSG_CTRUNC) != 0)
     {
-      FLOW_LOG_WARNING("Connected local peer socket tried to read into scattered-blob "
-                       "([" << buf_seq.count() << "] sub-blobs, "
-                       "up to total size [" << target_payload_blob_sz << "], "
-                       "first sub-blob at @[" << buf_seq.buffers()->iov_base << "]) "
-                       "plus possibly a native handle; "
-                       "and it returned it read [" << n_rcvd_or_error << "] bytes successfully but also returned raw "
-                       "out-flags value [0x" << recvmsg_hdr.msg_flags << "] which includes MSG_CTRUNC.  "
-                       "That flag indicates more stuff was sent as ancillary data; but we expect at most 1 native "
-                       "handle.  Other side sent something strange.  Acting as if nothing received + error.");
+      if (logger_ptr && logger_ptr->should_log(Sev::S_WARNING, get_log_component()))
+      {
+        ios_all_saver saver{*(logger_ptr->this_thread_ostream())}; // Revert std::hex/etc. soon.
+        FLOW_LOG_WARNING_WITHOUT_CHECKING
+          ("Connected local peer socket tried to read into scattered-blob "
+           "([" << buf_seq.count() << "] sub-blobs, "
+           "up to total size [" << target_payload_blob_sz << "], "
+           "first sub-blob at @[" << buf_seq.buffers()->iov_base << "]) "
+           "plus possibly a native handle; "
+           "and it returned it read [" << n_rcvd_or_error << "] bytes successfully but also returned raw "
+           "out-flags value [0x" << std::hex << recvmsg_hdr.msg_flags << "] which includes MSG_CTRUNC.  "
+           "That flag indicates more stuff was sent as ancillary data; but we expect at most 1 native "
+           "handle.  Other side sent something strange.  Acting as if nothing received + error.");
+      }
       *err_code = error::Code::S_LOW_LVL_UNEXPECTED_STREAM_PAYLOAD_BEYOND_HNDL;
-      return 0; // target_payload_hndl already set.
+      /* target_payload_hndl already set.
+       * Would `return 0` here but want to avoid leaking received handles, so defer until below. */
     }
-    // else
-  } // if (recvmsg_hdr.msg_flags != 0)
+    // else { No truncation occurred. }
+  } // if ((!*err_code) && (recvmsg_hdr.msg_flags != 0)) (but *err_code may have become truthy inside)
 
-  /* Lastly examine ancillary data (and note MSG_CTRUNC already eliminated above).
-   * Use, basically, the method from `man cmsg` in Linux. */
+  /* Lastly examine ancillary data (which might have also been truncated: MSG_CTRUNC above).
+   * Use, basically, the method from `man cmsg` in Linux.
+   *
+   * We are interested whether *err_code (un-leak any received hndl) or !*err_code (emit any received hndl). */
   cmsghdr* const recvmsg_hdr_cmsg_ptr = CMSG_FIRSTHDR(&recvmsg_hdr);
   if (recvmsg_hdr_cmsg_ptr)
   {
@@ -1924,12 +2004,17 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
     if ((recvmsg_hdr_cmsg_ptr->cmsg_level == SOL_SOCKET) &&
         (recvmsg_hdr_cmsg_ptr->cmsg_type == SCM_RIGHTS))
     {
-      static_assert(N_PAYLOAD_FDS == 1, "Should be only dealing with one native handle with recvmsg() "
-                                        "as of this writing.");
+      static_assert(N_PAYLOAD_FDS == 1,
+                    "Should be only dealing with one native handle with recvmsg() as of this writing.");
       target_payload_hndl.m_native_handle
         = *(reinterpret_cast<const Native_handle::handle_t*>(CMSG_DATA(recvmsg_hdr_cmsg_ptr)));
+      if (*err_code)
+      {
+        target_payload_hndl.release(); // Avoid the native-handle (which is a received copy) leak.
+      }
+      // else { Cool: Native-handle received and emitted. }
     }
-    else
+    else if (!*err_code) // && (unknown ancillary data type)
     {
       FLOW_LOG_WARNING("Connected local peer socket tried to read into scattered-blob "
                        "([" << buf_seq.count() << "] sub-blobs, "
@@ -1937,20 +2022,26 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
                        "first sub-blob at @[" << buf_seq.buffers()->iov_base << "]) "
                        "plus possibly a native handle; "
                        "and it returned it read [" << n_rcvd_or_error << "] bytes successfully but also "
-                       "unexpected ancillary data of csmg_level|cmsg_type "
+                       "unexpected ancillary data of cmsg_level|cmsg_type "
                        "[" << recvmsg_hdr_cmsg_ptr->cmsg_level << '|' << recvmsg_hdr_cmsg_ptr->cmsg_type << "].  "
                        "Acting as if nothing received + error.");
       *err_code = error::Code::S_LOW_LVL_UNEXPECTED_STREAM_PAYLOAD_BEYOND_HNDL;
-      return 0; // target_payload_hndl already set.
+      // target_payload_hndl already set.  We shall return below.
     }
-    // else
+    // else if (*err_code && (unknown ancillary data type)) { Detected error before; stick with that one. }
 
-    /* Used to check here that CMSG_NXTHDR() would yield null here (meaning no more ancillary data) and issued
+    /* Used to check here that CMSG_NXTHDR() would yield null (meaning no more ancillary data) and issued
      * LOW_LVL_UNEXPECTED_STREAM_PAYLOAD_BEYOND_HNDL if not.  However it was a perf giveaway that was likely pointless,
      * even with a misbehaving opposing peer; we've only provided space for 1 FD, and MSG_CTRUNC (checked above) would
      * have pointed out if that were insufficient.  So just move on. */
   }
   // else { No ancillary data, meaning no native handle; that's quite normal. }
+
+  if (*err_code)
+  {
+    return 0; // Any potential handle-leak avoided; can get out.
+  }
+  // else:
 
   if constexpr(is_same_v<Protocol, Protocol_pkt_stream>)
   {
@@ -1974,8 +2065,7 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
                    "[" << n_rcvd_or_error << "] of the blob's [" << target_payload_blob_sz << "]-byte capacity.");
   }
 
-  err_code->clear();
-  return n_rcvd_or_error;
+  return static_cast<size_t>(n_rcvd_or_error);
 } // nb_read_some_with_native_handle()
 
 // Opt_peer_process_credentials template implementations.

@@ -403,7 +403,7 @@ public:
    *         See above.
    * @param batch
    *        See above.  However note that Blob_batch_in<Msg_resource>::result_payload_hndl() (the would-be method
-   *        itself) shall not exist, as `Blob_batch_in<M>` is `Msg_batch_in<M, true>`; note the `NO_HNDSL = true`.
+   *        itself) shall not exist, as `Blob_batch_in<M>` is `Msg_batch_in<M, true>`; note the `NO_HNDLS = true`.
    * @param assume_would_block
    *        See above.
    * @param on_done_func

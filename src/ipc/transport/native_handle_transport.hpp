@@ -605,10 +605,10 @@ public:
  *     Yes, you should consider coding for batch-receiving.  Otherwise it's simpler to stick with
  *     basic-receiving 1 in-message at a time (async_receive_native_handle()).
  *   - Native_handle_receiver concept's impls *must* support batch-receiving.  What if it's not available at the
- *     transport layer?  Yes, they still must.   In practice all available Flow-IPC impls are written in such a way
- *     as to *emulate* batch-receiving (internally via basic one-message receive-ops); and in doing so they as of this
- *     writing go to great lengths to make this essentially no slower than the M 1-message receives had they been
- *     performed by the user directly via M async_receive_native_handle() calls.  So you aren't risking much by
+ *     transport layer?  Yes, they still must.  In practice all available Flow-IPC impls are written in such a way
+ *     as to *emulate* batch-receiving (internally via basic one-message receive-ops) if needed; and in doing so they
+ *     as of this writing go to great lengths to make this essentially no slower than the M 1-message receives had they
+ *     been performed by the user directly via M async_receive_native_handle() calls.  So you aren't risking much by
  *     coding for it and letting the Flow-IPC impl handle it as best it can.  So at that point the only real cost
  *     is the added complexity of your code in having to deal with a #Native_handle_batch_in.
  *     - Impl note: The class template Generic_msg_batch_in and helper free-function
@@ -1161,7 +1161,7 @@ public:
  *
  * @see Start by reading the Native_handle_receiver concept class doc header "Batch-receiving" section.
  *      Note that Native_handle_receiver::Native_handle_batch_in, accordingly, shall point to an impl of
- *      this concept's variety `Msg_batch_in<..., false>`.  Similarly Blob_receiver::Native_handle_batch_in shall
+ *      this concept's variety `Msg_batch_in<..., false>`.  Similarly Blob_receiver::Blob_batch_in shall
  *      point to an impl of `Msg_batch_in<..., true>`.
  *
  * ### Background / How to use ###
@@ -1184,7 +1184,7 @@ public:
  *      - Set arg `assume_would_block` according to this value in the present algorithm.
  *   -# On success n_used() shall be between 1 and N.  For each `idx` in [`0`, `n_used()`):
  *      -# (Only if `S_NO_HNDLS == false`) Obtain the native-handle part of the in-message via
- *         `result_payload_hndl(idx)`.  Not it may be `.null()` (no handle in message).
+ *         `result_payload_hndl(idx)`.  Note it may be `.null()` (no handle in message).
  *      -# Consume the blob part of the in-message by calling `auto K = this->result_payload_blob(idx, ...)`.
  *         Its location shall be at `target_blob.data()` and shall be `K` bytes long (where `K <= target_blob.size()`).
  *         Typically you'd also *consume* the `msg_resource` at that slot (we discuss `msg_resource` separately below).
@@ -1301,8 +1301,8 @@ public:
    * currently marked as storing a received message each.  result_payload_blob() and similar result-accessors
    * take `idx` only strictly less than this value.
    *
-   * It is meaningless until `initialized() == true`; incremented by emulate_result(); and reset to zero
-   * by clear_used().
+   * It is meaningless until `initialized() == true`; incremented by the batch-receive op
+   * (`async_receive_*_batch()`); and reset to zero by clear_used().
    *
    * @return See above.
    */
@@ -1314,7 +1314,7 @@ public:
    *
    * ### Implied would-block ###
    * From the user's point of view, following a batch-receive operation such as
-   * Blob_receive::async_receive_blob_batch(), if `n_used() >= 1` *and* `full() == true`, then the
+   * Blob_receiver::async_receive_blob_batch(), if `n_used() >= 1` *and* `full() == false`, then the
    * condition we call *implied would-block* is in effect.  Understanding and using it may be important
    * for performance.  To wit:
    *
@@ -1361,7 +1361,7 @@ public:
    *        Non-empty (else behavior undefined) location/size of a buffer in memory into which this slot's
    *        message shall be potentially received.  `target_blob.size()` shall always be the same for a given
    *        `*this`, or behavior is undefined.  (In other words, at entry, either target_payload_size() is zero,
-   *        or `target_blob.size() == target_blob.size()` must hold.)
+   *        or `target_payload_size() == target_blob.size()` must hold.)
    * @param msg_resource
    *        The resource to attach (store via move) to this slot.  Typically that will include or be a backing container
    *        (such as `flow::util::Basic_blob`) that includes at least the location described by `target_blob`.

@@ -99,7 +99,7 @@ namespace local_ns = boost::asio::local;
  * In Unix-world this is known as `AF_LOCAL+SOCK_STREAM` (a/k/a `AF_UNIX+SOCK_STREAM`) and is widely supported in
  * POSIX-land.  It is similar to TCP (but local, with all simplifications this entails), and a key point is that
  * it *does not preserve message boundaries*.  That is, if I try to OS-write 10 bytes, it might write only the first
- * 5 (however, if an ancially native-handle/FD was part of the write, then the FD will have been written if and only if
+ * 5 (however, if an ancillary native-handle/FD was part of the write, then the FD will have been written if and only if
  * the OS-write reported writing-out at least 1 byte).  Therefore to send a bounded message, one must use
  * a length prefix or use a sentinel scheme.
  */
@@ -133,7 +133,7 @@ static_assert(false, "Flow-IPC has some support for AF_LOCAL/SOCK_SEQPACKET and 
  * ### Rationale ###
  * Dealing in bounded messages, a/k/a datagrams, is pretty common (almost universal).  So naturally this is simply
  * convenient in many cases -- all else being equal; it is not necessary to send length-bearing prefixes or
- * sentinels/escaping.  Beyond convenience, though, when trying to squeeze out all possible performance from am
+ * sentinels/escaping.  Beyond convenience, though, when trying to squeeze out all possible performance from an
  * IPC system it allows one to significantly reduce the number of I/O syscalls, thus loading the kernel less
  * (reduced kernel locking).
  *
@@ -150,7 +150,7 @@ static_assert(false, "Flow-IPC has some support for AF_LOCAL/SOCK_SEQPACKET and 
  * However it is connectionless.  (Its `connect()` behavior is very different and is more of a memory and filter;
  * there is no built-in graceful-close "token" semantic; and it cannot be generated via `connect_pair()`.)  This is
  * not necessarily worse; but it is different.  Therefore as of this writing internal code paths in Flow-IPC
- * use either #Protocol_byte_stream or #Protocol_pkt_stream.)
+ * use either #Protocol_byte_stream or #Protocol_pkt_stream.
  */
 using Protocol_pkt_stream = local_ns::seq_packet_protocol;
 
@@ -238,7 +238,7 @@ class Opt_peer_process_credentials;
  *
  * Items are extensively logged on `*logger_ptr`, and we follow the normal best practices to avoid verbose messages
  * at the severities strictly higher than `TRACE`.  In particular, any error is logged as a `WARNING`, so in particular
- * there's no need to for caller to specifically log about the details of a non-false `E`.
+ * there's no need for caller to specifically log about the details of a non-false `E`.
  *
  * ### Features of `Peer_socket::send()` not provided here ###
  * We have (consciously) made these concessions:
@@ -268,7 +268,7 @@ class Opt_peer_process_credentials;
  *        Pointer to socket.  If it is not connected, or otherwise unsuitable, behavior is identical to
  *        attempting `send()` on such a socket.  If null behavior is undefined (assertion may trip).
  * @param payload_hndl
- *        The native handle to transmit.  If `payload_hndl.is_null()` behavior is undefined (possible
+ *        The native handle to transmit.  If `payload_hndl.null()` behavior is undefined (possible
  *        assertion trip).  Reiterating the above outcome semantics: if the return value `N` indicates even 1 byte
  *        was sent, then this was successfully sent also.
  * @param payload_blob
@@ -426,11 +426,11 @@ size_t nb_write_some_with_native_handle(flow::log::Logger* logger_ptr,
  *       - (Informally, a common-sense way to do it just make
  *         your protocol message-based, such that the length of the next message is always known on either side.)
  *       - Again, if the nb_read_some_with_native_handle() call returns N', where 1 <= N' < N, then no worries.
- *         The handle S *will* have been successfully received, being associated with byte 1 of M.
+ *         The handle H *will* have been successfully received, being associated with byte 1 of M.
  *         Keep reading the rest of M (namely, the remaining (N - N') bytes of the blob B) with more read op(s).
  *       - (To put a fine point on it: In known Linux versions as of this writing, if you do try to read-op N' bytes
  *         having executed write-op with N'' bytes, where N'' > N', then you may observe very strange, undefined
- *         (albeit non-crashy), behavior such as S disappearing or replacing a following-message handle S'.  Don't.)
+ *         (albeit non-crashy), behavior such as H disappearing or replacing a following-message handle H'.  Don't.)
  *
  * That is admittedly many words, but really in practice it's fairly natural and simple to design a message-based
  * protocol and implementation around it.  Just do follow these; I merely wanted to be complete.
@@ -482,6 +482,9 @@ size_t nb_write_some_with_native_handle(flow::log::Logger* logger_ptr,
  *        ipc::transport::error::Code::S_LOW_LVL_UNEXPECTED_STREAM_PAYLOAD_BEYOND_HNDL
  *        (strictly more than 1 handle detected in the read-op, but we support only 1 at this time; see above;
  *        maybe they didn't use above write-op function(s) and/or didn't follow anti-straddling suggestion above),
+ *        ipc::transport::error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE
+ *        (#Protocol_pkt_stream only: next pending in-datagram exceeds total size of `target_payload_blob`;
+ *        the in-dgram is lost, but the connection is *not* hosed; see above),
  *        other system codes (see notes above in the outcome discussion).
  * @param message_flags
  *        See boost.asio `Peer_socket::receive()` overload with this arg.  As of this writing we see utility for
@@ -514,7 +517,7 @@ size_t nb_write_some_with_native_handle(flow::log::Logger* logger_ptr,
  *     on both sides.
  *   - The length of that blob similarly matters -- which is not normal, as otherwise message boundaries are *not*
  *     normally maintained for stream connections -- and for this reason the read op must accept a result into a blob
- *     of at *least* the same same size as the corresponding write op.  (For simplicity and other reasons my
+ *     of at *least* the same size as the corresponding write op.  (For simplicity and other reasons my
  *     instructions say it should just be equal.)
  *
  * ### Implementation notes -- `Protocol_pkt_stream` ###

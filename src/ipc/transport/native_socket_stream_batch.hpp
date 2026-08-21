@@ -41,7 +41,7 @@ namespace ipc::transport
  * Native_socket_stream::async_receive_blob_batch() and Native_socket_stream::async_receive_native_handle_batch())
  * for high-speed *natively batched* receiving.
  *
- * @see Native_handle_receiver concept doc header for an explantion of receive-batching (including what
+ * @see Native_handle_receiver concept doc header for an explanation of receive-batching (including what
  *      native batching is; how `Msg_resource_t` template-param relates to things); and how the general design
  *      enables high perf.
  *
@@ -63,7 +63,7 @@ namespace ipc::transport
  *          -# prepare_target_payload() (for each of the first N slots only).
  *
  * @internal
- * ### Priviliged access to nb_read() ###
+ * ### Privileged access to nb_read() ###
  * nb_read() is the `private` API that performs the actual reading-into `*this`, after the user has prepped
  * via prepare_target_payload() et al and before they consume the results of the read.
  *
@@ -108,7 +108,7 @@ public:
 
 #ifdef IPC_DOXYGEN_ONLY
   /// Clears all resources -- including any #Msg_resource currently attached to any receive-slot.
-  ~Msg_batch_in();
+  ~Native_socket_stream_msg_batch_in();
 #endif
 
   // Methods.
@@ -153,7 +153,8 @@ public:
   size_t target_payload_size() const;
 
   /**
-   * Identical to Generic_msg_batch_in.
+   * Identical to Generic_msg_batch_in, except `idx >= n_used()` is undefined behavior (assertion may trip).
+   *
    * @param idx
    *        See above.
    * @param msg_resource_ptr
@@ -163,7 +164,8 @@ public:
   size_t result_payload_blob(size_t idx, Msg_resource** msg_resource_ptr = nullptr);
 
   /**
-   * Identical to Generic_msg_batch_in.
+   * Identical to Generic_msg_batch_in, except `idx >= n_used()` is undefined behavior (assertion may trip).
+   *
    * @param idx
    *        See above.
    * @return See above.
@@ -309,11 +311,11 @@ private:
    * error::Code::S_SYNC_IO_WOULD_BLOCK; performing the translation is up to the caller).
    * If no error, and messages were pending, the number is not explicitly returned
    * but rather reflected in n_used() increasing by that # (at least 1, at most `n_payloads`).  If error,
-   * and no messages were pending, emits that error and leaves n_unused() unchanged.  If messages were received,
-   * and *then* an error was detected, then emits that error *and* modifies n_unused() as described earlier
+   * and no messages were pending, emits that error and leaves n_used() unchanged.  If messages were received,
+   * and *then* an error was detected, then emits that error *and* modifies n_used() as described earlier
    * in the paragraph.
    *
-   * @warning Read that again please! It *is* a possible outcome that messages were emitted (n_unused() changed)
+   * @warning Read that again please! It *is* a possible outcome that messages were emitted (n_used() changed)
    *          *and* an error is emitted.  We do *not* defer the error as some other APIs.  (Rationale omitted but
    *          trust us.)  This possibility includes *exactly* the following errors:
    *          (1) `Native_socket_stream`-protocol graceful-close (error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE) and
@@ -323,14 +325,14 @@ private:
    *          informally it is likely best not to rely on this in your code.
    *
    * @note Be aware of the *implied would-block* condition.  See full() doc header.  Spoiler alert:
-   *       if we yielded data/no error, then it wasn't would-block... but if `full() == true` post-op, then
+   *       if we yielded data/no error, then it wasn't would-block... but if `full() == false` post-op, then
    *       the in-pipe is nevertheless in would-block state.  It would be wasteful to try another nb_read().
-   *       Conversely, though, if `!full()` then you can and should nb_read() again (assuming the goal is to
+   *       Conversely, though, if `full()` then you can and should nb_read() again (assuming the goal is to
    *       drain the in-pipe such as in edge-triggered loops).
    *
    * ### Additional context, for Native_socket_stream implementer/maintainer ###
    * Arguably the most complex thing this does is emit only user in-messages while
-   * transparently but performantly filtering-out control messages (including auto-ping and graceful-close)
+   * transparently but performantly filtering-out control messages (including auto-ping and graceful-close).
    * For completeness/context here is how some control messages are handled.  Arguably these are impl details,
    * but we're all friends (but not `friend`s) here.
    *
@@ -349,7 +351,7 @@ private:
    *        The Native_socket_stream protocol-negotiator which is fully managed by this method.
    * @param no_hndls
    *        If `false`, receiving a native handle in an in-dgram is normal and is performed when relevant;
-   *        if `true`, receiving a native handle triggers the appopriate error.
+   *        if `true`, receiving a native handle triggers the appropriate error.
    * @param not_idle_on_would_block
    *        Out-arg which has meaning if and only if we emit `boost::asio::error::would_block`; in that
    *        case: `true` means that, although (per `would_block` definition above) no user in-messages were
@@ -434,7 +436,7 @@ Native_socket_stream_msg_batch_in<Msg_resource_t>::Native_socket_stream_msg_batc
   m_batch(max_msg_count),
   m_target_payload_sz(0),
   /* A bucket for 0 in-dgrams (would-block), then buckets for all outcomes up to and including getting the max
-   * (each one covering BUCKET_SZ adjacent incomes; e.g., 2 => [1, 2][3, 4][5, 6]...[63, 64]). */
+   * (each one covering BUCKET_SZ adjacent outcomes; e.g., 2 => [1, 2][3, 4][5, 6]...[63, 64]). */
   m_histo_raw_read_n_msgs(1 + (max_msg_count / Native_socket_stream_cfg::S_STATS_HISTO_MSG_CT_BUCKET_SZ),
                           1, Native_socket_stream_cfg::S_STATS_HISTO_MSG_CT_BUCKET_SZ, 0),
   // Ditto (this covers a subset of events tracked in m_histo_raw_read_n_msgs).
@@ -492,7 +494,7 @@ size_t
   Native_socket_stream_msg_batch_in<Msg_resource_t>::result_payload_blob(size_t idx,
                                                                          Msg_resource** msg_resource_ptr)
 {
-  assert((idx < n_used()) && "Attempt by outside user to access a result in a slot that was not received-to"
+  assert((idx < n_used()) && "Attempt by outside user to access a result in a slot that was not received-to "
                                "and/or holds no user in-message; could also be an internal bug in *this class.");
 
   size_t n_rcvd;
@@ -515,6 +517,9 @@ size_t
 template<typename Msg_resource_t>
 Native_handle Native_socket_stream_msg_batch_in<Msg_resource_t>::result_payload_hndl(size_t idx) const
 {
+  assert((idx < n_used()) && "Attempt by outside user to access a result in a slot that was not received-to; "
+                               "could also be an internal bug in *this class.");
+
   return m_batch.result_payload_hndl(idx);
 }
 
@@ -602,21 +607,20 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
     if (*err_code)
     {
       /* Fatal error => obviously overall fatal error.  Would-block => can't read any more messages either.
-       * So we are done here.  Though in would-block case a contract subtlety requires the following. */
-      (*err_code == boost::asio::error::would_block) && (*not_idle_on_would_block = true); // Contract fulfilled.
+       * So we are done here.  Though in would-block case the contract requires the following. */
+      (*err_code == boost::asio::error::would_block) && (*not_idle_on_would_block = false); // Contract fulfilled.
       return true;
     }
     /* else: Got something (an in-dgram and possibly a handle).  Check for various protocol misbehaviors first.
-     * Caveat: We only gave it a msg_type_t-sized target buffer; and as of this writing if any more bytes were
-     * received in dgram (1) they're simply thrown out and (2) we are not notified.  So that particular misbehavior
-     * we simply do not worry about... it's fine; this is a safety check -- not a security check (discussion
-     * elsewhere about that philosophy). */
+     * (Incidentally: If there was an in-dgram but too large for sizeof(msg_type_t), that would've been detected
+     * by nb_read_some_with_native_handle() and emitted as the appropriate error.  So we needn't worry about that.) */
     if (n_rcvd < MSG_TYPE_SZ)
     {
       *err_code = error::Code::S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER;
       FLOW_LOG_WARNING("Native_socket_stream_batch [" << *this << "]: "
                        "Native_socket_stream batch nb-read of protocol-negotiation dgram: "
                        "illegal too-short in-dgram.");
+      hndl_or_null.release(); // If there's also a handle in there for some reason, don't leak it.
       return true;
     }
     // else if (n_rcvd == MSG_TYPE_SZ):
@@ -628,6 +632,8 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
                        "Expecting protocol-negotiation (first) in-dgram "
                        "to contain *only* a meta-blob: but received Native_handle is non-null which is "
                        "unexpected.");
+      hndl_or_null.release(); // Let's not leak it.
+
   #ifndef NDEBUG
       const bool ok =
   #endif
@@ -732,7 +738,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
      *   - Before the .nb_read():
      *     - There is no error on the connection (including from any earlier loop iteration in
      *       the present function, as that stops the loop; see below).
-     *     - .n_used() is not necessarily 0; it might the be the first iteration, but for some reason they
+     *     - .n_used() is not necessarily 0; it might be the first iteration, but for some reason they
      *       ran us with some slots already filled; or it might be iteration 2+, and the preceding .nb_read()
      *       or further processing yielded no error of any kind (including would-block) but did as a result of
      *       the "further processing" free up 1+ slot(s) at the end.  In any case .n_used() is not max_msg_count,
@@ -750,7 +756,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
                    "for others we should've stopped the loop (b/c full()) before trying another nb-read.");
 
     /* At this point the possibilities are:
-     *   - *err_code is false, but 0 messages read (<=> `low_graceful_close == true`), then it is as-if
+     *   - *err_code is false, but 0 messages read (=> `low_graceful_close == true`), then it is as-if
      *      m_batch.nb_read() emitted `eof`; so just pretend that is what happened: assign it accordingly, then
      *      execute the next bullet point.  (`low_graceful_close == true` with 1+ messages is handled below, not here.)
      *   - *err_code is true:
@@ -760,7 +766,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
      *         Otherwise clear *err_code.  (Caller can still detect the overall "implied would-block.")
      *         However, mark that it is "implied would-block": loop should stop.
      *     - If other error:  No more to read (socket hosed), period.  Loop should stop.
-     *       Emit the error via *err_code; *and* (unless it is `eof`) reset n_used() to n_used_pre_read.
+     *       Emit the error via *err_code; *and* reset n_used() to orig_n_used.
      *     - However, any legal messages from any prior iterations have been recorded.  It is up to the caller to
      *       proceed how they want.
      *   - *err_code is false; and 1+ messages read (but low_graceful_close may be true or false).
@@ -772,7 +778,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
      *         to the end of that range: m_batch.reuse_result_payloads().
      *       - For each swapped-away slot (if any):
      *         - If illegal, set *err_code to reflect it (stop scanning the range; loop should stop).
-     *           In addition: reset n_used() to n_used_pre_read.
+     *           In addition: reset n_used() to orig_n_used.
      *         - If graceful-close, set *err_code to reflect it (stop scanning the range; loop should stop).
      *           (Note: We are reasonably but not maximally paranoid about checking for legality; that is e.g.
      *           graceful-close means no need to check further; but there could be slots after that which are illegal.
@@ -806,6 +812,39 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
 
     const auto n_used_post_read = m_batch.n_used();
 
+    /* This is, in a sense, a locally-available helper method of `*this`'s class.  Perf-wise:
+     *  - Its existence is free (no captures).
+     *  - Its execution is not free -- but errors are rare.
+     *
+     * Call it below, on error, to put *this back to pre-us state.  ("Pre-us state" = in the semantically
+     * meaningful sense.  Meaningless values -- in slots [n_used(), ...) -- may be modified, but it does not matter.) */
+    const auto cleanup_on_error = [](auto this_obj, size_t orig_n_used, size_t n_used_post_read)
+    {
+      auto& batch = this_obj->m_batch;
+
+      /* Main thing is undo .n_used() having potentially advanced in previous iterations.  Thus any slots we would
+       * have changed are meaningless again => same state as pre-us state.  The one thing this leaves is that
+       * we've received, potentially, native-handle copies; these would leak.  Un-leak them via .release() (closes
+       * handle).  Do remember that, while prev iterations may have produced leaked-handles, this iteration's
+       * m_batch.nb_read() may well have done the same.  Point being: un-leak anything from prev iterations and
+       * up to where the above .nb_read() populated: [orig_n_used, n_used_post_read).  The potential
+       * pruning step (reuse_result_payloads()) below is irrelevant; it's an error => we emit nothing, so we
+       * .release() every slot's handle from any .nb_read().
+       *
+       * (What about un-leaking handles in messages discarded by reuse_result_payloads() *without* a subsequent
+       * error being detected in that same iteration?  We won't be called -- no error -- so who'll unleak them?
+       * Answer: Legal, yet discarded, messages -- auto-ping, graceful-close -- do not come with handles.  Thus,
+       * no such thing.) */
+
+      for (auto idx = orig_n_used; idx != n_used_post_read; ++idx)
+      {
+        /* If there's a handle in there, un-leak it.
+         * (Stored value in m_batch is not touched; but it remains in [n_used(), ...) <=> meaningless.) */
+        batch.result_payload_hndl(idx).release();
+      }
+      batch.clear_used(orig_n_used);
+    }; // auto cleanup_on_error =
+
     m_histo_raw_read_n_msgs.record_value(n_used_post_read - n_used_pre_read);
 
     if (*err_code)
@@ -835,7 +874,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
          *   increase m_batch.n_used().  Therefore we similarly -- as promised for any non-graceful-close error --
          *   guarantee that this overall this->nb_read() does not modify m_batch.n_used().  Hence this statement.
          *   A/k/a: Un-emit any in-messages from prev iteration(s): exceptional error. */
-        m_batch.clear_used(orig_n_used);
+        cleanup_on_error(this, orig_n_used, n_used_post_read);
       }
 
       m_histo_raw_read_n_msgs_filtered_out.record_value(0);
@@ -852,9 +891,11 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
 
       *err_code = boost::asio::error::eof;
       implied_would_block = false; // Don't log; m_batch->nb_read() logged enough.
+
+      m_histo_raw_read_n_msgs_filtered_out.record_value(0);
     }
 
-    else // if (!*err_code) && (n_used_pre_read > n_used_post_read)
+    else // if (!*err_code) && (n_used_pre_read < n_used_post_read)
     {
       not_idle_val = true; // Got anything => not idle.
       implied_would_block = !full(); // m_batch->nb_read() logged enough.
@@ -1067,7 +1108,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
           {
             // Auto-ping sentinel + any data or hndl => illegal.
             *err_code = error::Code::S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER;
-            m_batch.clear_used(orig_n_used); // Un-emit any in-messages from prev iteration(s): exceptional error.
+            cleanup_on_error(this, orig_n_used, n_used_post_read); // Un-emit/un-leak: exceptional error.
             FLOW_LOG_WARNING("Native_socket_stream_batch [" << *this << "]: "
                              "Native_socket_stream batch nb-read post-post-processing scan of slot [" << idx << "]: "
                              "illegal auto-ping-like in-dgram: "
@@ -1078,7 +1119,6 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
           {
             ++rother_auto_pings;
           }
-          assert(!*err_code);
           continue; // Don't log about ping; is_not_user_message() doing so is plenty.
         }
         // else if (not PING):
@@ -1087,7 +1127,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
         {
           // Unknown msg_type (neither PING nor 0000) => illegal.
           *err_code = error::Code::S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER;
-          m_batch.clear_used(orig_n_used); // Un-emit any in-messages from prev iteration(s): exceptional error.
+          cleanup_on_error(this, orig_n_used, n_used_post_read); // Un-emit/un-leak: exceptional error.
           FLOW_LOG_WARNING("Native_socket_stream_batch [" << *this << "]: "
                            "Native_socket_stream batch nb-read post-post-processing scan of slot [" << idx << "]: "
                            "illegal in-dgram with unexpected msg-type value [" << msg_type << "].");
@@ -1104,7 +1144,23 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
         if ((!no_hndls) || m_batch.result_payload_hndl(idx).null())
         {
           *err_code = error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE; // Our-protocol (high-level) graceful-close.
-          // (Keep any in-messages from prev iteration(s).  Do not m_batch.clear_used(orig_n_used).)
+          // (Keep any in-messages from prev iteration(s).  Do not cleanup_on_error().)
+
+          /* @todo (Low-priority) As you can see, RECEIVES_FINISHED_CANNOT_RECEIVE is not an exceptional error;
+           * it's a graceful-close.  Yet we drop out of the loop without looking behind it.  It's defensible in
+           * that there's no reason to suspect the other side is buggy; we see the graceful-close and get out;
+           * everything is Kosher, that we know of anyway.  The to-do would be to check the remaining slots: If there
+           * is something illegal there, cleanup_on_error() and emit *that* error instead of the nice graceful-close
+           * after all.  Otherwise, emit graceful-close (as we do now unconditionally). / We're quite careful to
+           * check slots for legality already, so in that sense doing so here as well would be consistent.  It is
+           * slightly different here, in that the per-slot checking up to now was necessary if only to test for
+           * graceful-close -- a totally legal thing that we must check for -- so it's probably easier to do the
+           * full verification logic rather than try to skip checks in an effort to be more-trusting of the
+           * other side.  (Perf-wise: this whole post-heuristic-check chunk of code, to begin with, only
+           * executes rarely.)  Whereas having reached graceful-close, the rest (in a legal situation) does not
+           * matter, so at least we're saving the extra logic/code in checking it anyway. / That said: If I'm
+           * having to defend it at length in English, just freakin' handling it in C++, instead, might be better. */
+
           FLOW_LOG_INFO("Native_socket_stream_batch [" << *this << "]: "
                         "Native_socket_stream batch nb-read post-post-processing scan of slot [" << idx << "]: "
                         "got NSS-protocol graceful-close.");
@@ -1112,7 +1168,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
         else
         {
           *err_code = error::Code::S_BLOB_RECEIVER_GOT_NON_BLOB;
-          m_batch.clear_used(orig_n_used); // Un-emit any in-messages from prev iteration(s): exceptional error.
+          cleanup_on_error(this, orig_n_used, n_used_post_read); // Un-emit/un-leak: exceptional error.
           FLOW_LOG_WARNING("Native_socket_stream_batch [" << *this << "]: "
                            "Native_socket_stream batch nb-read post-post-processing scan of slot [" << idx << "]: "
                            "illegal in-dgram contains only a native handle "
@@ -1126,7 +1182,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
       {
         // ...and indeed it does (low_graceful_close == true).
         *err_code = boost::asio::error::eof;
-        // (Keep any in-messages from prev iteration(s).  Do not m_batch.clear_used(orig_n_used).  Same as above.)
+        // (Keep any in-messages from prev iteration(s).  Do not cleanup_on_error().  Same as above.)
 
         /* Quick discussion: Why check low_graceful_close after high-level graceful-close + illegal
          * in-messages?  Answer: Simply, it would be emitted by opposing side after those out-messages; meaning
@@ -1192,8 +1248,18 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
 
         /* Per-Ruser-message stats: payload-size histogram and handle counting.
          * As foreshadowed before: we must skip the ones we opportunistically counted while doing the
-         * pre-check loop.  Hence begin at idx_past_user_msg (which must be >= n_used_pre_read).  This should
-         * get any (potentially 0) Ruser dgrams that weren't detected during pre-check. */
+         * pre-check loop; and count the rest.  We claim: the already-counted ones are exactly the ones now
+         * sitting at [n_used_pre_read, idx_past_user_msg); so we begin at idx_past_user_msg and go through the
+         * rest of Ruser.  Why is the claim true, even though .reuse_result_payloads() may have moved slots
+         * around?  Answer:
+         *   - The pre-check loop counted the leading run of user messages: slots
+         *     [n_used_pre_read, idx_past_user_msg), in their original positions.
+         *   - .reuse_result_payloads() keeps user messages in their original relative order; moreover it does
+         *     not touch anything before the *first* non-user message.  That first non-user message is at
+         *     idx_past_user_msg -- by definition of idx_past_user_msg.
+         *   - Hence the leading run stayed put, position by position.  Any user messages the pruning moved
+         *     forward -- the not-yet-counted ones -- landed right after it:
+         *     [idx_past_user_msg, n_used_post_prune). */
         for ( ; idx_past_user_msg != n_used_post_prune; ++idx_past_user_msg)
         {
           rcv_stats->m_histo_payload_sz.record_value(m_batch.result_payload_blob(idx_past_user_msg) - MSG_TYPE_SZ);
@@ -1202,7 +1268,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
             && (++rcv_stats->m_msgs_with_hndls);
         }
       } // if (rcv_stats && no catastrophic [non-graceful-close] error)
-    } // else if (!*err_code) && (n_used_pre_read > n_used_post_read) [But *e_c may have become truthy { inside }.]
+    } // else if (!*err_code) && (n_used_pre_read < n_used_post_read) [But *e_c may have become truthy { inside }.]
 
     /* Refer to the large-ish comment above regarding loop-stop conditions.  Basically it comes down to,
      * usually we stop; the only case where we don't is that: no error was detected,

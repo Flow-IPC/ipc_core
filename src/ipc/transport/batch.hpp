@@ -32,7 +32,7 @@ namespace ipc::transport
  * API `{Blob|Native_handle}_receiver::async_receive_*_batch()` concept) usable by any receiver
  * engaging in *emulated batching*.
  *
- * @see Native_handle_receiver concept doc header for an explantion of receive-batching (including what
+ * @see Native_handle_receiver concept doc header for an explanation of receive-batching (including what
  *      emulated batching is; and how `Msg_resource_t` template-param relates to things).
  *
  * That is it features the following APIs as of this writing:
@@ -49,7 +49,7 @@ namespace ipc::transport
  *       first use-case for this was an internal scenario in struc::sync_io::Channel, when batch-size is set to 1
  *       at compile-time.  Then a simplified code-path inside `Channel` stores a "batch" with `max_msg_count == 1`,
  *       then uses one-message-at-a-time receiving to target next_target_blob() and next_target_hndl() and always
- *       leaves `n_used() == 0`.  (A true-batch-handling code-path still relies on a batch being stored in that
+ *       leaves `n_used() == 0`.)  (A true-batch-handling code-path still relies on a batch being stored in that
  *       data structure but uses actual batched-receiving on it.)
  *
  * ### Why are `next_target_*()` and emulate_result() (and `idx >= n_used()`) public? ###
@@ -251,7 +251,7 @@ private:
     /// The target/result containing the # of bytes successfully read into area #m_buf_seq for this slot.
     size_t m_result_n_rcvd;
 
-    /// Constructors/destructor.
+    // Constructors/destructor.
 
     /**
      * Ctor.
@@ -317,7 +317,7 @@ void Generic_msg_batch_in<Msg_resource_t, NO_HNDLS>::prepare_target_payload
     mdt.m_buf_seq = target_blob;
     mdt.m_resource = std::move(msg_resource);
   }
-  else // if (idx >= m_mdts.size()) && not -1
+  else // if (idx >= m_batch.size()) && not -1
   {
     assert(false && "prepare_target_payload(x) must either replace an existing slot x or add slot via `x = -1`.");
   }
@@ -420,7 +420,7 @@ void Generic_msg_batch_in<Msg_resource_t, NO_HNDLS>::to_ostream(std::ostream* os
   auto& os = *os_ptr;
   os << "Gen[slots-total/rdy/rcvd [" << m_batch.size() << '/' << m_batch.capacity() << '/' << m_n_used << "] "
         "blob-sz[" << target_payload_size() << "]]@" << this;
-  // We try to keep the various Msg_batch_in-ish variants have similar output format for easy log searching.
+  // We try to keep the various Msg_batch_in-ish variants to a similar output format for easy log searching.
 }
 
 template<typename Msg_resource_t, bool NO_HNDLS>

@@ -24,7 +24,6 @@
 #include <flow/error/error.hpp>
 #include <boost/array.hpp>
 #include <string>
-#include <stdexcept>
 #include <sys/socket.h>
 
 namespace ipc::transport::asio_local_stream_socket

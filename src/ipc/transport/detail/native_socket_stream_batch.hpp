@@ -19,7 +19,7 @@
 #pragma once
 
 #include "ipc/transport/asio_local_stream_socket_fwd.hpp"
-#include "ipc/transport/detail/native_socket_stream_batch.hpp"
+#include "ipc/transport/native_socket_stream_batch.hpp"
 #include "ipc/transport/transport_fwd.hpp"
 #include <flow/log/log.hpp>
 #include <utility>
@@ -35,7 +35,7 @@ namespace ipc::transport
  * by at least sync_io::Native_socket_stream impl.  The background is briefly explained in the impl section of
  * Native_socket_stream_msg_batch_in doc header.
  *
- * @tparam Server_session_t
+ * @tparam Base_t
  *         The type of object whose specific `private` API to expose:
  *         A concrete instance of class template Native_socket_stream_msg_batch_in.
  */
@@ -55,7 +55,7 @@ struct Native_socket_stream_msg_batch_in_privileged
   // Methods.
 
   /**
-   * Forwards to same-named (private) priviliged-API (private) of #Base.
+   * Forwards to same-named (private) privileged-API of #Base.
    * @tparam Args
    *        See above.
    * @param args
