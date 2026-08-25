@@ -34,7 +34,12 @@ const Shared_name Bipc_mq_handle::S_RESOURCE_TYPE_ID = Shared_name::ct("bipcQ");
 
 // Implementations.
 
-Bipc_mq_handle::Bipc_mq_handle() = default;
+Bipc_mq_handle::Bipc_mq_handle() :
+  m_interrupting_snd(false), // (Not algorithmically needed as of this writing, but avoid some sanitizer complaints.)
+  m_interrupting_rcv(false)  // (Ditto.  E.g., swap() through clang's UBSAN => complains it's uninitialized.)
+{
+  // Right.
+}
 
 template<typename Mode_tag>
 Bipc_mq_handle::Bipc_mq_handle(Mode_tag mode_tag, flow::log::Logger* logger_ptr, const Shared_name& absolute_name_arg,
