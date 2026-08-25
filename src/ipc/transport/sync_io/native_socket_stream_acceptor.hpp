@@ -166,7 +166,8 @@ public:
    *        See #Async_io_obj API.
    * @param on_done_func
    *        See #Async_io_obj API.
-   * @return `true` if op started; `false` if one is already in progress, and therefore this one is ignored (no-op).
+   * @return `true` if op started; `false` if one is already in progress, or start_accept_ops() has not yet been
+   *         invoked, and therefore this call is ignored (no-op).
    */
   template<typename Task_err>
   bool async_accept(Peer* target_peer, Task_err&& on_done_func);
@@ -198,7 +199,7 @@ private:
   flow::util::Task_engine m_ev_hndl_task_engine_unused;
 
   /**
-   * Read-end of IPC-pipe used by `*this` user do detect that an acceptability-wait has completed.  The signal byte
+   * Read-end of IPC-pipe used by `*this` user to detect that an acceptability-wait has completed.  The signal byte
    * is read out of #m_ready_reader, making it empty again (the steady-state before the next time acceptability-wait
    * begins, and a byte is written to it making it non-empty).
    *
@@ -247,6 +248,14 @@ template<typename Task_err>
 bool Native_socket_stream_acceptor::async_accept(Peer* target_peer, Task_err&& on_done_func)
 {
   using util::Task;
+
+  if (m_ev_wait_func.empty())
+  {
+    FLOW_LOG_WARNING("Acceptor [" << *this << "]: Async-accept requested, but start_accept_ops() has not been "
+                     "invoked.  Probably a user bug, but it is not for us to judge.  Ignoring.");
+    return false;
+  }
+  // else
 
   if (!m_on_done_func_or_empty.empty())
   {

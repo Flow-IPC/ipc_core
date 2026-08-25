@@ -620,7 +620,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
       FLOW_LOG_WARNING("Native_socket_stream_batch [" << *this << "]: "
                        "Native_socket_stream batch nb-read of protocol-negotiation dgram: "
                        "illegal too-short in-dgram.");
-      hndl_or_null.release(); // If there's also a handle in there for some reason, don't leak it.
+      hndl_or_null.close(); // If there's also a handle in there for some reason, don't leak it.
       return true;
     }
     // else if (n_rcvd == MSG_TYPE_SZ):
@@ -632,7 +632,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
                        "Expecting protocol-negotiation (first) in-dgram "
                        "to contain *only* a meta-blob: but received Native_handle is non-null which is "
                        "unexpected.");
-      hndl_or_null.release(); // Let's not leak it.
+      hndl_or_null.close(); // Let's not leak it.
 
   #ifndef NDEBUG
       const bool ok =
@@ -824,12 +824,12 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
 
       /* Main thing is undo .n_used() having potentially advanced in previous iterations.  Thus any slots we would
        * have changed are meaningless again => same state as pre-us state.  The one thing this leaves is that
-       * we've received, potentially, native-handle copies; these would leak.  Un-leak them via .release() (closes
-       * handle).  Do remember that, while prev iterations may have produced leaked-handles, this iteration's
+       * we've received, potentially, native-handle copies; these would leak.  Un-leak them via .close().
+       * Do remember that, while prev iterations may have produced leaked-handles, this iteration's
        * m_batch.nb_read() may well have done the same.  Point being: un-leak anything from prev iterations and
        * up to where the above .nb_read() populated: [orig_n_used, n_used_post_read).  The potential
        * pruning step (reuse_result_payloads()) below is irrelevant; it's an error => we emit nothing, so we
-       * .release() every slot's handle from any .nb_read().
+       * .close() every slot's handle from any .nb_read().
        *
        * (What about un-leaking handles in messages discarded by reuse_result_payloads() *without* a subsequent
        * error being detected in that same iteration?  We won't be called -- no error -- so who'll unleak them?
@@ -839,8 +839,11 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
       for (auto idx = orig_n_used; idx != n_used_post_read; ++idx)
       {
         /* If there's a handle in there, un-leak it.
-         * (Stored value in m_batch is not touched; but it remains in [n_used(), ...) <=> meaningless.) */
-        batch.result_payload_hndl(idx).release();
+         * (Stored value in m_batch is not touched; but it remains in [n_used(), ...) <=> meaningless.
+         * @todo For cleanliness/defensiveness it would be good to also nullify it; m_batch lacks the required
+         * receiver-engine-facing API at the moment; could add it (see to-do on
+         * asio_local_stream_socket::Msg_batch_in::result_payload_hndl()).) */
+        batch.result_payload_hndl(idx).close();
       }
       batch.clear_used(orig_n_used);
     }; // auto cleanup_on_error =

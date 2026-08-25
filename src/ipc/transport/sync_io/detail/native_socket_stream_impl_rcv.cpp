@@ -18,6 +18,7 @@
 /// @file
 #include "ipc/transport/sync_io/detail/native_socket_stream_impl.hpp"
 #include "ipc/transport/native_socket_stream.hpp"
+#include <boost/make_shared.hpp>
 
 namespace ipc::transport::sync_io
 {
@@ -207,15 +208,30 @@ void Native_socket_stream_impl::async_receive_core(Native_handle* target_hndl_or
     }
   } // else // if constexpr(!USE_OS_DGRAM_SUPPORT)
 
+  /* Finalize result, w/r/t *m_target_hndl_ptr (user expects the Native_handle -- null or otherwise -- to be there
+   * on success) and m_own_hndl (the auto-closing Native_handle storage we use until this moment).  Namely:
+   *   - Success (no error): Release from m_own_hndl; place raw handle value into *m_target_hndl_ptr; it's the
+   *     user's problem now.
+   *   - Error: Just keep it in m_own_hndl.  If m_rcv_user_request is nullified (op finished), handle gets auto-closed
+   *     instead of leaking.  If op continues (would-block), then m_own_hndl should be null anyway; but in any
+   *     case it's still stored and won't be leaked.
+   * Attn!  Result can also be emitted through on_done_func(), so this has to be done there too. */
+  if ((!*sync_err_code) && m_rcv_user_request->m_target_hndl_ptr)
+  {
+    *m_rcv_user_request->m_target_hndl_ptr = util::disowned_native_handle(std::move(m_rcv_user_request->m_own_hndl));
+    assert(m_rcv_user_request->m_own_hndl.get().null() && "Move-from Owned_nh=>Nh should have nullified the former.");
+  }
+
   if (m_rcv_user_request->m_on_done_func.empty() // Would-block ends op, if no on-done func provided (as advertised).
       || (*sync_err_code != error::Code::S_SYNC_IO_WOULD_BLOCK)) // Success or any other error always ends op.
   {
     FLOW_LOG_TRACE("Async-request completed synchronously (result "
                    "[" << *sync_err_code << "] [" << sync_err_code->message() << "]); emitting synchronously and "
                    "disregarding handler.");
-    m_rcv_user_request.reset(); // Might be a no-op.
+    m_rcv_user_request.reset();
   }
   // else { Other stuff logged enough. }
+
 } // Native_socket_stream_impl::async_receive_core()
 
 bool Native_socket_stream_impl::idle_timer_run(util::Fine_duration timeout)
@@ -375,6 +391,7 @@ void Native_socket_stream_impl::rcv_read_msg_from_pkt_stream(bool assume_would_b
 {
   using util::Task;
   using util::Blob_mutable;
+  using util::Own_native_handle;
   using flow::util::Lock_guard;
 
   assert(Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT
@@ -395,7 +412,9 @@ void Native_socket_stream_impl::rcv_read_msg_from_pkt_stream(bool assume_would_b
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: Async-receive: "
                  "Trying nb-read of in-dgram synchronously; proto-negotiating? = [" << proto_negotiating << "].");
 
-  Native_handle target_hndl; // Target this even if target_hndl_or_null is null (to check for a certain error).
+  /* Target this even if target_hndl_or_null is null (to check for a certain error).
+   * Prevent leaks by wrapping the raw handle in this auto-closer. */
+  Own_native_handle target_hndl;
   const auto n_rcvd_or_zero
     = rcv_nb_read_low_lvl_payload_from_pkt_stream
         (&target_hndl,
@@ -403,13 +422,14 @@ void Native_socket_stream_impl::rcv_read_msg_from_pkt_stream(bool assume_would_b
          proto_negotiating ? Blob_mutable{}
                            : m_rcv_user_request->m_target_meta_blob,
          &m_rcv_pending_err_code);
+
   if (!m_rcv_pending_err_code)
   {
     if (n_rcvd_or_zero != 0)
     {
       FLOW_LOG_TRACE("Got in-dgram.");
 
-      rcv_on_dgram(target_hndl, n_rcvd_or_zero, sync_err_code, sync_sz);
+      rcv_on_dgram(std::move(target_hndl), n_rcvd_or_zero, sync_err_code, sync_sz);
       return;
     }
     // else
@@ -472,7 +492,7 @@ void Native_socket_stream_impl::rcv_read_msg_from_pkt_stream(bool assume_would_b
   *sync_sz = 0;
 } // Native_socket_stream_impl::rcv_read_msg_from_pkt_stream()
 
-void Native_socket_stream_impl::rcv_on_dgram(Native_handle hndl_or_null, size_t n_rcvd,
+void Native_socket_stream_impl::rcv_on_dgram(util::Own_native_handle&& hndl_or_null, size_t n_rcvd,
                                              Error_code* sync_err_code, size_t* sync_sz)
 {
   using util::Blob_mutable;
@@ -488,8 +508,9 @@ void Native_socket_stream_impl::rcv_on_dgram(Native_handle hndl_or_null, size_t 
 
   bool proto_negotiating
     = m_protocol_negotiator.negotiated_proto_ver() == Protocol_negotiator::S_VER_UNKNOWN;
+  const bool hndl_is_null = hndl_or_null.get().null();
 
-  if (proto_negotiating && (!hndl_or_null.null()))
+  if (proto_negotiating && (!hndl_is_null))
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: Expecting protocol-negotiation (first) in-dgram "
                      "to contain *only* a meta-blob: but received Native_handle is non-null which is "
@@ -502,14 +523,14 @@ void Native_socket_stream_impl::rcv_on_dgram(Native_handle hndl_or_null, size_t 
     assert(m_rcv_pending_err_code
            && "Protocol_negotiator should have emitted error given intentionally bad version.");
   }
-  else if ((!hndl_or_null.null()) && (!m_rcv_user_request->m_target_hndl_ptr))
+  else if ((!hndl_is_null) && (!m_rcv_user_request->m_target_hndl_ptr))
        // && (!proto_negotiating)
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: User async-receive request for "
                      "*only* a meta-blob: but received Native_handle is non-null which is "
                      "unexpected; emitting error via completion handler (or via sync-args).");
     m_rcv_pending_err_code = error::Code::S_BLOB_RECEIVER_GOT_NON_BLOB;
-  } // if (hndl_or_null && (!m_rcv_user_request->m_target_hndl_ptr))
+  } // if (!hndl_is_null && (!m_rcv_user_request->m_target_hndl_ptr))
   else // if (no prob with hndl_or_null or m_target_hndl_ptr)
   {
     // Finalize the user's Native_handle target variable if applicable.
@@ -517,14 +538,14 @@ void Native_socket_stream_impl::rcv_on_dgram(Native_handle hndl_or_null, size_t 
         // If proto_negotiating, hndl_or_null is null; and anyway m_target_hndl_ptr is not yet in play.
         && (!proto_negotiating))
     {
-      *m_rcv_user_request->m_target_hndl_ptr = hndl_or_null;
+      m_rcv_user_request->m_own_hndl = std::move(hndl_or_null);
     }
 
     /* Decode the situation, which mainly flows from m_rcv_target_meta_length, though despite the name in
      * our (dgram-based) case it is actually:
      *   - (if proto_negotiating) Protocol_negotiator-consumed value; or
      *   - (otherwise) basically an enum indicating message type.
-     * (Re-recommend here to read ### Protocol with `Protocol_pkt_stream` (OS maintains meessage boundaries) ###
+     * (Re-recommend here to read ### Protocol with `Protocol_pkt_stream` (OS maintains message boundaries) ###
      * in class doc header.)
      *
      * In any case m_rcv_target_meta_length must have been fully received; so check that first. */
@@ -599,11 +620,11 @@ void Native_socket_stream_impl::rcv_on_dgram(Native_handle hndl_or_null, size_t 
             m_rcv_stats.m_total_bytes += *sync_sz;
             m_rcv_stats.m_total_low_lvl_bytes += n_rcvd;
             m_rcv_stats.m_histo_payload_sz.record_value(*sync_sz);
-            if (!hndl_or_null.null()) { ++m_rcv_stats.m_msgs_with_hndls; }
+            if (!hndl_is_null) { ++m_rcv_stats.m_msgs_with_hndls; }
             return;
           }
           // else
-          if (no_data && (!hndl_or_null.null()))
+          if (no_data && (!hndl_is_null))
           {
             sync_err_code->clear();
             *sync_sz = 0;
@@ -620,7 +641,7 @@ void Native_socket_stream_impl::rcv_on_dgram(Native_handle hndl_or_null, size_t 
             ++m_rcv_stats.m_msgs_with_hndls; // Always a handle here (that's the point).
             return;
           }
-          // else if (no_data && hndl_or_null.null()):
+          // else if (no_data && hndl_is_null):
 
           // Once per connection at most, so INFO log level is OK.
           FLOW_LOG_INFO("Socket stream [" << *this << "]: Received in-dgram: Graceful-close-of-incoming-pipe "
@@ -632,7 +653,7 @@ void Native_socket_stream_impl::rcv_on_dgram(Native_handle hndl_or_null, size_t 
         } // if (m_rcv_target_meta_length == 0)
         else if (m_rcv_target_meta_length == Native_socket_stream_cfg::S_PING_SENTINEL)
         {
-          if (no_data)
+          if (no_data && hndl_is_null)
           {
             FLOW_LOG_TRACE("Socket stream [" << *this << "]: Received in-dgram; header "
                            "contains special value indicating a ping.  Ignoring other than registering non-idle "
@@ -645,11 +666,12 @@ void Native_socket_stream_impl::rcv_on_dgram(Native_handle hndl_or_null, size_t 
             rcv_read_msg_from_pkt_stream(false, sync_err_code, sync_sz);
             return;
           }
-          // else if (!no_data):
+          // else if (!no_data) || (!hndl_is_null):
           FLOW_LOG_WARNING("Socket stream [" << *this << "]: Received in-dgram contains invalid header (opposing "
                            "side misbehaved/bug?): it contains PING_SENTINEL, but a ping shall contain no "
-                           "further data, yet we received more bytes "
-                           "([" << (n_rcvd - sizeof(m_rcv_target_meta_length)) << "] on top of header); "
+                           "further data and no native handle, yet we received either more bytes "
+                           "([" << (n_rcvd - sizeof(m_rcv_target_meta_length)) << "] on top of header) or "
+                           "a handle (got one? = [" << (!hndl_is_null) << "]) or both; "
                            "emitting error via completion handler (or via sync-args).");
           m_rcv_pending_err_code = error::Code::S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER;
         } // else if (m_rcv_target_meta_length == PING)
@@ -730,6 +752,17 @@ void Native_socket_stream_impl::rcv_on_ev_peer_socket_pkt_stream_readable_or_err
 
   // Prevent stepping on our own toes: move/clear it first / invoke handler second.
   const auto on_done_func = std::move(m_rcv_user_request->m_on_done_func);
+
+  /* Finalize result, w/r/t *m_target_hndl_ptr and m_own_hndl.  See async_receive_core() near the end; we are
+   * doing the same thing but for the asynchronous path (where the original async_receive_*() did not get
+   * an in-message synchronously). */
+  if ((!sync_err_code) && m_rcv_user_request->m_target_hndl_ptr)
+  {
+    *m_rcv_user_request->m_target_hndl_ptr = util::disowned_native_handle(std::move(m_rcv_user_request->m_own_hndl));
+    assert(m_rcv_user_request->m_own_hndl.get().null() && "Move-from Owned_nh=>Nh should have nullified the former.");
+  }
+
+  // Op finished.
   m_rcv_user_request.reset();
 
   assert((!on_done_func.empty())
@@ -743,6 +776,7 @@ void Native_socket_stream_impl::rcv_on_ev_peer_socket_pkt_stream_readable_or_err
 void Native_socket_stream_impl::rcv_read_msg_from_byte_stream(bool assume_would_block,
                                                               Error_code* sync_err_code, size_t* sync_sz)
 {
+  using util::Own_native_handle;
   using util::Task;
   using util::Blob_mutable;
   using flow::util::Lock_guard;
@@ -762,7 +796,9 @@ void Native_socket_stream_impl::rcv_read_msg_from_byte_stream(bool assume_would_
   }
   // else:
 
-  Native_handle target_hndl; // Target this even if target_hndl_or_null is null (to check for a certain error).
+  /* Target this even if target_hndl_or_null is null (to check for a certain error).
+   * Prevent leaks by wrapping the raw handle in this auto-closer. */
+  Own_native_handle target_hndl;
   const auto n_rcvd_or_zero
     = rcv_nb_read_low_lvl_payload_from_byte_stream(&target_hndl,
                                                    Blob_mutable{&m_rcv_target_meta_length,
@@ -773,7 +809,7 @@ void Native_socket_stream_impl::rcv_read_msg_from_byte_stream(bool assume_would_
     if (n_rcvd_or_zero != 0)
     {
       FLOW_LOG_TRACE("Got some or all of payload 1.");
-      rcv_on_handle_finalized(target_hndl, n_rcvd_or_zero, sync_err_code, sync_sz);
+      rcv_on_handle_finalized(std::move(target_hndl), n_rcvd_or_zero, sync_err_code, sync_sz);
       return;
     }
     // else
@@ -835,9 +871,10 @@ void Native_socket_stream_impl::rcv_read_msg_from_byte_stream(bool assume_would_
   *sync_sz = 0;
 } // Native_socket_stream_impl::rcv_read_msg_from_byte_stream()
 
-void Native_socket_stream_impl::rcv_on_handle_finalized(Native_handle hndl_or_null, size_t n_rcvd,
+void Native_socket_stream_impl::rcv_on_handle_finalized(util::Own_native_handle&& hndl_or_null, size_t n_rcvd,
                                                         Error_code* sync_err_code, size_t* sync_sz)
 {
+  using util::Own_native_handle;
   using util::Blob_mutable;
   using util::Task;
   using flow::util::Lock_guard;
@@ -851,8 +888,9 @@ void Native_socket_stream_impl::rcv_on_handle_finalized(Native_handle hndl_or_nu
 
   const bool proto_negotiating
     = m_protocol_negotiator.negotiated_proto_ver() == Protocol_negotiator::S_VER_UNKNOWN;
+  const bool hndl_is_null = hndl_or_null.get().null();
 
-  if (proto_negotiating && (!hndl_or_null.null()))
+  if (proto_negotiating && (!hndl_is_null))
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: Expecting protocol-negotiation (first) in-message "
                      "to contain *only* a meta-blob: but received Native_handle is non-null which is "
@@ -865,14 +903,14 @@ void Native_socket_stream_impl::rcv_on_handle_finalized(Native_handle hndl_or_nu
     assert(m_rcv_pending_err_code
            && "Protocol_negotiator should have emitted error given intentionally bad version.");
   }
-  else if ((!hndl_or_null.null()) && (!m_rcv_user_request->m_target_hndl_ptr))
+  else if ((!hndl_is_null) && (!m_rcv_user_request->m_target_hndl_ptr))
        // && (!proto_negotiating)
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: User async-receive request for "
                      "*only* a meta-blob: but received Native_handle is non-null which is "
                      "unexpected; emitting error via completion handler (or via sync-args).");
     m_rcv_pending_err_code = error::Code::S_BLOB_RECEIVER_GOT_NON_BLOB;
-  } // if (hndl_or_null && (!m_rcv_user_request->m_target_hndl_ptr))
+  } // if (!hndl_is_null && (!m_rcv_user_request->m_target_hndl_ptr))
   else // if (no prob with hndl_or_null or m_target_hndl_ptr)
   {
     // Finalize the user's Native_handle target variable if applicable.
@@ -880,7 +918,7 @@ void Native_socket_stream_impl::rcv_on_handle_finalized(Native_handle hndl_or_nu
         // If proto_negotiating, hndl_or_null is null; and anyway m_target_hndl_ptr is not yet in play.
         && (!proto_negotiating))
     {
-      *m_rcv_user_request->m_target_hndl_ptr = hndl_or_null;
+      m_rcv_user_request->m_own_hndl = std::move(hndl_or_null);
     }
 
     if (n_rcvd == sizeof(m_rcv_target_meta_length))
@@ -913,18 +951,37 @@ void Native_socket_stream_impl::rcv_on_handle_finalized(Native_handle hndl_or_nu
       assert(m_rcv_resume_incomplete_msg_processing_func.empty()
              && "This should have been nullified at the start of the async-receive.");
 
+      /* hndl_or_null's at-entry value may or may not have been moved from hndl_or_null arg into m_own_hndl.
+       * We are just trying to save the what's-been-read-so-far state here -- nothing more complex than that -- for
+       * later replaying.  W/r/t hndl_or_null *inside* the lambda, that state is: we had successfully received
+       * <at-entry value of hndl_or_null in-arg>.  Easy enough, except we may have moved it into m_own_hndl above.
+       * Point is, this is Own_native_handle (a unique_resource), and m_own_hndl is always null to start;
+       * thus the value we want is either null (from either place), or non-null in hndl_or_null still, or non-null
+       * in m_own_hndl (if moved there).  So despite this annoying paragraph, it's just a simple ternary.
+       *
+       * The other complication is one cannot capture uncopyable objects (even when, as here, they're not going to
+       * be copied), as commonly seen with `unique_ptr`s.  So we'll have to do the temp-shared_ptr-capture dance.
+       * (Don't try to store .release() in the captures, as that can leak again.) */
+
+      if (hndl_or_null.get().null())
+      {
+        hndl_or_null = std::move(m_rcv_user_request->m_own_hndl); // As noted: may well still be null.
+      }
       m_rcv_resume_incomplete_msg_processing_func
-        = [this, hndl_or_null,
+        = [this,
+           owned_hndl_or_null = boost::make_shared<Own_native_handle>(std::move(hndl_or_null)),
            target_meta_length_incomplete = m_rcv_target_meta_length,
            n_rcvd]
             (Error_code* err_code, size_t* sz)
       {
-        rcv_resume_incomplete_msg_processing(err_code, sz, hndl_or_null, target_meta_length_incomplete, n_rcvd, {});
+        rcv_resume_incomplete_msg_processing(err_code, sz, std::move(*owned_hndl_or_null),
+                                             target_meta_length_incomplete, n_rcvd, {});
       };
+      assert(hndl_or_null.get().null() && "The move-from should have nullified the local hndl_or_null.");
 
       return;
     }
-    // else if (m_rcv_user_request->m_on_done_func.empty()):
+    // else if (!m_rcv_user_request->m_on_done_func.empty()):
 
     /* Mainstream case: Await readability; then resume once we think socket readable.  So
      * much like in rcv_read_msg_from_byte_stream() (keeping comments light): */
@@ -981,7 +1038,12 @@ void Native_socket_stream_impl::rcv_on_head_payload(Error_code* sync_err_code, s
   if (proto_negotiating)
   {
     /* Protocol_negotiator handles everything (invalid value, incompatible range...); we just know
-     * the encoding is to shove the version number into what is normally the length field. */
+     * the encoding is to shove the version number into what is normally the length field.
+     *
+     * (rcv_on_handle_finalized() validated, already, that there is no extraneous native-handle in the
+     * payload; it did so, and we don't have to, because in proto_negotiating-mode getting 1 byte is sufficient
+     * to execute that validation; so we greedily do so up there.  Cf.: !proto_negotiating => we have to wait
+     * for the whole payload; hence hndl_is_null is computed/verified below as appropriate.) */
 #ifndef NDEBUG
     const bool ok =
 #endif
@@ -1013,72 +1075,85 @@ void Native_socket_stream_impl::rcv_on_head_payload(Error_code* sync_err_code, s
 
   if (m_rcv_target_meta_length == Native_socket_stream_cfg::S_PING_SENTINEL)
   {
-    FLOW_LOG_TRACE("Socket stream [" << *this << "]: Received all of payload 1; length prefix "
-                   "contains special value indicating a ping.  Ignoring other than registering non-idle "
-                   "activity.  Proceeding with the next message read.");
-
-    rcv_not_idle(); // Register activity <= end of complete message, no error.
-
-    ++m_rcv_stats.m_auto_pings;
-    m_rcv_stats.m_total_low_lvl_bytes += sizeof(m_rcv_target_meta_length);
-    rcv_read_msg_from_byte_stream(false, sync_err_code, sync_sz);
-    return;
-  }
-  // else
-
-  const auto user_target_size = m_rcv_user_request->m_target_meta_blob.size();
-  if (m_rcv_target_meta_length != 0) // && (not ping)
-  {
-    if (m_rcv_target_meta_length <= user_target_size)
+    if (m_rcv_user_request->m_own_hndl.get().null())
     {
       FLOW_LOG_TRACE("Socket stream [" << *this << "]: Received all of payload 1; length prefix "
-                     "[" << m_rcv_target_meta_length <<"] is positive (and not indicative of ping).  "
-                     "Reading payload 2.");
-      rcv_read_blob(Rcv_msg_state::S_META_BLOB_PAYLOAD,
-                    Blob_mutable{m_rcv_user_request->m_target_meta_blob.data(),
-                                 size_t{m_rcv_target_meta_length}},
-                    sync_err_code, sync_sz);
-      return;
-    }
-    // else if (m_rcv_target_meta_length > user_target_size):
-
-    FLOW_LOG_WARNING("Received all of payload 1; length prefix "
-                     "[" << m_rcv_target_meta_length <<"] is positive (and not indicative of ping); "
-                     "however it exceeds user target blob size [" << user_target_size << "] and would "
-                     "overflow.  Treating similarly to a graceful-close but with a bad error code and "
-                     "this warning.  Will not proceed with any further low-level receiving; will invoke "
-                     "handler (failure).");
-    m_rcv_pending_err_code = error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE;
-  }
-  else // if (m_rcv_target_meta_length == 0)
-  {
-    if (m_rcv_user_request->m_target_hndl_ptr && (!m_rcv_user_request->m_target_hndl_ptr->null()))
-    {
-      FLOW_LOG_TRACE("Socket stream [" << *this << "]: Received all of payload 1; length 0 + non-null handle => "
-                     "handle received with no meta-blob.  Will register non-idle activity; "
-                     "and invoke handler (success).");
-      // m_rcv_pending_err_code remains falsy.
+                     "contains special value indicating a ping.  Ignoring other than registering non-idle "
+                     "activity.  Proceeding with the next message read.");
 
       rcv_not_idle(); // Register activity <= end of complete message, no error.
 
-      ++m_rcv_stats.m_total_msgs;
+      ++m_rcv_stats.m_auto_pings;
       m_rcv_stats.m_total_low_lvl_bytes += sizeof(m_rcv_target_meta_length);
-      m_rcv_stats.m_histo_payload_sz.record_value(0); // Handle-only: 0-byte user payload.
-      ++m_rcv_stats.m_msgs_with_hndls; // Always a handle here (that's the point).
+      rcv_read_msg_from_byte_stream(false, sync_err_code, sync_sz);
+      return;
     }
-    else
+    // else if (!hndl_is_null) + PING:
+
+    FLOW_LOG_WARNING("Socket stream [" << *this << "]: Received all of payload 1; length prefix "
+                     "contains special value indicating a ping; "
+                     "however it also contains a native handle which is a protocol violation.  "
+                     "Treating similarly to a graceful-close but with a bad error code and "
+                     "this warning.  Will not proceed with any further low-level receiving; will invoke "
+                     "handler (failure).");
+    m_rcv_pending_err_code = error::Code::S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER;
+  }
+  else // if (m_rcv_target_meta_length != PING)
+  {
+    const auto user_target_size = m_rcv_user_request->m_target_meta_blob.size();
+    if (m_rcv_target_meta_length != 0) // && (not ping)
     {
-      // Once per connection at most, so INFO log level is OK.
-      FLOW_LOG_INFO("Socket stream [" << *this << "]: User message received: Graceful-close-of-incoming-pipe "
-                    "message.  Will not proceed with any further low-level receiving.  "
-                    "Will invoke handler (graceful-close error).");
-      m_rcv_pending_err_code = error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE;
+      if (m_rcv_target_meta_length <= user_target_size)
+      {
+        FLOW_LOG_TRACE("Socket stream [" << *this << "]: Received all of payload 1; length prefix "
+                       "[" << m_rcv_target_meta_length <<"] is positive (and not indicative of ping).  "
+                       "Reading payload 2.");
+        rcv_read_blob(Rcv_msg_state::S_META_BLOB_PAYLOAD,
+                      Blob_mutable{m_rcv_user_request->m_target_meta_blob.data(),
+                                   size_t{m_rcv_target_meta_length}},
+                      sync_err_code, sync_sz);
+        return;
+      }
+      // else if (m_rcv_target_meta_length > user_target_size):
 
-      m_rcv_stats.m_total_low_lvl_bytes += sizeof(m_rcv_target_meta_length);
-    }
-  } // else if (m_rcv_target_meta_length == 0)
+      FLOW_LOG_WARNING("Socket stream [" << *this << "]: Received all of payload 1; length prefix "
+                       "[" << m_rcv_target_meta_length <<"] is positive (and not indicative of ping); "
+                       "however it exceeds user target blob size [" << user_target_size << "] and would "
+                       "overflow.  Treating similarly to a graceful-close but with a bad error code and "
+                       "this warning.  Will not proceed with any further low-level receiving; will invoke "
+                       "handler (failure).");
+      m_rcv_pending_err_code = error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE;
+    } // else if (m_rcv_target_meta_length != 0) (also not ping)
+    else // if (m_rcv_target_meta_length == 0)
+    {
+      if (!m_rcv_user_request->m_own_hndl.get().null())
+      {
+        FLOW_LOG_TRACE("Socket stream [" << *this << "]: Received all of payload 1; length 0 + non-null handle => "
+                       "handle received with no meta-blob.  Will register non-idle activity; "
+                       "and invoke handler (success).");
+        // m_rcv_pending_err_code remains falsy.
 
-  *sync_err_code = m_rcv_pending_err_code; // Truthy (graceful-close) or falsy (got handle + no meta-blob).
+        rcv_not_idle(); // Register activity <= end of complete message, no error.
+
+        ++m_rcv_stats.m_total_msgs;
+        m_rcv_stats.m_total_low_lvl_bytes += sizeof(m_rcv_target_meta_length);
+        m_rcv_stats.m_histo_payload_sz.record_value(0); // Handle-only: 0-byte user payload.
+        ++m_rcv_stats.m_msgs_with_hndls; // Always a handle here (that's the point).
+      }
+      else
+      {
+        // Once per connection at most, so INFO log level is OK.
+        FLOW_LOG_INFO("Socket stream [" << *this << "]: User message received: Graceful-close-of-incoming-pipe "
+                      "message.  Will not proceed with any further low-level receiving.  "
+                      "Will invoke handler (graceful-close error).");
+        m_rcv_pending_err_code = error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE;
+
+        m_rcv_stats.m_total_low_lvl_bytes += sizeof(m_rcv_target_meta_length);
+      }
+    } // else // if (m_rcv_target_meta_length == 0)
+  } // else // if (m_rcv_target_meta_length != PING)
+
+  *sync_err_code = m_rcv_pending_err_code; // Truthy (graceful-close/bad-ping/overflow) or falsy (handle sans blob).
   *sync_sz = 0;
 } // Native_socket_stream_impl::rcv_on_head_payload()
 
@@ -1158,6 +1233,17 @@ void Native_socket_stream_impl::rcv_on_ev_peer_socket_byte_stream_readable_or_er
 
   // Prevent stepping on our own toes: move/clear it first / invoke handler second.
   const auto on_done_func = std::move(m_rcv_user_request->m_on_done_func);
+
+  /* Finalize result, w/r/t *m_target_hndl_ptr and m_own_hndl.  See async_receive_core() near the end; we are
+   * doing the same thing but for the asynchronous path (where the original async_receive_*() did not get
+   * an in-message synchronously). */
+  if ((!sync_err_code) && m_rcv_user_request->m_target_hndl_ptr)
+  {
+    *m_rcv_user_request->m_target_hndl_ptr = util::disowned_native_handle(std::move(m_rcv_user_request->m_own_hndl));
+    assert(m_rcv_user_request->m_own_hndl.get().null() && "Move-from Owned_nh=>Nh should have nullified the former.");
+  }
+
+  // Op finished.
   m_rcv_user_request.reset();
 
   assert((!on_done_func.empty())
@@ -1171,6 +1257,7 @@ void Native_socket_stream_impl::rcv_on_ev_peer_socket_byte_stream_readable_or_er
 void Native_socket_stream_impl::rcv_read_blob(Rcv_msg_state msg_state, const util::Blob_mutable& target_blob,
                                               Error_code* sync_err_code, size_t* sync_sz)
 {
+  using util::Own_native_handle;
   using util::Task;
   using util::Blob_const;
   using flow::util::Lock_guard;
@@ -1210,8 +1297,10 @@ void Native_socket_stream_impl::rcv_read_blob(Rcv_msg_state msg_state, const uti
         m_rcv_stats.m_total_bytes += len;
         m_rcv_stats.m_total_low_lvl_bytes += (sizeof(m_rcv_target_meta_length) + len);
         m_rcv_stats.m_histo_payload_sz.record_value(len);
-        const auto hndl_ptr = m_rcv_user_request->m_target_hndl_ptr;
-        if (hndl_ptr && (!hndl_ptr->null())) { ++m_rcv_stats.m_msgs_with_hndls; }
+        if (!m_rcv_user_request->m_own_hndl.get().null())
+        {
+          ++m_rcv_stats.m_msgs_with_hndls;
+        }
         return;
       }
       case Rcv_msg_state::S_MSG_START:
@@ -1254,17 +1343,20 @@ void Native_socket_stream_impl::rcv_read_blob(Rcv_msg_state msg_state, const uti
         // We stopped in the middle of reading into m_rcv_target_meta_length.
         m_rcv_resume_incomplete_msg_processing_func
           = [this,
-             hndl_or_null = m_rcv_user_request->m_target_hndl_ptr
-                              ? *m_rcv_user_request->m_target_hndl_ptr
-                              : Native_handle{},
+             // As in rcv_on_handle_finalized(): Can't capture uncopyable thing; gotta do this dance.
+             owned_hndl_or_null
+               = boost::make_shared<Own_native_handle>(std::move(m_rcv_user_request->m_own_hndl)),
              target_meta_length_incomplete = m_rcv_target_meta_length,
              target_meta_length_incomplete_n_rcvd = sizeof(m_rcv_target_meta_length)
                                                     - target_blob.size() + n_rcvd_or_zero]
               (Error_code* err_code, size_t* sz)
         {
-          rcv_resume_incomplete_msg_processing(err_code, sz, hndl_or_null, target_meta_length_incomplete,
+          rcv_resume_incomplete_msg_processing(err_code, sz, std::move(*owned_hndl_or_null),
+                                               target_meta_length_incomplete,
                                                target_meta_length_incomplete_n_rcvd, {});
         };
+        assert(m_rcv_user_request->m_own_hndl.get().null()
+               && "The move-from should have nullified m_own_hndl.");
 
         return;
       } // if (msg_state == HEAD_PAYLOAD)
@@ -1275,7 +1367,7 @@ void Native_socket_stream_impl::rcv_read_blob(Rcv_msg_state msg_state, const uti
 
       Blob target_blob_incomplete{get_logger()};
       // This is N.
-      const auto target_blob_incomplete_sz = m_rcv_user_request->m_target_meta_blob.size()
+      const auto target_blob_incomplete_sz = size_t(m_rcv_target_meta_length)
                                              - target_blob.size() + n_rcvd_or_zero;
       if (target_blob_incomplete_sz != 0)
       {
@@ -1290,16 +1382,19 @@ void Native_socket_stream_impl::rcv_read_blob(Rcv_msg_state msg_state, const uti
       }
       m_rcv_resume_incomplete_msg_processing_func
         = [this,
-           hndl_or_null = m_rcv_user_request->m_target_hndl_ptr
-                            ? *m_rcv_user_request->m_target_hndl_ptr
-                            : Native_handle{},
+           // As in rcv_on_handle_finalized(): Can't capture uncopyable thing; gotta do this dance.
+           owned_hndl_or_null
+             = boost::make_shared<Own_native_handle>(std::move(m_rcv_user_request->m_own_hndl)),
            target_meta_length = m_rcv_target_meta_length,
            target_blob_incomplete = std::move(target_blob_incomplete)] // Move-capture it (don't copy again).
             (Error_code* err_code, size_t* sz)
       {
-        rcv_resume_incomplete_msg_processing(err_code, sz,
-                                             hndl_or_null, target_meta_length, 0, target_blob_incomplete);
+        rcv_resume_incomplete_msg_processing(err_code, sz, std::move(*owned_hndl_or_null),
+                                             target_meta_length, 0, target_blob_incomplete);
       };
+      assert(m_rcv_user_request->m_own_hndl.get().null()
+             && "The move-from should have nullified m_own_hndl.");
+
       return;
     } // if (m_rcv_user_request->m_on_done_func.empty())
     /* else if (!m_rcv_user_request->m_on_done_func.empty()):
@@ -1341,7 +1436,7 @@ void Native_socket_stream_impl::rcv_read_blob(Rcv_msg_state msg_state, const uti
 } // Native_socket_stream_impl::rcv_read_blob()
 
 void Native_socket_stream_impl::rcv_resume_incomplete_msg_processing
-       (Error_code* err_code, size_t* sz, Native_handle hndl_or_null,
+       (Error_code* err_code, size_t* sz, util::Own_native_handle&& hndl_or_null,
         Native_socket_stream_cfg::low_lvl_payload_blob_length_t target_meta_length_possibly_incomplete,
         size_t target_meta_length_incomplete_n_rcvd_or_zero_if_complete,
         const flow::util::Blob& target_blob_incomplete)
@@ -1353,7 +1448,7 @@ void Native_socket_stream_impl::rcv_resume_incomplete_msg_processing
   assert(m_rcv_resume_incomplete_msg_processing_func.empty() && "It should be a new day!");
 
   // Replay the fact we may have gotten a handle.  Same deal as in rcv_on_handle_finalized(); keeping comments light.
-  if ((!hndl_or_null.null()) && (!m_rcv_user_request->m_target_hndl_ptr))
+  if ((!hndl_or_null.get().null()) && (!m_rcv_user_request->m_target_hndl_ptr))
   {
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: While replaying: User async-receive request for "
                      "*only* a meta-blob: but earlier-received Native_handle is non-null which is "
@@ -1365,7 +1460,7 @@ void Native_socket_stream_impl::rcv_resume_incomplete_msg_processing
   // else
   if (m_rcv_user_request->m_target_hndl_ptr)
   {
-    *m_rcv_user_request->m_target_hndl_ptr = hndl_or_null;
+    m_rcv_user_request->m_own_hndl = std::move(hndl_or_null);
   }
 
   /* In target_meta_length_possibly_incomplete, we have either all of m_rcv_target_meta_length; or just 1+ but not
@@ -1376,7 +1471,7 @@ void Native_socket_stream_impl::rcv_resume_incomplete_msg_processing
   {
     /* We have only some of it.  Replayed.  Now resume from there.
      * This is the core of what rcv_on_ev_peer_socket_byte_stream_readable_or_error(HEAD_PAYLOAD) would do.
-     * @todo Some code reuse might be nice... though it might also just increase code verbostiy. */
+     * @todo Some code reuse might be nice... though it might also just increase code verbosity. */
     rcv_read_blob(Rcv_msg_state::S_HEAD_PAYLOAD,
                   Blob_mutable{static_cast<uint8_t*>(static_cast<void*>(&m_rcv_target_meta_length))
                                  + target_meta_length_incomplete_n_rcvd_or_zero_if_complete,
@@ -1403,7 +1498,7 @@ void Native_socket_stream_impl::rcv_resume_incomplete_msg_processing
 
   /* Replayed.  Now resume from there.
    * This is the core of what rcv_on_ev_peer_socket_byte_stream_readable_or_error(META_BLOB_PAYLOAD) would do.
-   * @todo Some code reuse might be nice... though it might also just increase code verbostiy. */
+   * @todo Some code reuse might be nice... though it might also just increase code verbosity. */
   rcv_read_blob(Rcv_msg_state::S_META_BLOB_PAYLOAD,
                 Blob_mutable{static_cast<uint8_t*>(m_rcv_user_request->m_target_meta_blob.data())
                                + target_blob_incomplete.size(),
@@ -1462,7 +1557,7 @@ void Native_socket_stream_impl::rcv_read_msg_from_stream_having_assumed_would_bl
 } // Native_socket_stream_impl::rcv_read_msg_from_stream_having_assumed_would_block()
 
 size_t Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_pkt_stream
-         (Native_handle* target_payload_hndl,
+         (util::Own_native_handle* target_payload_hndl,
           const util::Blob_mutable& target_payload_blob1, const util::Blob_mutable& target_payload_blob2_or_none,
           Error_code* err_code)
 {
@@ -1500,27 +1595,30 @@ size_t Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_pkt_stream
        * .receive(<buffer sequence below>) -- except if it's able to receive an in-dgram, it'll also have set the
        * target handle to either null (none present) or non-null; and it detects having to truncate the in-dgram
        * due to target_payload_blob1 + target_payload_blob2_or_none being in sum too small (it'll emit
-       * S_BLOB_RECEIVER_GOT_NON_BLOB in that case, as we advertised).
+       * S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE in that case, as we advertised).
        *
        * Perf subtlety: If target_payload_blob2_or_none is "none" (empty), then specifying target_payload_blob1
        * alone (as opposed to a 2-container with an empty 2nd element) subtly chooses a compile-time-faster template
        * impl of nb_read_some_with_native_handle().  So do that if relevant, even though the code is less
        * elegant-looking here.  Also the best choice (for another compile-time-decided optimization) for the
        * 2-container (if relevant) is {std|boost}::array<2>.  So use that if relevant. */
-      if (target_payload_blob2_or_none.size() == 0)
       {
-        n_rcvd_or_zero = nb_read_some_with_native_handle<Native_socket_stream_cfg::Protocol>
-                           (get_logger(), m_peer_socket.get(), target_payload_hndl,
-                            target_payload_blob1, err_code);
+        Native_handle hndl;
+        if (target_payload_blob2_or_none.size() == 0)
+        {
+          n_rcvd_or_zero = nb_read_some_with_native_handle<Native_socket_stream_cfg::Protocol>
+                             (get_logger(), m_peer_socket.get(), &hndl, target_payload_blob1, err_code);
+        }
+        else
+        {
+          array<Blob_mutable, 2> target_buf_seq = { target_payload_blob1, target_payload_blob2_or_none };
+          n_rcvd_or_zero = nb_read_some_with_native_handle<Native_socket_stream_cfg::Protocol>
+                             (get_logger(), m_peer_socket.get(), &hndl, target_buf_seq, err_code);
+        }
+        // That should have TRACE-logged stuff, so we won't (it's our function).
+
+        target_payload_hndl->reset(std::move(hndl));
       }
-      else
-      {
-        array<Blob_mutable, 2> target_buf_seq = { target_payload_blob1, target_payload_blob2_or_none };
-        n_rcvd_or_zero = nb_read_some_with_native_handle<Native_socket_stream_cfg::Protocol>
-                           (get_logger(), m_peer_socket.get(), target_payload_hndl,
-                            target_buf_seq, err_code);
-      }
-      // That should have TRACE-logged stuff, so we won't (it's our function).
 
       /* Almost home free; but our result semantics are a little different from the low-level-read functions'.
        *
@@ -1568,7 +1666,7 @@ size_t Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_pkt_stream
   {
     FLOW_LOG_TRACE("Receive: no error.  Was able to receive [" << n_rcvd_or_zero << "] of "
                    "[" << (target_payload_blob1.size() + target_payload_blob2_or_none.size()) << "] bytes; "
-                   "interest in native handle: got [" << *target_payload_hndl << "].");
+                   "interest in native handle: got [" << target_payload_hndl->get() << "].");
   } // else if (!*err_code)
 
   return n_rcvd_or_zero;
@@ -1576,7 +1674,7 @@ size_t Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_pkt_stream
 
 template<typename Ignored> // See below.  Technicalities therein aside -- feel free to ignore this line.
 size_t Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_byte_stream
-         (Native_handle* target_payload_hndl_or_null,
+         (util::Own_native_handle* target_payload_hndl_or_null,
           const util::Blob_mutable& target_payload_blob, Error_code* err_code)
 {
   using asio_local_stream_socket::nb_read_some_with_native_handle;
@@ -1611,10 +1709,12 @@ size_t Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_byte_stream
          * m_peer_socket->receive(target_payload_blob) -- except if it's able to receive even 1 byte it'll also
          * have set the target handle to either null (none present) or non-null.
          * When we say identical we mean identical result semantics along with everything else. */
+        Native_handle hndl;
         n_rcvd_or_zero = nb_read_some_with_native_handle<Native_socket_stream_cfg::Protocol>
-                           (get_logger(), m_peer_socket.get(),
-                            target_payload_hndl_or_null, target_payload_blob, err_code);
+                           (get_logger(), m_peer_socket.get(), &hndl, target_payload_blob, err_code);
         // That should have TRACE-logged stuff, so we won't (it's our function).
+
+        target_payload_hndl_or_null->reset(std::move(hndl));
       } // if (target_payload_hndl_or_null)
       else // if (!target_payload_hndl_or_null)
       {
@@ -1726,7 +1826,7 @@ size_t Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_byte_stream
     {
       if (n_rcvd_or_zero != 0)
       {
-        FLOW_LOG_TRACE("Interest in native handle; got [" << *target_payload_hndl_or_null << "].");
+        FLOW_LOG_TRACE("Interest in native handle; got [" << target_payload_hndl_or_null->get() << "].");
       }
     } // if (target_payload_hndl_or_null)
     else

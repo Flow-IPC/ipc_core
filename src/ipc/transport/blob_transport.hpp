@@ -119,7 +119,6 @@ public:
    * @return `*this`.
    */
   Blob_sender& operator=(Blob_sender&& src);
-  // Methods.
 
   /// Disallow copying.
   Blob_sender& operator=(const Blob_sender&) = delete;
@@ -127,7 +126,7 @@ public:
   /**
    * In PEER state: Returns max `blob.size()` such that send_blob() shall not fail due to too-long
    * payload with error::Code::S_INVALID_ARGUMENT.  Always the same value once in PEER state.  The opposing
-   * Native_handle_receiver::receive_blob_max_size()` shall return the same value (in the opposing object potentially
+   * Blob_receiver::receive_blob_max_size() shall return the same value (in the opposing object potentially
    * in a different process).
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns zero; else
@@ -182,13 +181,13 @@ public:
    * are ignored except that they reset any idle timer as enabled via Blob_receiver::idle_timer_run()
    * (or similar).
    *
-   * All notes from Native_handle_receiver::auto_ping() doc header apply.
+   * All notes from Native_handle_sender::auto_ping() doc header apply.
    *
    * @param period
    *        See above.
    * @return See above.
    */
-  bool auto_ping();
+  bool auto_ping(util::Fine_duration period = default_value);
 
   /**
    * Returns the accumulated transport statistics as of this call.
@@ -237,17 +236,17 @@ public:
   static const Shared_name S_RESOURCE_TYPE_ID;
 
   /**
-   * If `false` then `blob.size() > receive_blob_max_size()` in PEER-state async_receive_blob()
+   * If `false` then `blob.size() < receive_blob_max_size()` in PEER-state async_receive_blob()
    * or `batch->target_payload_size() < receive_blob_max_size()` in PEER-state async_receive_blob_batch()
    * shall yield non-pipe-hosing error::Code::INVALID_ARGUMENT, and it shall never yield
    * pipe-hosing error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE; else the latter may occur, while the former
    * shall never occur for that reason.
    *
-   * @see "Blob underflow semantics" in Native_handle_sender concept doc header; they apply equally here.
+   * @see "Blob underflow semantics" in Native_handle_receiver concept doc header; they apply equally here.
    */
   static constexpr bool S_BLOB_UNDERFLOW_ALLOWED = value;
 
-  /// All notes as from Native_handle_receiver::S_RCV_NATIVE_HANDLE_BATCH_SZ_RECOMMENDATION doc header apply.
+  /// All notes from Native_handle_receiver::S_RCV_NATIVE_HANDLE_BATCH_SZ_RECOMMENDATION doc header apply.
   static constexpr size_t S_RCV_BLOB_BATCH_SZ_RECOMMENDATION = value;
 
   // Types.
@@ -335,7 +334,7 @@ public:
    * explanation of these semantics.
    *
    * Always the same value once in PEER state.  The opposing
-   * Native_handle_sender::send_blob_max_size() shall return the same value (in the opposing object potentially
+   * Blob_sender::send_blob_max_size() shall return the same value (in the opposing object potentially
    * in a different process).
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns zero; else
@@ -361,7 +360,7 @@ public:
    * ### Informal suggestion w/r/t a `Native_handle_sender` that is also a `Blob_sender` ###
    * Suppose you have class `X` (e.g., Native_socket_stream is such a class) that implements *both*
    * concepts.  Suppose an `X` is on the opposing side of a `*this`.  Then we informally recommend that
-   * this async_receive_native_handle() detect the situation wherein the opposing `X`:
+   * this async_receive_blob() detect the situation wherein the opposing `X`:
    *   - used `send_native_handle(hndl, blob, ...)` or equivalent; and
    *   - that method or equivalent sent no `hndl` (e.g., the above method was passed `hndl` that contained
    *     no handle: `hndl.null() == true`).
@@ -387,7 +386,7 @@ public:
   /**
    * In PEER state: Asynchronously awaits 1+ discrete message(s) -- as sent by the opposing peer via
    * Blob_sender::send_blob() or `"Blob_sender::*end_sending()"` -- and
-   * receives them into into the target locations as described by `*batch` slots, reliably and in-order.
+   * receives them into the target locations as described by `*batch` slots, reliably and in-order.
    *
    * All notes from Native_handle_receiver::async_receive_native_handle_batch() doc header apply.
    *
@@ -424,7 +423,7 @@ public:
    *        See above.
    * @return See above.
    */
-  bool idle_timer_run(util::Fine_duration timeout);
+  bool idle_timer_run(util::Fine_duration timeout = default_value);
 
   /**
    * Returns the accumulated transport statistics as of this call.

@@ -177,6 +177,9 @@ std::string Category::message(int val) const // Virtual.
     return "Unable to receive incoming traffic: Opposing side sent invalid internal per-message header.";
   case Code::S_PEER_PROCESS_NO_LONGER_EXISTS:
     return "The opposing peer process involved in an IPC channel is currently reported by the OS as no longer running.";
+  case Code::S_SHM_BIPC_MISC_LIBRARY_ERROR:
+    return "Low-level boost.ipc.shm: boost.interprocess emitted miscellaneous library exception sans a system code; "
+           "a WARNING message at throw-time should contain all possible details.";
 
   case Code::S_END_SENTINEL:
     assert(false && "SENTINEL: Not an error.  "
@@ -238,6 +241,8 @@ util::String_view Category::code_symbol(Code code) // Static.
     return "LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER";
   case Code::S_PEER_PROCESS_NO_LONGER_EXISTS:
     return "PEER_PROCESS_NO_LONGER_EXISTS";
+  case Code::S_SHM_BIPC_MISC_LIBRARY_ERROR:
+    return "SHM_BIPC_MISC_LIBRARY_ERROR";
 
   case Code::S_END_SENTINEL:
     return "END_SENTINEL";

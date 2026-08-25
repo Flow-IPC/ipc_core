@@ -221,15 +221,15 @@ public:
    *        Absolute name at which the persistent MQ lives.
    * @param mode_tag
    *        API-choosing tag util::CREATE_ONLY.
+   * @param max_n_msg
+   *        Max # of unpopped messages in created queue.
+   * @param max_msg_sz
+   *        Max # of bytes in any one message in created queue.
    * @param perms
    *        Permissions to use for creation.  Suggest the use of util::shared_resource_permissions() to translate
    *        from one of a small handful of levels of access; these apply almost always in practice.
    *        The applied permissions shall *ignore* the process umask and shall thus exactly match `perms`,
    *        unless an error occurs.
-   * @param max_n_msg
-   *        Max # of unpopped messages in created queue.
-   * @param max_msg_sz
-   *        Max # of bytes in any one message in created queue.
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
    *        various.  Most likely creation failed due to permissions, or it already existed.
@@ -249,15 +249,15 @@ public:
    *        Absolute name at which the persistent MQ lives.
    * @param mode_tag
    *        API-choosing tag util::OPEN_OR_CREATE.
+   * @param max_n_msg_on_create
+   *        Max # of unpopped messages in created queue if creation is required.
+   * @param max_msg_sz_on_create
+   *        Max # of bytes in any one message in created queue if creation is required.
    * @param perms_on_create
    *        Permissions to use if creation is required.  Suggest the use of util::shared_resource_permissions() to
    *        translate from one of a small handful of levels of access; these apply almost always in practice.
    *        The applied permissions shall *ignore* the process umask and shall thus exactly match `perms_on_create`,
    *        unless an error occurs.
-   * @param max_n_msg_on_create
-   *        Max # of unpopped messages in created queue if creation is required.
-   * @param max_msg_sz_on_create
-   *        Max # of bytes in any one message in created queue if creation is required.
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
    *        various.  Most likely creation failed due to permissions.
@@ -327,7 +327,7 @@ public:
    * closed; their presence in this or other process is *not* an error.
    *
    * @see `util::remove_each_persistent_*`() for a convenient way to remove more than one item.  E.g.,
-   *      `util::remove_each_persistent_with_name_prefix<Pool_arena>()` combines remove_persistent() and
+   *      `util::remove_each_persistent_with_name_prefix<Persistent_mq_handle>()` combines remove_persistent() and
    *      for_each_persistent() in a common-sense way to remove only those `name`s starting with a given prefix;
    *      or simply all of them.
    *
@@ -392,7 +392,7 @@ public:
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: If `blob.size()` exceeds message size limit (if any), a particular error, which shall be
    * documented below, is emitted; this is not fatal to `*this`.  Exception to this: interrupt_sends()
-   * leads to the emission of a particular error which shall be documented below; this is not fatal to `*this.
+   * leads to the emission of a particular error which shall be documented below; this is not fatal to `*this`.
    *
    * @param blob
    *        See try_send().
@@ -413,7 +413,7 @@ public:
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: If `blob.size()` exceeds message size limit (if any), a particular error, which shall be
    * documented below, is emitted; this is not fatal to `*this`.  Exception to this: interrupt_sends()
-   * leads to the emission of a particular error which shall be documented below; this is not fatal to `*this.
+   * leads to the emission of a particular error which shall be documented below; this is not fatal to `*this`.
    *
    * @warning The user must not count on precision/stability -- unlike with, say, boost.asio timers -- here.
    *          If timing precision is required, the user will have to add an async layer with more precise timing
@@ -443,7 +443,7 @@ public:
    *
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: interrupt_sends() leads to the emission of a particular error which shall be documented
-   * below; this is not fatal to `*this.
+   * below; this is not fatal to `*this`.
    *
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
@@ -460,7 +460,7 @@ public:
    *
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: interrupt_sends() leads to the emission of a particular error which shall be documented
-   * below; this is not fatal to `*this.
+   * below; this is not fatal to `*this`.
    *
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
@@ -476,7 +476,7 @@ public:
    *
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: interrupt_sends() leads to the emission of a particular error which shall be documented
-   * below; this is not fatal to `*this.
+   * below; this is not fatal to `*this`.
    *
    * @param timeout_from_now
    *        See timed_send().
@@ -499,7 +499,7 @@ public:
    * a particular error, which shall be documented below, is emitted; this is not fatal to `*this`.
    *
    * @param blob
-   *        Buffer into which to copy into MQ and whose `->size()` to update to the # of bytes received;
+   *        Buffer into which to copy the message from MQ and whose `->size()` to update to the # of bytes received;
    *        if message empty it is set to zero.  Original `->size()` value indicates capacity of buffer;
    *        if this is insufficient based on either the popped message size or an upper limit (if any), it is an error.
    * @param err_code
@@ -521,7 +521,7 @@ public:
    * Exception to this: If `blob->size()` is less than the required message size (or upper limit on this, if any),
    * a particular error, which shall be documented below, is emitted; this is not fatal to `*this`.
    * Exception to this: interrupt_receives()
-   * leads to the emission of a particular error which shall be documented below; this is not fatal to `*this.
+   * leads to the emission of a particular error which shall be documented below; this is not fatal to `*this`.
    *
    * @param blob
    *        See try_receive().
@@ -567,7 +567,7 @@ public:
    *
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: interrupt_receives() leads to the emission of a particular error which shall be documented
-   * below; this is not fatal to `*this.
+   * below; this is not fatal to `*this`.
    *
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
@@ -584,7 +584,7 @@ public:
    *
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: interrupt_receives() leads to the emission of a particular error which shall be documented
-   * below; this is not fatal to `*this.
+   * below; this is not fatal to `*this`.
    *
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
@@ -600,7 +600,7 @@ public:
    *
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: interrupt_receives() leads to the emission of a particular error which shall be documented
-   * below; this is not fatal to `*this.
+   * below; this is not fatal to `*this`.
    *
    * @param timeout_from_now
    *        See timed_receive().
@@ -618,7 +618,11 @@ public:
    * timed_send() (ditto), wait_sendable() (ditto), timed_wait_sendable() (ditto) shall emit
    * error::Code::S_INTERRUPTED as soon as possible.
    *
-   * @return `true` on success; `false` is already enabled.
+   * To be clear, regarding the transmitting ops among those (send(), timed_send()): interruption applies to
+   * their blocking/waiting aspect only; a call that can complete the transmission immediately (no would-block)
+   * shall simply succeed, interrupted mode or no.
+   *
+   * @return `true` on success; `false` if already enabled.
    */
   bool interrupt_sends();
 
@@ -634,7 +638,11 @@ public:
    * timed_receive() (ditto), wait_receivable() (ditto), timed_wait_receivable() (ditto) shall emit
    * error::Code::S_INTERRUPTED as soon as possible.
    *
-   * @return `true` on success; `false` is already enabled.
+   * To be clear, regarding the transmitting ops among those (receive(), timed_receive()): interruption applies to
+   * their blocking/waiting aspect only; a call that can complete the transmission immediately (no would-block)
+   * shall simply succeed, interrupted mode or no.
+   *
+   * @return `true` on success; `false` if already enabled.
    */
   bool interrupt_receives();
 

@@ -208,7 +208,7 @@ namespace ipc::transport
  *     - Method templates that take a t-param like `Task_err_sz` for a functor forward to a corresponding
  *       non-template method in Native_socket_stream_impl, converting (e.g.) `Task_err_sz` for concretely-typed
  *       `Function<> flow::async::Task_asio_err_sz`.  Historically this was done as a requirement of doing strict
- *       pImpl (which for aforementioned other reasons we can longer do), but since the impl needs to store these
+ *       pImpl (which for aforementioned other reasons we can no longer do), but since the impl needs to store these
  *       guys as `Function<>`s anyway, we left this alone; as (1) don't fix what's not broken, (2) functions are
  *       less annoying than function templates generally, and (3) the perf is identical.
  *     - For a method template (like async_receive_blob_batch()) that cannot forward to a regular method
@@ -343,7 +343,7 @@ public:
 
   /**
    * Implements concept API.  As of this writing this value depends on
-   * Native_socket_stream_cfg::S_USE_OS_DGRAM_BATCH_SUPPORT and `S_USE_OS_DGRAM_SUPPORT`; iff and only if both are
+   * Native_socket_stream_cfg::S_USE_OS_DGRAM_BATCH_SUPPORT and `S_USE_OS_DGRAM_SUPPORT`; if and only if both are
    * `true`, then this value is `> 1`; otherwise it is `1`.
    */
   static constexpr size_t S_RCV_NATIVE_HANDLE_BATCH_SZ_RECOMMENDATION
@@ -364,8 +364,8 @@ public:
    *   - A moved-from Native_socket_stream (i.e., the `src` arg move-ctor and move-assignment operator)
    *     becomes as-if defaulted-constructed.
    *   - A target Native_socket_stream for Native_socket_stream_acceptor::async_accept() shall typically be
-   *     default-cted; Native_socket_stream_acceptor shall asynchronously move-assign a logger-apointed,
-   *     nicely-nicknamed into that target `*this`.
+   *     default-cted; Native_socket_stream_acceptor shall asynchronously move-assign a logger-appointed,
+   *     nicely-nicknamed object into that target `*this`.
    *
    * Therefore it would be unusual (though allowed) to make direct calls such as sync_connect() and send_blob()
    * on a default-cted Native_socket_stream without first moving a non-default-cted object into it.
@@ -377,7 +377,7 @@ public:
    *
    * This ctor is informally intended for the following use:
    *   - You create a Native_socket_stream that is logger-appointed and nicely-nicknamed; then you call
-   *     sync_connect() on it in order to move it to, hopefully, PEER states.
+   *     sync_connect() on it in order to move it to, hopefully, PEER state.
    *     It will retain the logger and nickname throughout.
    *
    * Alternatively:
@@ -495,19 +495,15 @@ public:
    * Note that `*this` (modulo moves) that has entered PEER state can never change state subsequently
    * (even on transmission error); once a PEER, always a PEER.
    *
-   * #Error_code generated and passed to `on_done_func()`:
-   * system codes most likely from `boost::asio::error` or `boost::system::errc` (but never would-block).
-   *
    * @see Class doc header, section "Why no async-connect method, only sync-connect?" for potentially interesting
    *      context.
-   *
-   * @return `false` if and only if invoked outside of NULL state (that is: in PEER state).
    *
    * @param absolute_name
    *        Absolute name at which the `Native_socket_stream_acceptor` is expected to be listening.
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
    *        system codes most likely from `boost::asio::error` or `boost::system::errc` (but never would-block).
+   * @return `false` if and only if invoked outside of NULL state (that is: in PEER state).
    */
   bool sync_connect(const Shared_name& absolute_name, Error_code* err_code = nullptr);
 
@@ -589,7 +585,7 @@ public:
    * `boost::asio::error::eof` (ditto),
    * other system codes most likely from `boost::asio::error` or `boost::system::errc` (ditto),
    * error::Code::S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER (destructor called, canceling all pending ops;
-   * spiritually identical to `boost::asio::error::operation_aborted`),
+   * spiritually identical to `boost::asio::error::operation_aborted`).
    *
    * Reminder: In rare circumstances, an error emitted there may represent something
    * detected during handling of a preceding send_native_handle() or send_blob() call but after it returned.

@@ -193,7 +193,7 @@ public:
    * transport::Native_handle_receiver shall receive it reliably and in-order via `async_receive_*()`.
    *
    * Per `sync_io` pattern: if internally more work is required asynchronously pending 1+ native handles being
-   * in 1+ active-event (readable, writable) state, this method shall synchronously invoke the `Event_wait_func`
+   * in 1+ active-event (readable, writable) state, `*this` shall invoke, as needed, the `Event_wait_func`
    * registered via start_send_native_handle_ops() by the user of `*this`.
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns `false` immediately
@@ -238,7 +238,7 @@ public:
    * preceding ones; but: it is the *last* message to be queued by definition.  It's like an EOF or a TCP-FIN.
    *
    * Per `sync_io` pattern: if internally more work is required asynchronously pending 1+ native handles being
-   * in 1+ active-event (readable, writable) state, this method shall later invoke the `Event_wait_func`
+   * in 1+ active-event (readable, writable) state, `*this` shall invoke, as needed, the `Event_wait_func`
    * registered via start_send_native_handle_ops() by the user of `*this`; and the error code
    * error::Code::S_SYNC_IO_WOULD_BLOCK shall be emitted here synchronously (via `*sync_err_code` if not null,
    * exception if null -- per standard `flow::Error_code`-doc-header semantics).  Meanwhile the completion handler
@@ -270,8 +270,8 @@ public:
    *
    * @internal
    * The semantic re. calling `*end_sending()` after already having called it and having that exclusively
-   * return `false` and do nothing was a judgment call.  As of this writing there's a long-ish comment at the top of
-   * of `"sync_io::Native_socket_stream_impl::*end_sending()"`" body discussing why I (ygoldfel) went that way.
+   * return `false` and do nothing was a judgment call.  As of this writing there's a long-ish comment at the top
+   * of `"sync_io::Native_socket_stream_impl::*end_sending()"` body discussing why I (ygoldfel) went that way.
    * @endinternal
    *
    * @tparam Task_err
@@ -305,16 +305,16 @@ public:
    * Same notes as for transport::Native_handle_sender.
    *
    * Per `sync_io` pattern: if internally more work is required asynchronously pending 1+ native handles being
-   * in 1+ active-event (readable, writable) state, this method shall synchronously invoke the `Event_wait_func`
+   * in 1+ active-event (readable, writable) state, `*this` shall invoke, as needed, the `Event_wait_func`
    * registered via start_send_native_handle_ops() by the user of `*this`.
    *   - In *this* case the events waited-on are likely to be the periodic firing of an internal auto-ping timer.
    *     Therefore the correct auto-pinging behavior shall occur if and only if the user heeds the `sync_io` pattern:
    *     async-wait when requested, report resulting events when they occur.
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns `false` immediately
-   * instead and otherwise no-ops (logging aside).  If auto_ping() has already been called successfuly,
-   * subsequently it will return `false` and no-op (logging aside).  If `*end_sending()` has been called succesfully,
-   * auto_ping() will return `false` and no-op (logging side).
+   * instead and otherwise no-ops (logging aside).  If auto_ping() has already been called successfully,
+   * subsequently it will return `false` and no-op (logging aside).  If `*end_sending()` has been called successfully,
+   * auto_ping() will return `false` and no-op (logging aside).
    *
    * ### Behavior past `*end_sending()` ###
    * Same notes as for transport::Native_handle_sender.
@@ -421,7 +421,7 @@ public:
   Native_handle_receiver(const Native_handle_receiver&) = delete;
 
   /**
-   * Destroys this peer endpoint which will end the conceptual outgoing-direction pipe (in PEER state, and if it's
+   * Destroys this peer endpoint which will end the conceptual incoming-direction pipe (in PEER state, and if it's
    * still active) and return resources to OS as applicable.
    */
   ~Native_handle_receiver();
@@ -460,7 +460,7 @@ public:
    * `async_receive_*()`, idle_timer_run() will work (as opposed to no-op/return
    * `false`).
    *
-   * Otherwise the notes for sync_io::Native_handle_receiver::start_send_native_handle_ops() apply equally.
+   * Otherwise the notes for sync_io::Native_handle_sender::start_send_native_handle_ops() apply equally.
    *
    * @tparam Event_wait_func_t
    *         See above.
@@ -494,7 +494,7 @@ public:
    *     Neither the target blob nor target native handle are touched.
    *
    * Per `sync_io` pattern: if internally more work is required asynchronously pending 1+ native handles being
-   * in 1+ active-event (readable, writable) state, this method shall later invoke the `Event_wait_func`
+   * in 1+ active-event (readable, writable) state, `*this` shall invoke, as needed, the `Event_wait_func`
    * registered via start_receive_native_handle_ops() by the user of `*this`; and the error code
    * error::Code::S_SYNC_IO_WOULD_BLOCK shall be emitted here synchronously (via `*sync_err_code` if not null,
    * exception if null -- per standard `flow::Error_code`-doc-header semantics).  Meanwhile the completion handler
@@ -503,7 +503,7 @@ public:
    *
    * If, by contrast, no more work is required -- the operation completed synchronously within this method -- then:
    * success or error *other than* error::Code::S_SYNC_IO_WOULD_BLOCK shall be emitted (again per standard
-   * semantics) synchronously; `*sync_sz` is set to 0 or bytes-transmitted, and `on_done_func()` shall not be
+   * semantics) synchronously; `*sync_sz` is set to 0 or bytes-received, and `on_done_func()` shall not be
    * saved nor ever executed by `*this`.  Thus the result of the operation shall be either output directly
    * synchronously -- if op completed synchronously -- or later via `on_done_func()` completion handler.
    *
@@ -545,14 +545,14 @@ public:
    */
   template<typename Task_err_sz>
   bool async_receive_native_handle(Native_handle* target_hndl,
-                                   Error_code* sync_err_code, size_t sync_sz,
                                    const util::Blob_mutable& target_meta_blob,
+                                   Error_code* sync_err_code, size_t* sync_sz,
                                    Task_err_sz&& on_done_func);
 
   /**
    * In PEER state: Possibly-asynchronously awaits 1+ discrete message(s) -- as sent by the opposing peer via
    * Native_handle_sender::send_native_handle() or `"Native_handle_sender::*end_sending()"` -- and
-   * receives them into into the target locations as described by `*batch` slots, reliably and in-order.
+   * receives them into the target locations as described by `*batch` slots, reliably and in-order.
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns
    * `false` immediately instead and otherwise no-ops (logging aside).  Same if the preceding `async_receive_*()`
@@ -566,7 +566,7 @@ public:
    * for transport::Native_handle_receiver::async_receive_native_handle_batch().  These are essential; please read.
    *
    * Per `sync_io` pattern: if internally more work is required asynchronously pending 1+ native handles being
-   * in 1+ active-event (readable, writable) state, this method shall later invoke the `Event_wait_func`
+   * in 1+ active-event (readable, writable) state, `*this` shall invoke, as needed, the `Event_wait_func`
    * registered via start_receive_native_handle_ops() by the user of `*this`; and the error code
    * error::Code::S_SYNC_IO_WOULD_BLOCK shall be emitted here synchronously (via `*sync_err_code` if not null,
    * exception if null -- per standard `flow::Error_code`-doc-header semantics).  Meanwhile the completion handler
@@ -621,8 +621,8 @@ public:
    * not seconds).
    *
    * Per `sync_io` pattern: if internally more work is required asynchronously pending 1+ native handles being
-   * in 1+ active-event (readable, writable) state, this method shall synchronously invoke the `Event_wait_func`
-   * registered via start_send_native_handle_ops() by the user of `*this`.
+   * in 1+ active-event (readable, writable) state, `*this` shall invoke, as needed, the `Event_wait_func`
+   * registered via start_receive_native_handle_ops() by the user of `*this`.
    *   - In *this* case the events waited-on are likely to be at most 1 (per PEER state) firing of an internal
    *     idle timer.
    *     - Indeed if that does occur, the `(*on_active_ev_func)()` call (by the `*this` user) that reported
@@ -633,7 +633,7 @@ public:
    *         `on_done_func()` must handle anyway.
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns `false` immediately
-   * instead and otherwise no-ops (logging aside).  If idle_timer_run() has already been called successfuly,
+   * instead and otherwise no-ops (logging aside).  If idle_timer_run() has already been called successfully,
    * subsequently it will return `false` and no-op (logging aside).
    *
    * ### Important: Relationship between idle_timer_run() and `async_receive_*()` ###

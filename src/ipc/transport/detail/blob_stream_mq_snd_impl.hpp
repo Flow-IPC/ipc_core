@@ -293,10 +293,6 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::~Blob_stream_mq_sender_impl()
   m_worker.stop();
   // Thread W is (synchronously!) no more.
 
-  FLOW_LOG_INFO("Blob_stream_mq_sender [" << *this << "]: Continuing shutdown.  "
-                "Next we will run user handler (if any) from some other thread.  "
-                "In this user thread we will await those handlers' completion and then return.");
-
   // See comment in similar spot in Native_socket_stream::~Impl() regarding the following.
 
   FLOW_LOG_INFO("Blob_stream_mq_sender [" << *this << "]: Continuing shutdown.  Next we will run pending handlers "

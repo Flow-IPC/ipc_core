@@ -187,7 +187,7 @@ namespace ipc::transport
  * keeps the pipes (if there are indeed 2) separate: send_blob() affects one, send_native_socket() affects the
  * other; the calls do not interact; similarly for receiving.  What minimal interaction does occur does so
  * in those APIs that have identical signatures in each concept pair Native_handle_sender/Blob_sender,
- * Native_handle_receiveir/Blob_receiver.  These interactions are documented in the respective methods' doc
+ * Native_handle_receiver/Blob_receiver.  These interactions are documented in the respective methods' doc
  * headers.  For example `async_end_sending(F)` shall invoke `F()`, once each pipe's individual `*end_sending()`
  * has completed; and errors (if any) will be reported in a particular way.  Additionally note the following:
  *
@@ -511,7 +511,7 @@ public:
   Async_io_obj async_io_obj();
 
   /**
-   * Pointer to the immutable owned #Blob_sender_obj; null if yet initialized.
+   * Pointer to the immutable owned #Blob_sender_obj; null if not yet initialized.
    *
    * Compilable only if #Blob_sender_obj is not Null_peer (#S_HAS_BLOB_PIPE).
    *
@@ -547,7 +547,7 @@ public:
   const Native_handle_receiver_obj* hndl_rcv() const;
 
   /**
-   * Pointer to the mutable owned #Blob_sender_obj; null if yet initialized.
+   * Pointer to the mutable owned #Blob_sender_obj; null if not yet initialized.
    *
    * Compilable only if #Blob_sender_obj is not Null_peer (#S_HAS_BLOB_PIPE).
    *
@@ -587,7 +587,7 @@ public:
    * is simultaneously the #Blob_sender_obj and #Blob_receiver_obj for our end of the blobs pipe.  Call this 0 times
    * (successfully) if blobs pipe disabled (in which case #Blob_sender_obj and #Blob_receiver_obj should both be
    * Null_peer).  Call either this or the 2-arg overload exactly 1 time (successfully) otherwise.  If you call this,
-   # #Blob_sender_obj and #Blob_receiver_obj must be the same type.
+   * #Blob_sender_obj and #Blob_receiver_obj must be the same type.
    *
    * Certain mistaken uses are caught in this method; it no-ops and returns `false` (failure):
    *   - You called this, but #Blob_sender_obj is Null_peer.
@@ -753,7 +753,7 @@ public:
    *     - If that occurs, it is invoked in-place of the 2nd completion handler (chronologically in order of
    *       completion).
    *     - The `Error_code` passed to `on_done_func()` is:
-   *       - falsy (success) if and only both completions were successful;
+   *       - falsy (success) if and only if both completions were successful;
    *       - if one failed but not the other, the truthy `Error_code` from the failed completion;
    *       - if both failed, the truthy `Error_code` from the first failed completion.
    *
@@ -784,7 +784,7 @@ public:
    *     - If that occurs, it is invoked in-place of the 2nd completion handler (chronologically in order of
    *       completion).
    *     - The `Error_code` passed to `on_done_func()` is:
-   *       - falsy (success) if and only both completions were successful;
+   *       - falsy (success) if and only if both completions were successful;
    *       - if one failed but not the other, the truthy `Error_code` from the failed completion;
    *       - if both failed, the truthy `Error_code` from the first failed completion.
    *
@@ -1127,7 +1127,7 @@ private:
 /**
  * Dummy type for use as a template param to Channel when either the blobs pipe or handles pipe is disabled;
  * as well as to mark a given peer object as not having a counterpart form: a `sync_io` object shall have
- * its `using Sync_io_obj = Null_peer` and coversely for async-I/O guys and their `Async_io_obj`s.
+ * its `using Sync_io_obj = Null_peer` and conversely for async-I/O guys and their `Async_io_obj`s.
  *
  * No object of this type is ever touched, at least if Channel is properly used.
  */
@@ -1238,7 +1238,7 @@ public:
  *     In particular, MQs have kernel persistence, and if a crash prevents a destructor from executing then
  *     additional cleanup is required after restart in order to free those RAM resources.
  *
- * Note this a glorified alias; it stores no additional data on top of the super-class.  It is easier to use
+ * Note this is a glorified alias; it stores no additional data on top of the super-class.  It is easier to use
  * than the super-class, as the ctor takes care of the necessary init_blob_pipe() call to complete initialization
  * directly during construction.  You may freely `static_cast` pointers/references between
  * the 2 types.
@@ -1364,7 +1364,7 @@ public:
 
   /**
    * Constructs the Channel in PEER state.
-   * `mq_out` and `mq_in` must be suitable for Persistent_mq_handle PEER-state ctor (see it doc header); else
+   * `mq_out` and `mq_in` must be suitable for Persistent_mq_handle PEER-state ctor (see its doc header); else
    * behavior is undefined.
    *
    * If and only if you intend to equip `*this` with a *handles pipe* as well, you must call init_native_handle_pipe()
@@ -1461,7 +1461,7 @@ public:
 
   /**
    * Constructs the Channel in PEER state.  `sock_stm` must be in PEER state; else behavior is undefined.
-   * `mq_out` and `mq_in` must be suitable for Persistent_mq_handle PEER-state ctor (see it doc header); else
+   * `mq_out` and `mq_in` must be suitable for Persistent_mq_handle PEER-state ctor (see its doc header); else
    * behavior is undefined.
    *
    * ### Error semantics ###
@@ -1627,6 +1627,13 @@ bool CLASS_CHANNEL::init_blob_pipe(Blob_sender_obj&& snd, Blob_receiver_obj&& rc
   static_assert(!std::is_same_v<Blob_sender_obj, Blob_receiver_obj>,
                 "Compilable only if each object does a direction.");
 
+  if (m_blob_snd || m_blob_rcv)
+  {
+    FLOW_LOG_WARNING("Channel [" << *this << "]: init_blob_pipe() succeeded before yet was called again.  Ignoring.");
+    return false;
+  }
+  // else
+
   m_blob_snd.emplace(std::move(snd));
   m_blob_rcv.emplace(std::move(rcv));
 
@@ -1663,6 +1670,14 @@ bool CLASS_CHANNEL::init_native_handle_pipe(Native_handle_sender_obj&& snd, Nati
   static_assert(S_HAS_NATIVE_HANDLE_PIPE, "Compilable only given the compile-time presence of that pipe.");
   static_assert(!std::is_same_v<Native_handle_sender_obj, Native_handle_receiver_obj>,
                 "Compilable only if each object does a direction.");
+
+  if (m_hndl_snd || m_hndl_rcv)
+  {
+    FLOW_LOG_WARNING("Channel [" << *this << "]: "
+                     "init_native_handle_pipe() succeeded before yet was called again.  Ignoring.");
+    return false;
+  }
+  // else
 
   m_hndl_snd.emplace(std::move(snd));
   m_hndl_rcv.emplace(std::move(rcv));
@@ -1712,7 +1727,7 @@ TEMPLATE_CHANNEL
 typename CLASS_CHANNEL::Blob_sender_obj* CLASS_CHANNEL::blob_snd()
 {
   static_assert(S_HAS_BLOB_PIPE, "Compilable only given the compile-time presence of that pipe.");
-  return &(*m_blob_snd);
+  return m_blob_snd ? &(*m_blob_snd) : nullptr;
 }
 
 TEMPLATE_CHANNEL
@@ -1731,7 +1746,7 @@ TEMPLATE_CHANNEL
 typename CLASS_CHANNEL::Native_handle_sender_obj* CLASS_CHANNEL::hndl_snd()
 {
   static_assert(S_HAS_NATIVE_HANDLE_PIPE, "Compilable only given the compile-time presence of that pipe.");
-  return &(*m_hndl_snd);
+  return m_hndl_snd ? &(*m_hndl_snd) : nullptr;
 }
 
 TEMPLATE_CHANNEL
@@ -1846,7 +1861,7 @@ bool CLASS_CHANNEL::async_end_sending(Task_err&& on_done_func)
      * So we track all that in a simple State struct which exists in the universe via capture by shared_ptr
      * until the 2nd completion handler runs.
      *
-     * Thready safety: More details below but just a reminder: F in X.async_end_sending(F) is invoked at some point
+     * Thread safety: More details below but just a reminder: F in X.async_end_sending(F) is invoked at some point
      * no matter what (at the latest, when X is destroyed); and it is invoked from some unspecified thread that
      * is not the current thread (in which we are now executing) -- for async-I/O pattern -- or else at a time
      * of the user's choosing synchronously (sync_io pattern).  Since we do
@@ -1856,7 +1871,7 @@ bool CLASS_CHANNEL::async_end_sending(Task_err&& on_done_func)
     struct State
     {
       Mutex_non_recursive m_mutex; // Protects m_n_done and m_err_code1.
-      unsigned int m_n_done; // Init: 0.
+      unsigned int m_n_done = 0; // Init just to be clear.
       Error_code m_err_code1; // Init: Success.
       Task_asio_err m_on_done_func; // Set just below.  (Thread safety: It is only read once hence no sync required.)
     };
@@ -1874,7 +1889,7 @@ bool CLASS_CHANNEL::async_end_sending(Task_err&& on_done_func)
 
         if (!all_done)
         {
-          // Wwe are the 1st handler to fire>: Mark down the result for the (all_done) clause below.
+          // We are the 1st handler to fire: Mark down the result for the (all_done) clause below.
           state->m_err_code1 = err_code;
           return;
         }
@@ -1908,122 +1923,154 @@ bool CLASS_CHANNEL::async_end_sending(Task_err&& on_done_func)
 
 TEMPLATE_CHANNEL
 template<typename Task_err>
-bool CLASS_CHANNEL::async_end_sending(Error_code* sync_err_code_ptr, Task_err&& on_done_func)
+bool CLASS_CHANNEL::async_end_sending(Error_code* err_code_or_null, Task_err&& on_done_func)
 {
   static_assert(S_IS_SYNC_IO_OBJ, "This overload usable only with sync_io-pattern object.");
 
   using flow::async::Task_asio_err;
+  using flow::util::Mutex_non_recursive;
+  using flow::util::Lock_guard;
   using boost::make_shared;
-  using std::atomic;
 
   if constexpr(S_HAS_BLOB_PIPE_ONLY)
   {
     const auto peer = blob_snd();
     assert(peer && "Ensure initialized() first.");
 
-    return peer->async_end_sending(sync_err_code_ptr, std::move(on_done_func));
+    return peer->async_end_sending(err_code_or_null, std::move(on_done_func));
   }
   else if constexpr(S_HAS_NATIVE_HANDLE_PIPE_ONLY)
   {
     const auto peer = hndl_snd();
     assert(peer && "Ensure initialized() first.");
 
-    return peer->async_end_sending(sync_err_code_ptr, std::move(on_done_func));
+    return peer->async_end_sending(err_code_or_null, std::move(on_done_func));
   }
   else
   {
     static_assert(S_HAS_2_PIPES, "Wat!");
 
-    FLOW_LOG_INFO("Channel [" << *this << "]: (SIO) Request to send/queue graceful-close; shall proceed along "
-                  "the 2 pipes listed earlier in this message; if not dupe-call; and "
-                  "both pipes available then the on-done callback shall be invoked after the later of 2 individual "
-                  "on-done callbacks triggers.  If one completes synchronously then only one callback to await.");
-
-    const auto peer1 = blob_snd();
-    const auto peer2 = hndl_snd();
-    assert(peer1 && peer2 && "Ensure initialized() first.");
-
-    /* See the async-I/O overload first.  Then come back here.  This one has to deal with that stuff plus
-     * some more: that each .async_end_sending()
-     *   - might complete synchronously instead of memorizing handler to invoke later;
-     *   - either way has Flow error conventions: if passed null sync_err_code_ptr it will throw on error.
-     *
-     * That said the below should be reasonable self-explanatory. */
-
-    /* Again: m_n_done reaching 2 is essentially a barrier for invoking m_on_done_func().  So it is the only datum
-     * protected against concurrent access.  Since it's just an int, we use atomic<> for synchronization. */
-    struct State
-    {
-      atomic<unsigned int> m_n_done; // Init: 0.  Thread safety: See preceding comment.
-      Error_code m_err_code1; // Init: Success.  Thread safety: It is only touched once hence no sync required.
-      Task_asio_err m_on_done_func; // Assigned just below.  Thread safety: It is only read once hence no sync required.
-    };
-    const auto state = make_shared<State>();
-    state->m_on_done_func = std::move(on_done_func); // @todo Make m_on_done_func const; use {} init semantics.
-
-    auto combined_on_done = [state](const Error_code& async_err_code) mutable
-    {
-      const auto post_n_done = ++state->m_n_done;
-      const bool all_done = post_n_done == 2;
-      assert((post_n_done == 1) || all_done);
-
-      if (all_done) // I.e., if (<we are the 2nd handler to fire>)
-      {
-        // Report the 1st error to occur; or success if none occurred.
-        state->m_on_done_func(state->m_err_code1 ? state->m_err_code1 : async_err_code);
-        return;
-      }
-      // else if (<we are the 1st handler to fire>): Mark down the result for the (all_done) clause above.
-      state->m_err_code1 = async_err_code;
-    };
-
-    Error_code sync_err_code1;
-    if (!peer1->async_end_sending(&sync_err_code1,
-                                  Task_asio_err{combined_on_done})) // Copy combined_on_done for the call below.
-    {
-      return false;
-    }
-    // else see our contract.
-
-    Error_code sync_err_code2;
-#ifndef NDEBUG
-    const bool ok =
+    /* @todo There is a cryptic const-related error for on_done_func are.  For now work around it manually below.
+     * To try to solve it: rename err_code_or_null to err_code above; eliminate the lambda bracketing below;
+     * and try to rebuild. */
+#if 0
+    FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, async_end_sending<Task_err>, _1, std::move(on_done_func));
+    // ^-- Call ourselves and return if err_code is null.  If got to present line, it is not null.
 #endif
-    peer2->async_end_sending(&sync_err_code2, std::move(combined_on_done));
-    assert(ok && "Either both should be dupe-calls or neither; do not use them individually only to then use this.");
-
-    // Now the extra stuff about completing synchronously versus asynchronously.
-
-    if ((sync_err_code1 != error::Code::S_SYNC_IO_WOULD_BLOCK) &&
-        (sync_err_code2 != error::Code::S_SYNC_IO_WOULD_BLOCK))
+    Error_code sync_err_code;
+    const bool ret = ([&]()
     {
-      // Both synchronously finished.
-      const Error_code sync_err_code = sync_err_code1 ? sync_err_code1 : sync_err_code2;
-      // Standard error-reporting semantics.
-      if ((!sync_err_code_ptr) && sync_err_code)
+      const auto err_code = &sync_err_code;
+
+      FLOW_LOG_INFO("Channel [" << *this << "]: (SIO) Request to send/queue graceful-close; shall proceed along "
+                    "the 2 pipes listed earlier in this message; if it is not a dupe-call, and both pipes are "
+                    "available, then the on-done callback shall be invoked after the later of 2 individual "
+                    "on-done callbacks triggers.  If one completes synchronously then only one callback to await.");
+
+      const auto peer1 = blob_snd();
+      const auto peer2 = hndl_snd();
+      assert(peer1 && peer2 && "Ensure initialized() first.");
+
+      /* See the async-I/O overload first.  Then come back here.  This one has to deal with that stuff plus
+       * some more: that each .async_end_sending()
+       *   - might complete synchronously instead of memorizing handler to invoke later;
+       *   - either way has Flow error conventions: if passed null err_code it will throw on error
+       *     (FLOW_ERROR_EXEC_AND_THROW_ON_ERROR() above took care of that).
+       *
+       * That said the below should be reasonably self-explanatory. */
+
+      /* Concurrency can begin once we return, as they are allowed to inform the 2 pipes of events, in case of
+       * would-block here, mutually concurrently; and each time they do that our handler below can execute.  So,
+       * in that way it's the same thing as in the other overload. */
+      struct State
       {
-        throw flow::error::Runtime_error{sync_err_code, "Channel::async_end_sending(2)"};
-      }
-      // else
-      sync_err_code_ptr && (*sync_err_code_ptr = sync_err_code);
-      // And if (!sync_err_code_ptr) + no error => no throw.
-      return true;
-    }
-    // else: 1 or neither synchronously finished.  So we return would-block, while those 1-2 finish.
-    if (sync_err_code1 != error::Code::S_SYNC_IO_WOULD_BLOCK)
-    {
-      ++state->m_n_done; // Simulate it being done already, so the other one (if even needed) will run user handler.
-      state->m_err_code1 = sync_err_code1;
-    }
-    else if (sync_err_code2 != error::Code::S_SYNC_IO_WOULD_BLOCK)
-    {
-      ++state->m_n_done; // Ditto.
-      state->m_err_code1 = sync_err_code2;
-    }
-    // else { Neither synchronously finished. }
+        Mutex_non_recursive m_mutex; // Protects m_n_done and m_err_code1.
+        unsigned int m_n_done = 0; // Init just to be clear.
+        Error_code m_err_code1; // Init: Success.
+        Task_asio_err m_on_done_func; // Assigned just below.
+      };
+      const auto state = make_shared<State>();
+      state->m_on_done_func = std::move(on_done_func); // @todo Make m_on_done_func const; use {} init semantics.
 
-    // Okay, godspeed to the 1-2 remaining async ones.
-    return true;
+      // Keeping comments light -- same deal as in other overload.  @todo Code reuse?  Maybe....
+      auto combined_on_done = [state](const Error_code& async_err_code) mutable
+      {
+        Error_code emitted_err_code = async_err_code;
+        {
+          Lock_guard<Mutex_non_recursive> lock{state->m_mutex};
+          const auto post_n_done = ++state->m_n_done;
+          const bool all_done = post_n_done == 2;
+          assert((post_n_done == 1) || all_done);
+
+          if (!all_done)
+          {
+            state->m_err_code1 = async_err_code;
+            return;
+          }
+          // else:
+          if (state->m_err_code1)
+          {
+            emitted_err_code = state->m_err_code1;
+          }
+        } // Lock_guard<Mutex_non_recursive> lock{state->m_mutex};
+
+        state->m_on_done_func(emitted_err_code);
+      }; // auto combined_on_done =
+
+      Error_code sync_err_code1;
+      if (!peer1->async_end_sending(&sync_err_code1,
+                                    Task_asio_err{combined_on_done})) // Copy combined_on_done for the call below.
+      {
+        return false;
+      }
+      // else see our contract.
+
+      Error_code sync_err_code2;
+  #ifndef NDEBUG
+      const bool ok =
+  #endif
+      peer2->async_end_sending(&sync_err_code2, std::move(combined_on_done));
+      assert(ok && "Either both should be dupe-calls or neither; do not use them individually only to then use this.");
+
+      // Now the extra stuff about completing synchronously versus asynchronously.
+
+      const bool sync_done1 = sync_err_code1 != error::Code::S_SYNC_IO_WOULD_BLOCK; // <=> NOT would-block 1.
+      const bool sync_done2 = sync_err_code2 != error::Code::S_SYNC_IO_WOULD_BLOCK; // <=> NOT would-block 2.
+
+      if (sync_done1 && sync_done2)
+      {
+        // Both synchronously finished.
+        *err_code = sync_err_code1 ? sync_err_code1 : sync_err_code2;
+        return true;
+      }
+      // else: 1 or neither synchronously finished.  (1 or both would-block.)  So while they wait for it => would-block:
+      *err_code = error::Code::S_SYNC_IO_WOULD_BLOCK;
+
+      if (sync_done1)
+      {
+        ++state->m_n_done; // Simulate it being done already, so the other one (if even needed) will run user handler.
+        state->m_err_code1 = sync_err_code1;
+      }
+      else if (sync_done2)
+      {
+        ++state->m_n_done; // Ditto.
+        state->m_err_code1 = sync_err_code2;
+      }
+      // else { Neither synchronously finished. }
+
+      // Okay, godspeed to the 1-2 remaining async ones.  Our concurrency (if 2 remaining) can begin from here.
+      return true;
+    })(); // const bool ret =
+
+    // Standard error-reporting semantics.
+    if ((!err_code_or_null) && sync_err_code)
+    {
+      throw flow::error::Runtime_error{sync_err_code, "Channel::async_end_sending(2)"};
+    }
+    // else
+    err_code_or_null && (*err_code_or_null = sync_err_code);
+    // And if (!err_code_or_null) + no error => no throw.
+    return ret;
   } // else if constexpr(HAS_2_PIPES)
 } // Channel::async_end_sending(2)
 

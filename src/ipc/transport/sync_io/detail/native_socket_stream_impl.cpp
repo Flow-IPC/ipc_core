@@ -389,8 +389,7 @@ void Native_socket_stream_impl::async_connect(const Shared_name& absolute_name, 
      * becomes networked, then async_connect() will probably be public, and this code-path will come into
      * play (and sync_connect() perhaps would become potentially-blocking in that setting). */
 
-    assert((!m_peer_socket->non_blocking()) && "New NULL-state socket should start as not non-blocking.");
-    m_peer_socket->non_blocking(true, sync_err_code);
+    m_peer_socket->non_blocking(true, sync_err_code); // If attempt 2+, this will no-op (already non-blocking).
     if (!sync_err_code)
     {
       m_peer_socket->connect(remote_endpoint, sync_err_code);

@@ -147,7 +147,7 @@ Native_socket_stream_acceptor::~Native_socket_stream_acceptor()
   // We are in thread U.  By contract in doc header, they must not call us from a completion handler (thread W).
 
   FLOW_LOG_INFO("Acceptor [" << *this << "]: Shutting down.  Next acceptor socket will close; all our internal "
-                "async handlers will be canceled; and worker thread thread will be joined.");
+                "async handlers will be canceled; and worker thread will be joined.");
 
   // stop() logic is similar to what happens in Native_socket_stream_impl dtor.  Keeping cmnts light.
   m_worker.stop();

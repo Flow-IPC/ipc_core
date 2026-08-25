@@ -18,56 +18,14 @@
 /// @file
 #include "ipc/util/native_handle.hpp"
 #include <boost/functional/hash/hash.hpp>
-#include <algorithm>
 
 namespace ipc::util
 {
 
-// Static initializers.
-
-/* Reminder: We've assured via static_assert(false) that this is being built in POSIX.
- * (Windows has a special value too though.) */
-const Native_handle::handle_t Native_handle::S_NULL_HANDLE = -1;
-
 // Native_handle implementations.
 
-Native_handle::Native_handle(handle_t native_handle) :
-  m_native_handle(native_handle)
+void Native_handle::close() noexcept
 {
-  // Nope.
-}
-
-Native_handle::Native_handle(Native_handle&& src)
-{
-  // It's why we exist: prevent duplication of src.m_native_handle.
-  operator=(std::move(src));
-}
-
-Native_handle::Native_handle(const Native_handle&) = default;
-
-Native_handle& Native_handle::operator=(Native_handle&& src)
-{
-  using std::swap;
-
-  if (this != &src)
-  {
-    m_native_handle = S_NULL_HANDLE;
-    swap(m_native_handle, src.m_native_handle);
-  }
-  return *this;
-}
-
-Native_handle& Native_handle::operator=(const Native_handle&) = default;
-
-bool Native_handle::null() const
-{
-  return m_native_handle == S_NULL_HANDLE;
-}
-
-void Native_handle::release()
-{
-  using ::close;
-
   if (null()) // As promised no-op in this case.
   {
     return;
@@ -77,7 +35,7 @@ void Native_handle::release()
 #ifndef FLOW_OS_LINUX
   static_assert(false, "Native ::close() tested in Linux only in this context, though anything POSIXy should be OK.");
 #endif
-  close(m_native_handle);
+  ::close(m_native_handle);
 
   operator=({}); // As promised nullify it.
 
@@ -106,7 +64,26 @@ void Native_handle::release()
    * whereas POSIX ::close() gets the job done.
    *
    * @todo Maybe revisit for boost.asio education at least. */
-} // Native_handle::release()
+} // Native_handle::close()
+
+void Native_handle::static_close(Native_handle& hndl) noexcept // Static.
+{
+  hndl.close();
+}
+
+Native_handle disowned_native_handle(Own_native_handle&& src) noexcept
+{
+  Native_handle ret{src.get()};
+  src.release();
+  return ret;
+}
+
+size_t hash_value(Native_handle val) noexcept
+{
+  using boost::hash;
+
+  return hash<Native_handle::handle_t>()(val.m_native_handle);
+}
 
 std::ostream& operator<<(std::ostream& os, const Native_handle& val)
 {
@@ -120,39 +97,6 @@ std::ostream& operator<<(std::ostream& os, const Native_handle& val)
     os << val.m_native_handle;
   }
   return os << ']';
-}
-
-bool operator==(Native_handle val1, Native_handle val2)
-{
-  return val1.m_native_handle == val2.m_native_handle;
-}
-
-bool operator!=(Native_handle val1, Native_handle val2)
-{
-  return !operator==(val1, val2);
-}
-
-size_t hash_value(Native_handle val)
-{
-  using boost::hash;
-
-  return hash<Native_handle::handle_t>()(val.m_native_handle);
-}
-
-void swap(Native_handle& val1, Native_handle& val2)
-{
-  // (See `Rationale for existence` in our doc header.)
-
-  std::swap(val1.m_native_handle, val2.m_native_handle);
-}
-
-bool operator<(Native_handle val1, Native_handle val2)
-{
-  /* In POSIX and Windows this is valid.  So don't worry about #ifdef'ing for OS, static_assert(false), etc.
-   * I did check that even in Windows they are formally integers still.  Update: Actually... not sure... depends
-   * on what's a Native_handle; if it's SOCKET then sure, but otherwise -- who knows?  There's probably a ticket
-   * about that whole topic. */
-  return val1.m_native_handle < val2.m_native_handle;
 }
 
 } // namespace ipc::util

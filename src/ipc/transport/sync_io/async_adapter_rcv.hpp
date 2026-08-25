@@ -70,7 +70,7 @@ namespace ipc::transport::sync_io
  * ### Impl design ###
  * This is almost entirely subsumed by our `sync_io` core, Async_adapter_receiver::Core, an instance of
  * sync_io::Native_handle_receiver or sync_io::Blob_receiver.  It has a receive op-type (possibly among others), so we
- * invoke its `"sync_io::*_sender:start_receive_blob_ops()"` during our initialization.  After that:
+ * invoke its `"sync_io::*_receiver::start_receive_blob_ops()"` during our initialization.  After that:
  *
  * For idle_timer_run(), we can again just forward it to `m_sync_io`.  There's no completion
  * handler either, unlike with `.async_end_sending()`, so it's even simpler -- just straight forwarding to
@@ -128,7 +128,7 @@ public:
    *        The worker thread loop of `X`.  Background work, as needed, will be posted onto this
    *        "thread W."  Note that `X` may (or may not) share this thread with unrelated tasks;
    *        for example `Native_socket_stream` uses it for both a `*this` (outgoing-direction)
-   *        and an Async_adapter_receiver (incoming-direction).  `*worker* must already be `->start()`ed.
+   *        and an Async_adapter_receiver (incoming-direction).  `worker` must already be `->start()`ed.
    * @param sync_io
    *        The core object of `X`.  It should have just (irreversibly) entered state PEER.
    */
@@ -499,7 +499,7 @@ Async_adapter_receiver<Core_t>::Async_adapter_receiver(flow::log::Logger* logger
    * The *this=>m_sync_io interaction shall be our APIs, like async_receive_native_handle(),
    * simply invoking the same API in m_sync_io (m_sync_io.async_receive_native_handle() for that example). */
 
-  /* (.start_receive_native_handler_ops() would do the same thing, if it exists.  If it exists, that's because it has
+  /* (.start_receive_native_handle_ops() would do the same thing, if it exists.  If it exists, that's because it has
    * both to satisfy two concepts -- for when the user uses the sync_io::X directly -- but we don't care about that;
    * we know they are the same in this case; so just use the one we know exists for any X.) */
 #ifndef NDEBUG
@@ -808,7 +808,7 @@ void Async_adapter_receiver<Core_t>::async_receive_batch_impl(Batch* batch,
    * Other than that the same comments, including especially the big one at the top of
    * async_receive_impl(), apply.  Keeping comments light. */
 
-  FLOW_LOG_TRACE(m_log_pfx << ": Incoming user async-receive-batch (with handles: no) request on "
+  FLOW_LOG_TRACE(m_log_pfx << ": Incoming user async-receive-batch request on "
                  "batch [" << *batch << "] with assume-would-block? = [" << assume_would_block << "]; "
                  "HNDL_ELSE_BLOB = [" << HNDL_ELSE_BLOB << "].  "
                  "In worker now? = [" << m_worker.in_thread() << "].");
@@ -909,7 +909,7 @@ void Async_adapter_receiver<Core_t>::process_msg_or_error(const Error_code& err_
 
   /* As noted in our doc header, we have roughly two items on the agenda.
    *
-   * 1, we need to invoke m_user_request->m_on_done_func, passing it the results (which ise/are our arg(s)).
+   * 1, we need to invoke m_user_request->m_on_done_func, passing it the results (which is/are our arg(s)).
    *
    * 2, we need to update our m_* structures, such as popping stuff off m_pending_user_requests_q
    * and starting the next m_sync_io.async_receive_*() if any -- and so on.

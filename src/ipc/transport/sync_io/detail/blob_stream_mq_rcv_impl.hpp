@@ -525,7 +525,7 @@ private:
   util::Fine_duration m_idle_timeout;
 
   /**
-   * Timer that fires on_ev_idle_timer_fired() (which hoses the pipe with idle timeour error) and is
+   * Timer that fires on_ev_idle_timer_fired() (which hoses the pipe with idle timeout error) and is
    * (re)scheduled to fire in #m_idle_timeout each time `*this` receives a complete message
    * on #m_mq.  If it does fire, without being preempted by some error to have occurred since then,
    * the pipe is hosed with a particular error indicating idle-timeout (so that `Error_code` is saved
@@ -733,7 +733,7 @@ bool Blob_stream_mq_receiver_impl<Persistent_mq_handle>::replace_event_wait_hand
   {
     /* Ctor failed (without throwing, meaning they used the non-null-err_code semantic).
      * It is tempting to... <see comment in _sender_impl same place>.  @todo Code reuse. */
-    FLOW_LOG_WARNING("Blob_stream_mq_sender [" << *this << "]: Cannot replace event-wait handles as requested: "
+    FLOW_LOG_WARNING("Blob_stream_mq_receiver [" << *this << "]: Cannot replace event-wait handles as requested: "
                      "ctor failed earlier ([" << m_pending_err_code << "] [" << m_pending_err_code.message() << "].  "
                      "Any transmission attempts will fail in civilized fashion, so we will just no-op here.");
     return true;
@@ -997,6 +997,7 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::async_receive_blob_impl
    * Basically it's just a matter of keeping track of the flag m_control_state and acting differently
    * depending on whether it's true or not (when analyzing an incoming low-level payload). */
 
+  assert((!m_user_request) && "Caller (user-facing API or batch-emulation) must ensure no async-receive outstanding.");
   m_user_request.emplace();
   m_user_request->m_target_blob = target_blob;
   if (!on_done_func_or_none.empty())

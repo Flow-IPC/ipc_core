@@ -78,7 +78,7 @@ namespace ipc::transport
  * As a result -- whether that was a good or bad design (I say, good) -- at least the following is true:
  * Understanding the impl of `*this` class means: understanding the `sync_io` core sync_io::Native_socket_stream
  * *as a black box* (!); and then understanding the (actually quite limited) work necessary to build on top of that
- * to provide the desired API (as largedly mandated by Native_handle_sender and Native_handle_receiver concept
+ * to provide the desired API (as largely mandated by Native_handle_sender and Native_handle_receiver concept
  * APIs).  Moreover, given a `sync_op::_*sender` the PEER-state logic for `*_sender` is always the same;
  * and similarly for `*_receiver`.  Because of that I factored out this adapter logic into
  * sync_io::Async_adapter_sender and sync_io::Async_adapter_receiver; so 49.5% of Native_socket_stream PEER-state
@@ -527,14 +527,14 @@ private:
    * ### Destruction ###
    * By its contract, this guy's dtor will handle what it needs to, as long as #m_worker (to which it stores a pointer)
    * has been `.stop()`ed by that time, and any queued-up (ready to execute) handlers on it have been
-   * `Task_enginer::poll()`ed-through by that time as well.
+   * `Task_engine::poll()`ed-through by that time as well.
    */
   std::optional<sync_io::Async_adapter_sender<decltype(m_sync_io)>> m_snd_sync_io_adapter;
 
   // Receive-ops data.
 
   /**
-   * Null until PEER state, this handles ~all receive-ops logic in that state.  sync_io::Async_adapter_sender adapts
+   * Null until PEER state, this handles ~all receive-ops logic in that state.  sync_io::Async_adapter_receiver adapts
    * any sync_io::Native_handle_receiver and makes available ~all necessary async-I/O Native_handle_receiver APIs.
    * So in PEER state we forward ~everything to this guy.
    *

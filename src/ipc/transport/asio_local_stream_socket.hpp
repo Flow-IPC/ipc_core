@@ -308,6 +308,20 @@ public:
   /**
    * Obtains a copy of the `Native_handle` (potentially `.null()`) in an earlier-received-to slot.
    *
+   * @internal
+   *
+   * @todo Only copy-access to a slot's stored `Native_handle` is provided: Msg_batch_in::result_payload_hndl(); a
+   * receiver-engine rewinding n_used() (un-emitting slots) can thus close a stored handle (via the copy) but not
+   * nullify the stored value, leaving a stale (closed) handle value recorded in a meaningless-territory slot.  For
+   * cleanliness/defensiveness an engine-facing API -- e.g., close-and-nullify over an index range -- might be
+   * helpful or required; see its would-be use in Native_socket_stream_msg_batch_in::nb_read() rewind logic.
+   * Suggest also applying identical changes to `Generic_msg_batch_in` API, `async_receive_batch_emulation()`
+   * doc header documenting the `tparam Batch`, and accordingly the rewind logic inside
+   * `async_receive_batch_emulation_on_init_msg()`.  Both rewind spots as of this writing are marked with
+   * associated to-dos.
+   *
+   * @endinternal
+   *
    * @param idx
    *        See result_payload_blob().
    * @return See above.
@@ -1315,7 +1329,7 @@ bool
           && (recvmsg_hdr_cmsg_ptr->cmsg_type == SCM_RIGHTS))
       {
         Native_handle{*(reinterpret_cast<const Native_handle::handle_t*>(CMSG_DATA(recvmsg_hdr_cmsg_ptr)))}
-          .release();
+          .close();
         /* Closed handle, as promised. / Did not touch *this (m_mdts[].m_result_hndl); allowed by our contract.
          * (In practice, as of this writing, this is equivalent behavior to never having received the
          * post-error slots; clearly sensible.  As of this writing that applies to the error-slot in particular too,
@@ -1337,7 +1351,7 @@ bool
     const auto mdt_ptr_first = &(m_mdts[m_n_used]);
     while (mdt_ptr != mdt_ptr_first)
     {
-      (--mdt_ptr)->m_result_hndl.release(); // Close handle, as promised.  Nullify for bonus cleanliness.
+      (--mdt_ptr)->m_result_hndl.close(); // Close handle, as promised.  Nullify for bonus cleanliness.
     }
 
     return true;
@@ -2010,7 +2024,7 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
         = *(reinterpret_cast<const Native_handle::handle_t*>(CMSG_DATA(recvmsg_hdr_cmsg_ptr)));
       if (*err_code)
       {
-        target_payload_hndl.release(); // Avoid the native-handle (which is a received copy) leak.
+        target_payload_hndl.close(); // Avoid the native-handle (which is a received copy) leak.
       }
       // else { Cool: Native-handle received and emitted. }
     }

@@ -231,7 +231,7 @@ void drain_one(Rcv_t& rcv, std::shared_ptr<Drain_state> state,
                     "[" << state->m_remaining << "] were remaining.");
       EXPECT_FALSE(err) << "async_receive err: [" << err << "] [" << err.message() << "].";
       // Clean up any received native handle (no-op for blob-only path).
-      if (!state->m_hndl.null()) { state->m_hndl.release(); state->m_hndl = {}; }
+      state->m_hndl.close(); // No-op if .null().
       --state->m_remaining;
       drain_one(rcv, std::move(state), loop, std::move(on_done));
     });

@@ -20,6 +20,7 @@
 #include "ipc/transport/posix_mq_handle.hpp"
 #include "ipc/transport/error.hpp"
 #include <flow/error/error.hpp>
+#include <flow/util/util.hpp>
 #include <boost/chrono/floor.hpp>
 #include <boost/array.hpp>
 
@@ -37,7 +38,7 @@ namespace
  */
 std::string shared_name_to_mq_name(const Shared_name& name);
 
-}; // namespace (anon)
+} // namespace (anon)
 
 // Initializers.
 
@@ -76,7 +77,9 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
   using boost::system::system_category;
   using ::mq_open;
   using ::mq_close;
+  using ::mq_unlink;
   using ::mq_attr;
+  using ::close;
   // using ::O_RDWR; // A macro apparently.
   // using ::O_CREAT; // A macro apparently.
   // using ::O_EXCL; // A macro apparently.
@@ -99,10 +102,13 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
        "perms = [" << std::setfill('0') << std::setw(4) << std::oct << perms.get_permissions() << "].");
   }
 
-  // Get pipe stuff out of the way, as it does not need m_mq.
-  auto sys_err_code = pipe_setup();
+  const auto mq_name = shared_name_to_mq_name(absolute_name());
+  bool created = false; // If we end up failing overall, and this is true, we shall unlink the MQ we created.
+  /* Whether we end up failing overall = sys_err_code falsiness.  The fail-points are all determined
+   * by sys_err_code, and some logging + possible throwing at the end will use its value too. */
+  Error_code sys_err_code;
 
-  if (!sys_err_code)
+  ([&]() // Error?  Just return; we will cleanup before ctor exits.
   {
     /* Naively: Use mq_open() to both create-or-open/exclusively-create and to set mode `perms`.
      * In reality though there are two subtleties that make it tougher than that.  Fortunately this has been
@@ -125,7 +131,7 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
      * mode; then set_resource_permissions(); and that's that.  Otherwise:
      *
      * We can no longer use the built-in atomic create-or-open mode (O_CREAT sans O_EXCL).  Instead, we logically
-     * split it into two parts:try to create-only (O_CREAT|O_EXCL); if it succeeds, done (can
+     * split it into two parts: try to create-only (O_CREAT|O_EXCL); if it succeeds, done (can
      * set_resource_permissions()); if it fails with file-exists error, then mq_open() again, this time in open-only
      * mode (and no need for set_resource_permissions()).  Great!  The problem, of course, is that this no longer uses a
      * guaranteed-atomic open-or-create OS-call semantic.  Namely it means set_resource_permissions() could fail due to
@@ -134,8 +140,16 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
      * either the first mq_open() will succeed, or it'll "fail" with file-exists, yet the 2nd mq_open() will succeed.
      * Pegging processor is not a serious concern in this context. */
 
-    const auto mq_name = shared_name_to_mq_name(absolute_name());
-    const auto do_mq_open_func = [&](bool create_else_open) -> bool // Just a helper.
+    // Get pipe stuff out of the way, as it does not need m_mq.
+    if ((sys_err_code = pipe_setup()))
+    {
+      return;
+    }
+    // else
+
+    // Setup m_mq.  (Open handle, which may or may not create name in file system; in latter case set perms as well.)
+
+    const auto do_mq_open_func = [&](bool create_else_open)
     {
       /* Note: O_NONBLOCK is something we are forced to set/unset depending on the transmission API being called.
        * So just don't worry about it here. */
@@ -157,26 +171,26 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
       }
       if (raw != -1)
       {
+        sys_err_code.clear();
         m_mq = Native_handle{raw};
+        create_else_open && (created = true);
       }
-
-      if (m_mq.null())
+      else
       {
         sys_err_code = {errno, system_category()};
-        return false;
       }
-      // else
-      return true;
     }; // do_mq_open_func =
 
     if (CREATE_ONLY_ELSE_MAYBE)
     {
       // Simple case.
-      if (do_mq_open_func(true))
+
+      if ((do_mq_open_func(true), sys_err_code)
+          || (set_resource_permissions(get_logger(), m_mq, perms, &sys_err_code),
+              sys_err_code))
       {
-        set_resource_permissions(get_logger(), m_mq, perms, &sys_err_code);
+        return;
       }
-      // sys_err_code is either success or failure.  Fall through.
     }
     else // if (!CREATE_ONLY_ELSE_MAYBE)
     {
@@ -185,32 +199,35 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
       bool success = false; // While this remains false, sys_err_code indicates whether it's false b/c of fatal error.
       do
       {
-        if (do_mq_open_func(true))
+        if (do_mq_open_func(true), !sys_err_code)
         {
           // Created!  Only situation where we must indeed set_resource_permissions().
-          set_resource_permissions(get_logger(), m_mq, perms, &sys_err_code);
-          success = !sys_err_code;
-          continue; // `break`, really.  One of success or sys_err_code is true (latter <= s_r_p() failed).
+          if (set_resource_permissions(get_logger(), m_mq, perms, &sys_err_code),
+              sys_err_code)
+          {
+            return; // Real error.  GTFO.
+          }
+          // else
+
+          success = true;
+          continue; // `break`, really.
         }
-        // else if (!do_mq_open_func(true)) // I.e., it failed for some reason.
+        // else if (do_mq_open_func() failed):
         if (sys_err_code != boost::system::errc::file_exists)
         {
-          // Real error.  GTFO.
-          continue; // `break;`, really (sys_err_code==true).
+          return; // Real error.  GTFO.
         }
         // else if (file_exists): Create failed, because it already exists.  Open the existing guy!
 
-        if (do_mq_open_func(false))
+        if (do_mq_open_func(false), !sys_err_code)
         {
-          // Opened!
-          success = true;
-          continue; // `break;`, really (success==true).
+          success = true; // Opened!
+          continue; // `break`, really.
         }
-        // else if (!do_mq_open_func(false)) // I.e., it failed for some reason.
+        // else if (do_mq_open_func() failed):
         if (sys_err_code != boost::system::errc::no_such_file_or_directory)
         {
-          // Real error.  GTFO.
-          continue; // `break;`, really (sys_err_code==true).
+          return; // Real error.  GTFO.
         }
         // else if (no_such_file_or_directory): Open failed, because MQ *just* got unlinked.  Try again!
 
@@ -226,49 +243,55 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
              "perms = [" << std::setfill('0') << std::setw(4) << std::oct << perms.get_permissions() << "].");
         }
 
-        sys_err_code.clear(); // success remains false, and that wasn't a fatal error, so ensure loop continues.
+        // success remains false, and that wasn't a fatal error; so we did not return, and loop continues.
       }
-      while ((!success) && (!sys_err_code));
-
-      // Now just encode success-or-not entirely in sys_err_code's truthiness.
-      if (success)
-      {
-        sys_err_code.clear();
-      }
-      // else { sys_err_code is the reason loop exited already. }
+      while (!success);
 
       // Now fall through.
     } // else if (!CREATE_ONLY_ELSE_MAYBE)
 
     // We never use blocking transmission -- always using *wait_*able() so that interrupt_*() works.  Non-blocking 4eva.
-    if ((!sys_err_code) && (!set_non_blocking(true, &sys_err_code)))
+    if (!set_non_blocking(true, &sys_err_code)) // (On error it'd print Error_code redundantly.  It's fine.)
     {
       assert(sys_err_code);
-
-      // Clean up.
-
-      // Disregard any error.  In Linux, by the way, only EBADF is possible apparently; should be fine.
-      mq_close(m_mq.m_native_handle);
-      m_mq = {};
+      return;
     }
+    // else
 
-    if (!sys_err_code)
-    {
-      sys_err_code = epoll_setup(); // It cleans up everything if it fails.
-    }
-  } // if (!sys_err_code) (but might have become true inside)
+    sys_err_code = epoll_setup(); // Lastly setup the watcher mechanism.
+  })(); // The returning-on-error gauntlet.
 
   if (sys_err_code)
   {
+    Error_code sink;
+
+    m_interrupt_detector_rcv.close(sink);
+    m_interrupter_rcv.close(sink);
+    m_interrupt_detector_snd.close(sink);
+    m_interrupter_snd.close(sink);
+    /* (As of this writing could use m_epoll_hndl_snd.close() to replace prev 3 lines; also below and in several
+     * places in this class, where ::close() is used.  Since the whole class is based on the epoll() API, though,
+     * it seemed more honest and even, perversely, maintainable to use the proper native API for
+     * epoll() FD-closing). */
+    close(m_epoll_hndl_rcv.m_native_handle); m_epoll_hndl_rcv = {};
+    close(m_epoll_hndl_snd.m_native_handle); m_epoll_hndl_snd = {};
+    mq_close(m_mq.m_native_handle); m_mq = {};
+
+    if (created)
+    {
+      /* Roll back the creation: else a healthy-looking -- but, e.g., possibly wrongly-permissioned -- MQ would
+       * remain at `absolute_name` despite our reporting failure.  Best-effort: disregard any error. */
+      mq_unlink(mq_name.c_str());
+    }
+
     if (logger_ptr && logger_ptr->should_log(Sev::S_WARNING, get_log_component()))
     {
       ios_all_saver saver{*(logger_ptr->this_thread_ostream())}; // Revert std::oct/etc. soon.
 
       FLOW_LOG_WARNING_WITHOUT_CHECKING
-        ("Posix_mq_handle [" << *this << "]: mq_open() or set_resource_permissions() error (if the latter, details "
-         "above and repeated below; otherwise error details only follow) while "
+        ("Posix_mq_handle [" << *this << "]: Setup error (additional details may be above) while "
          "constructing MQ handle to MQ at name [" << absolute_name() << "] in "
-         "create-only mode; max msg size [" << max_msg_sz << "] x [" << max_n_msg << "] msgs; "
+         "[" << MODE_STR << "] mode; max msg size [" << max_msg_sz << "] x [" << max_n_msg << "] msgs; "
          "perms = [" << std::setfill('0') << std::setw(4) << std::oct << perms.get_permissions() << "].");
     }
     FLOW_ERROR_SYS_ERROR_LOG_WARNING();
@@ -282,7 +305,11 @@ Posix_mq_handle::Posix_mq_handle(Mode_tag, flow::log::Logger* logger_ptr, const 
       throw Runtime_error{sys_err_code, FLOW_UTIL_WHERE_AM_I_STR()};
     }
   } // if (sys_err_code)
-  // else { Cool! }
+  else if (err_code)
+  {
+    *err_code = sys_err_code; // Cool!
+  }
+  // else { Cool!  Just do not throw. }
 } // Posix_mq_handle::Posix_mq_handle(Mode_tag)
 
 Posix_mq_handle::Posix_mq_handle(flow::log::Logger* logger_ptr, const Shared_name& absolute_name_arg,
@@ -316,54 +343,64 @@ Posix_mq_handle::Posix_mq_handle(flow::log::Logger* logger_ptr, const Shared_nam
   using flow::error::Runtime_error;
   using boost::system::system_category;
   using ::mq_open;
+  using ::mq_close;
+  using ::close;
   // using ::O_RDWR; // A macro apparently.
 
   FLOW_LOG_TRACE
     ("Posix_mq_handle [" << *this << "]: Constructing MQ handle to MQ at name [" << absolute_name() << "] in "
      "open-only mode.");
 
-  // Get pipe stuff out of the way, as it does not need m_mq.
-  auto sys_err_code = pipe_setup();
+  // Similar setup to the Mode_tag ctor; just somewhat simpler (no `created` possibility; less stuff to log).
+  Error_code sys_err_code;
 
-  if (!sys_err_code)
+  ([&]()
   {
+    // Get pipe stuff out of the way, as it does not need m_mq.
+    if ((sys_err_code = pipe_setup()))
+    {
+      return;
+    }
+    // else
+
     /* Note: O_NONBLOCK is something we are forced to set/unset depending on the transmission API being called.
      * So just don't worry about it here. */
     const auto raw = mq_open(shared_name_to_mq_name(absolute_name()).c_str(), O_RDWR);
-    if (raw != -1)
+    if (raw == -1)
     {
-      m_mq = Native_handle{raw};
-    }
-
-    if (m_mq.null())
-    {
-      FLOW_LOG_WARNING
-        ("Posix_mq_handle [" << *this << "]: mq_open() error (error details follow) while "
-         "constructing MQ handle to MQ at name [" << absolute_name() << "] in open-only mode.");
       sys_err_code = {errno, system_category()};
+      return;
     }
-    else
+    // else
+
+    m_mq = Native_handle{raw};
+
+    // We never use blocking transmission -- always using *wait_*able() => interrupt_*() works.  Non-blocking 4eva.
+    if (!set_non_blocking(true, &sys_err_code)) // (On error it'd print Error_code redundantly.  It's fine.)
     {
-      // We never use blocking transmission -- always using *wait_*able() => interrupt_*() works.  Non-blocking 4eva.
-      if (!set_non_blocking(true, &sys_err_code))
-      {
-        assert(sys_err_code);
+      assert(sys_err_code);
+      return;
+    }
+    // else
 
-        // Clean up.
-
-        // Disregard any error.  In Linux, by the way, only EBADF is possible apparently; it's fine.
-        mq_close(m_mq.m_native_handle);
-        m_mq = {};
-      }
-      else
-      {
-        sys_err_code = epoll_setup(); // It logged on error; also then it cleaned up everything.
-      }
-    } // if (!m_mq.null()) (but it may have become null, and sys_err_code therefore truthy, inside)
-  } // if (!sys_err_code) (but it may have become truthy inside)
+    sys_err_code = epoll_setup(); // Lastly setup the watcher mechanism.
+  })();
 
   if (sys_err_code)
   {
+    Error_code sink;
+
+    m_interrupt_detector_rcv.close(sink); // @todo Code reuse with other cleanup sequences.
+    m_interrupter_rcv.close(sink);
+    m_interrupt_detector_snd.close(sink);
+    m_interrupter_snd.close(sink);
+    close(m_epoll_hndl_rcv.m_native_handle); m_epoll_hndl_rcv = {};
+    close(m_epoll_hndl_snd.m_native_handle); m_epoll_hndl_snd = {};
+    mq_close(m_mq.m_native_handle); m_mq = {};
+
+    FLOW_LOG_WARNING
+      ("Posix_mq_handle [" << *this << "]: Setup error (additional details may be above) while "
+       "constructing MQ handle to MQ at name [" << absolute_name() << "] in open-only mode.");
     FLOW_ERROR_SYS_ERROR_LOG_WARNING();
 
     if (err_code)
@@ -375,12 +412,18 @@ Posix_mq_handle::Posix_mq_handle(flow::log::Logger* logger_ptr, const Shared_nam
       throw Runtime_error{sys_err_code, FLOW_UTIL_WHERE_AM_I_STR()};
     }
   }
-  // else { Cool! }
+  else if (err_code)
+  {
+    *err_code = sys_err_code; // Cool!
+  }
+  // else { Cool!  Just do not throw. }
 } // Posix_mq_handle::Posix_mq_handle(Open_only)
 
 Error_code Posix_mq_handle::pipe_setup()
 {
   using boost::asio::connect_pipe;
+
+  // Reminder: Caller will cleanup on error, so we can just return.
 
   Error_code sys_err_code;
   connect_pipe(m_interrupt_detector_snd, m_interrupter_snd, sys_err_code);
@@ -393,13 +436,7 @@ Error_code Posix_mq_handle::pipe_setup()
   {
     FLOW_LOG_WARNING
       ("Posix_mq_handle [" << *this << "]: Constructing MQ handle to MQ at name [" << absolute_name() << "]: "
-       "connect-pipe failed.  Details follow.");
-    FLOW_ERROR_SYS_ERROR_LOG_WARNING();
-
-    // Clean up first guys (might be no-op).
-    Error_code sink;
-    m_interrupter_snd.close(sink);
-    m_interrupt_detector_snd.close(sink);
+       "connect-pipe failed.  Details follow."); // Caller logs about sys_err_code.
   }
 
   return sys_err_code;
@@ -410,8 +447,6 @@ Error_code Posix_mq_handle::epoll_setup()
   using boost::system::system_category;
   using ::epoll_create1;
   using ::epoll_ctl;
-  using ::mq_close;
-  using ::close;
   using Epoll_event = ::epoll_event;
   // using ::EPOLL_CTL_ADD; // A macro apparently.
   // using ::EPOLLIN; // A macro apparently.
@@ -421,10 +456,7 @@ Error_code Posix_mq_handle::epoll_setup()
    * Set up one epoll handle for checking for writability; another for readability.
    * Into each one add an interrupter FD (readability of read end of an anonymous pipe).
    *
-   * There's some lame cleanup logic below specific to the 2-handle situation.  It's okay.  Just, if setting
-   * up the outgoing-direction epolliness fails, it cleans up itself.  If that succeeds, but incoming-direction
-   * setup then fails, then after it cleans up after itself, we have to undo the outgoing-direction setup. */
-
+   * Reminder: Caller will cleanup on error, so we can just return. */
   Error_code sys_err_code;
 
   const auto setup = [&](Native_handle* epoll_hndl_ptr, bool snd_else_rcv)
@@ -435,23 +467,11 @@ Error_code Posix_mq_handle::epoll_setup()
     epoll_hndl = Native_handle{epoll_create1(0)};
     if (epoll_hndl.m_native_handle == -1)
     {
-      FLOW_LOG_WARNING("Posix_mq_handle [" << *this << "]: Created MQ handle fine, but epoll_create1() failed; "
-                       "details follow.");
-      sys_err_code = {errno, system_category()};
-
-      // Clean up.
-
       epoll_hndl = {}; // No-op as of this writing, but just to keep it maintainable do it anyway.
 
-      Error_code sink;
-      m_interrupt_detector_snd.close(sink);
-      m_interrupter_snd.close(sink);
-      m_interrupt_detector_rcv.close(sink);
-      m_interrupter_rcv.close(sink);
-
-      // Disregard any error.  In Linux, by the way, only EBADF is possible apparently; should be fine.
-      mq_close(m_mq.m_native_handle);
-      m_mq = {};
+      sys_err_code = {errno, system_category()};
+      FLOW_LOG_WARNING("Posix_mq_handle [" << *this << "]: Created MQ handle fine, but epoll_create1() failed; "
+                       "details follow."); // Caller logs about sys_err_code.
       return;
     }
     // else if (epoll_hndl.m_native_handle != -1)
@@ -463,27 +483,21 @@ Error_code Posix_mq_handle::epoll_setup()
     Epoll_event event_of_interest2;
     event_of_interest2.events = EPOLLIN;
     event_of_interest2.data.fd = interrupt_detector.native_handle();
-    if ((epoll_ctl(epoll_hndl.m_native_handle, EPOLL_CTL_ADD, event_of_interest1.data.fd, &event_of_interest1) == -1) ||
+    if ((epoll_ctl(epoll_hndl.m_native_handle, EPOLL_CTL_ADD, event_of_interest1.data.fd, &event_of_interest1) == -1)
+        ||
         (epoll_ctl(epoll_hndl.m_native_handle, EPOLL_CTL_ADD, event_of_interest2.data.fd, &event_of_interest2) == -1))
     {
+      sys_err_code = {errno, system_category()};
       FLOW_LOG_WARNING("Posix_mq_handle [" << *this << "]: Created MQ handle fine, but an epoll_ctl() failed; "
                        "snd_else_rcv = [" << snd_else_rcv << "]; details follow.");
-      sys_err_code = {errno, system_category()};
-
-      // Clean up everything.
-      close(epoll_hndl.m_native_handle);
-      epoll_hndl = {};
-      // Disregard any error.  In Linux, by the way, only EBADF is possible apparently; should be fine.
-      mq_close(m_mq.m_native_handle);
-      m_mq = {};
       return;
     }
   }; // const auto setup =
 
-  (setup(&m_epoll_hndl_snd, true), sys_err_code) || // Do setup1.  If it succeeds...
-    ((setup(&m_epoll_hndl_rcv, false), sys_err_code) && // ...do setup2.  If it fails...
-       (// ...undo setup1, except m_mq+pipes cleanup was already done by setup2's failure, so merely:
-        close(m_epoll_hndl_snd.m_native_handle), m_epoll_hndl_snd = {}, true));
+  if (setup(&m_epoll_hndl_snd, true), !sys_err_code) // Do setup1.  If it succeeds...
+  {
+    setup(&m_epoll_hndl_rcv, false); // ...do setup2.
+  }
 
   return sys_err_code;
 } // Posix_mq_handle::epoll_setup()
@@ -521,13 +535,30 @@ Posix_mq_handle::~Posix_mq_handle()
 Posix_mq_handle& Posix_mq_handle::operator=(Posix_mq_handle&& src)
 {
   using std::swap;
+  using ::mq_close;
+  using ::close;
 
   if (&src != this)
   {
+    if (!m_mq.null())
+    {
+      mq_close(m_mq.m_native_handle);
+    }
     m_mq = {};
+
     m_absolute_name.clear();
+
+    if (!m_epoll_hndl_snd.null())
+    {
+      close(m_epoll_hndl_snd.m_native_handle);
+    }
     m_epoll_hndl_snd = {};
+    if (!m_epoll_hndl_rcv.null())
+    {
+      close(m_epoll_hndl_rcv.m_native_handle);
+    }
     m_epoll_hndl_rcv = {};
+
     m_interrupter_snd = Pipe_writer{m_nb_task_engine};
     m_interrupt_detector_snd = Pipe_reader{m_nb_task_engine};
     m_interrupter_rcv = Pipe_writer{m_nb_task_engine};
@@ -621,11 +652,11 @@ size_t Posix_mq_handle::max_msg_size() const
   if (mq_getattr(m_mq.m_native_handle, &attr) != 0)
   {
     /* We could handle error gracefully, as we do elsewhere, but EBADF is the only possibility, and there's zero
-     * reason it should happen unles m_mq is null at this point.  It'd be fine to handle it, but then we'd have
+     * reason it should happen unless m_mq is null at this point.  It'd be fine to handle it, but then we'd have
      * to emit an Error_code, and the API would change, and the user would have more to worry about; I (ygoldfel)
      * decided it's overkill.  So if it does happen, log and assert(). @todo Maybe reconsider. */
     Error_code sink;
-    handle_mq_api_result(-1, &sink, "Posix_mq_handle::max_msg_size: mq_getattr()");
+    handle_mq_api_result(-1, &sink, "Posix_mq_handle::max_msg_size(): mq_getattr()");
     assert(false && "mq_getattr() failed (details logged); this is too bizarre.");
     return 0;
   }
@@ -646,12 +677,12 @@ size_t Posix_mq_handle::max_n_msgs() const
   if (mq_getattr(m_mq.m_native_handle, &attr) != 0)
   {
     Error_code sink;
-    handle_mq_api_result(-1, &sink, "Posix_mq_handle::max_msg_size: mq_getattr()");
+    handle_mq_api_result(-1, &sink, "Posix_mq_handle::max_n_msgs(): mq_getattr()");
     assert(false && "mq_getattr() failed (details logged); this is too bizarre.");
     return 0;
   }
   return size_t(attr.mq_maxmsg);
-} // Posix_mq_handle::max_msg_size()
+} // Posix_mq_handle::max_n_msgs()
 
 bool Posix_mq_handle::set_non_blocking(bool nb, Error_code* err_code)
 {
@@ -772,7 +803,7 @@ void Posix_mq_handle::send(const util::Blob_const& blob, Error_code* err_code)
       assert(*err_code);
       return;
     }
-    // else if (would-block): as promised, INFO logs.
+    // else if (would-block): TRACE-logs.
 
     FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                    "size [" << blob.size() << "]: would-block.  Executing blocking-wait.");
@@ -825,8 +856,7 @@ bool Posix_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_durati
     FLOW_LOG_DATA("Blob contents: [\n" << buffers_dump_string(blob, "  ") << "].");
   }
 
-  auto now = Fine_clock::now();
-  auto after = now;
+  auto before = Fine_clock::now();
 
   while (true)
   {
@@ -840,16 +870,15 @@ bool Posix_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_durati
     // else
     if (errno != EAGAIN)
     {
-      handle_mq_api_result(-1, err_code, "Posix_mq_handle::send(): mq_send(nb)");
+      handle_mq_api_result(-1, err_code, "Posix_mq_handle::timed_send(): mq_send(nb)");
       assert(*err_code);
       return false;
     }
-    // else if (would-block): as promised, INFO logs.
+    // else if (would-block): TRACE-logs.
 
     FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                    "size [" << blob.size() << "]: would-block.  Executing blocking-wait.");
 
-    timeout_from_now -= (after - now); // No-op the first time; after that reduces time left.
     const bool ready = timed_wait_sendable(timeout_from_now, err_code);
     if (*err_code)
     {
@@ -866,8 +895,9 @@ bool Posix_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_durati
     // else: successful wait for transmissibility.  Try nb-transmitting again.
     FLOW_LOG_TRACE("Blocking-wait reported transmissibility.  Retrying.");
 
-    after = Fine_clock::now();
-    assert((after >= now) && "Fine_clock is supposed to never go backwards.");
+    const auto after = Fine_clock::now();
+    timeout_from_now -= (after - before); // Reduce time left by the duration of the last attempt.
+    before = after;
   } // while (true)
 
   return true;
@@ -910,7 +940,7 @@ bool Posix_mq_handle::try_receive(util::Blob_mutable* blob, Error_code* err_code
     FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-pop to blob @[" << blob->data() << "], "
                    "max-size [" << blob->size() << "]: would-block.");
     err_code->clear();
-    return false; // Queue full.
+    return false; // Queue empty.
   }
   // else
 
@@ -970,7 +1000,7 @@ void Posix_mq_handle::receive(util::Blob_mutable* blob, Error_code* err_code)
       assert(*err_code);
       return;
     }
-    // else if (would-block): as promised, INFO logs.
+    // else if (would-block): TRACE-logs.
 
     FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-pop to blob @[" << blob->data() << "], "
                    "max-size [" << blob->size() << "]: would-block.  Executing blocking-wait.");
@@ -1017,8 +1047,7 @@ bool Posix_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duratio
   ssize_t n_rcvd;
   unsigned int pri_ignored;
 
-  auto now = Fine_clock::now();
-  auto after = now;
+  auto before = Fine_clock::now();
 
   while (true)
   {
@@ -1042,12 +1071,11 @@ bool Posix_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duratio
       assert(*err_code);
       return false;
     }
-    // else if (would-block): as promised, INFO logs.
+    // else if (would-block): TRACE-logs.
 
     FLOW_LOG_TRACE("Posix_mq_handle [" << *this << "]: Nb-pop to blob @[" << blob->data() << "], "
                    "max-size [" << blob->size() << "]: would-block.  Executing blocking-wait.");
 
-    timeout_from_now -= (after - now); // No-op the first time; after that reduces time left.
     const bool ready = timed_wait_receivable(timeout_from_now, err_code);
     if (*err_code)
     {
@@ -1064,8 +1092,9 @@ bool Posix_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duratio
     // else: successful wait for transmissibility.  Try nb-transmitting again.
     FLOW_LOG_TRACE("Blocking-wait reported transmissibility.  Retrying.");
 
-    after = Fine_clock::now();
-    assert((after >= now) && "Fine_clock is supposed to never go backwards.");
+    const auto after = Fine_clock::now();
+    timeout_from_now -= (after - before); // Reduce time left by the duration of the last attempt.
+    before = after;
   } // while (true)
 
   return true;
@@ -1213,12 +1242,12 @@ bool Posix_mq_handle::wait_impl(util::Fine_duration timeout_from_now_or_none, Er
   Native_handle::handle_t epoll_hndl;
   if constexpr(SND_ELSE_RCV) { epoll_hndl = m_epoll_hndl_snd.m_native_handle; } else
                              { epoll_hndl = m_epoll_hndl_rcv.m_native_handle; }
-  const auto epoll_result = epoll_wait(epoll_hndl, evs.begin(), 1, epoll_timeout_from_now_ms);
+  const auto epoll_result = epoll_wait(epoll_hndl, evs.begin(), sizeof(evs) / sizeof(Epoll_event),
+                                       epoll_timeout_from_now_ms);
   if (epoll_result == -1)
   {
-    FLOW_LOG_WARNING("Posix_mq_handle [" << *this << "]: epoll_wait() yielded error.  Details follow.");
-
     const auto& sys_err_code = *err_code = {errno, system_category()};
+    FLOW_LOG_WARNING("Posix_mq_handle [" << *this << "]: epoll_wait() yielded error.  Details follow.");
     FLOW_ERROR_SYS_ERROR_LOG_WARNING();
     return false;
   }
@@ -1323,9 +1352,9 @@ void Posix_mq_handle::remove_persistent(flow::log::Logger* logger_ptr, // Static
   }
   // else
 
-  FLOW_LOG_WARNING("Posix_mq @ Shared_name[" << absolute_name << "]: While removing persistent MQ:"
-                   "mq_unlink() yielded error.  Details follow.");
   const auto& sys_err_code = *err_code = {errno, system_category()};
+  FLOW_LOG_WARNING("Posix_mq @ Shared_name[" << absolute_name << "]: While removing persistent MQ: "
+                   "mq_unlink() yielded error.  Details follow.");
   FLOW_ERROR_SYS_ERROR_LOG_WARNING();
 } // Posix_mq_handle::remove_persistent()
 
@@ -1340,12 +1369,12 @@ bool Posix_mq_handle::handle_mq_api_result(int result, Error_code* err_code, uti
   }
   // else
 
-  FLOW_LOG_WARNING("Posix_mq_handle [" << *this << "]: mq_*() yielded error; context = [" << context << "].  "
-                   "Details follow.");
   const auto& sys_err_code = *err_code
     = (errno == EMSGSIZE)
         ? Error_code{error::Code::S_MQ_MESSAGE_SIZE_OVER_OR_UNDERFLOW} // By contract: this specific code for this.
         : Error_code{errno, system_category()}; // Otherwise whatever it was.
+  FLOW_LOG_WARNING("Posix_mq_handle [" << *this << "]: mq_*() yielded error; context = [" << context << "].  "
+                   "Details follow.");
   FLOW_ERROR_SYS_ERROR_LOG_WARNING();
 
   return false;

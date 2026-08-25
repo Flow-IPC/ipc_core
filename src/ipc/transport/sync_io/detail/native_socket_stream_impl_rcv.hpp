@@ -124,8 +124,7 @@ bool Native_socket_stream_impl::async_receive_batch_impl(Batch* batch,
 
     rcv_read_batch_from_pkt_stream<Batch>(batch, assume_would_block, &sync_err_code);
 
-    if ((!sync_err_code)
-        || (sync_err_code != error::Code::S_SYNC_IO_WOULD_BLOCK)) // Would-block continues op; other error ends it.
+    if (sync_err_code != error::Code::S_SYNC_IO_WOULD_BLOCK) // Would-block continues op; success/other error ends it.
     {
       FLOW_LOG_TRACE("Async-request for in-batch [" << *batch << "] completed synchronously (result "
                      "[" << sync_err_code << "] [" << sync_err_code.message() << "]); emitting synchronously and "
@@ -177,10 +176,10 @@ void Native_socket_stream_impl::rcv_read_batch_from_pkt_stream(Batch* batch,
               "static_assert() rather than run-time.");
   assert(!m_rcv_pending_err_code);
 
-  /* The below might look surprisingly brief and relatively simple given all the many subleties
+  /* The below might look surprisingly brief and relatively simple given all the many subtleties
    * in reading up-to-*batch-size messages essentially in one fell swoop (plus all the auto-pings and graceful-closes
    * and ... the user has no interest in).  That's really because Native_socket_stream_msg_batch_in::nb_read() does
-   * all of that for us!  Well, really, it's more that that whole class a part of our impl -- we aren't really
+   * all of that for us!  Well, really, it's more that that whole class is a part of our impl -- we aren't really
    * separable -- while also giving the user a standard interface for loading target resources (buffers and such)
    * and checking the results (including batch->n_used(), the # of messages received).
    *
@@ -357,7 +356,7 @@ void Native_socket_stream_impl::rcv_on_ev_peer_socket_pkt_stream_batch_readable_
     FLOW_LOG_WARNING("Socket stream [" << *this << "]: User's wait-for-readable finished (readable or error, "
                      "we do not know which yet); would resume processing depending on what we were doing before; "
                      "however an error was detected in the meantime (as of this writing: idle timeout).  "
-                     "Stopping read chain (batch); in-batch [" << *batch << "]");
+                     "Stopping read chain (batch); in-batch [" << *batch << "].");
     assert((!m_rcv_user_batch_request)
            && "If rcv-error emitted during low-level async-wait, we should have fed it to any pending async-receive.");
     return;
@@ -370,7 +369,7 @@ void Native_socket_stream_impl::rcv_on_ev_peer_socket_pkt_stream_batch_readable_
   Error_code sync_err_code;
 
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: User-performed wait-for-readable finished (readable or error, "
-                 "we do not know which yet).  Retrying to resume read chain (batch); in-batch [" << *batch << "]");
+                 "we do not know which yet).  Retrying to resume read chain (batch); in-batch [" << *batch << "].");
 
   rcv_read_batch_from_pkt_stream<Batch>(batch, false, &sync_err_code);
 

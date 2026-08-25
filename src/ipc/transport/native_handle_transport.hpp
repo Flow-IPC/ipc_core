@@ -51,7 +51,7 @@ namespace ipc::transport
  *     state any moved-from object is changed).
  *   - `sync_io`-core adopting ctor (which creates PEER-state object from an idle, as-if-just cted PEER-state
  *     sync_io::Native_handle_sender).
- *   - Move ctor, move assigment operator; these do the reasonable thing including setting the moved-from object
+ *   - Move ctor, move assignment operator; these do the reasonable thing including setting the moved-from object
  *     to NULL state.  Various satellite APIs (e.g., Native_socket_stream_acceptor) shall
  *     need these.  That is such APIs do not rely on the factory/shared-ownership pattern.
  *
@@ -99,10 +99,10 @@ namespace ipc::transport
  *   -# user prepares message blob B and tells `Native_handle_sender` S to send B;
  *   -# S tells low-level transport (possibly kernel) to accept B;
  *   -# `Native_handle_receiver` R pops B from low-level transport;
- *   -# user tells R it wanst to accept B, and R does give the latter to the user.
+ *   -# user tells R it wants to accept B, and R does give the latter to the user.
  *
  * It was a no-go to have Flow-IPC be in charge of allocating either-end buffer for B on the user's behalf:
- * the user may want to user their own allocator, or the stack, or ??? -- possibly with zero-copy and prefix/postfix
+ * the user may want to use their own allocator, or the stack, or ??? -- possibly with zero-copy and prefix/postfix
  * data nearby.  The user buffer has to be ready, and S and R need to work with the memory areas provided by the
  * user.
  *
@@ -114,11 +114,11 @@ namespace ipc::transport
  * wrong, or the receivier application is mis-coded, or who knows -- the receiver just isn't quick enough.)
  *
  * The answer, as already noted: *One* or more of 1, 2, 3 has to make a copy of B long enough until 4 has received it.
- * At that point, in terms of overall performance, it *which* one of 1, 2, 3 it should be.  Upon deliberating
- * a few options occurred, but it seemed clear enough that 1 (original user) should not be the done, if it can be
- * helped.  IPC is not networking; as an end user I expect sending an out-message to work synchronously.  Making
- * me worry about a completion handler complicates the outgoing-direction API hugely -- and not in a way that
- * makes the incoming-direction API any simpler, since that one always has to be ready for would-block
+ * At that point, in terms of overall performance, the question is *which* one of 1, 2, 3 it should be.
+ * Upon deliberating a few options occurred, but it seemed clear enough that 1 (original user) should not be the one,
+ * if it can be helped.  IPC is not networking; as an end user I expect sending an out-message to work synchronously.
+ * Making me worry about a completion handler complicates the outgoing-direction API hugely -- and not in a way
+ * that makes the incoming-direction API any simpler, since that one always has to be ready for would-block
  * (i.e., no in-messages immediately ready -- an async-receive API is required).
  *
  * So that left 2 or 3.  I (ygoldfel) simply made the decision that one has to be chosen, and of those 2 is earlier
@@ -193,8 +193,8 @@ public:
    *   - A moved-from Native_handle_sender (i.e., the `src` arg for move-ctor and move-assignment operator)
    *     becomes as-if defaulted-constructed.
    *   - A target Native_handle_sender for a factory-like method (such as Native_socket_stream_acceptor::async_accept())
-   *     shall typically be default-cted by the callin guse.  (E.g.: Native_socket_stream_acceptor shall asynchronously
-   *     move-assign a logger-apointed, nicely-nicknamed into that target `*this`, typically default-cted.)
+   *     shall typically be default-cted by the calling user.  (E.g.: Native_socket_stream_acceptor shall asynchronously
+   *     move-assign a logger-appointed, nicely-nicknamed peer object into that target `*this`, typically default-cted.)
    *
    * ### Informal corollary -- ctor that begins in PEER state ###
    * Any functioning Native_handle_sender shall need at least one ctor that starts `*this` directly in PEER state.
@@ -260,7 +260,7 @@ public:
    * to one of those methods on the same `*this`.  An implication of the latter is as follows:
    *
    * Any user source code line that nullifies a `Ptr` (`shared_ptr`) handle to `*this` should be seen as potentially
-   * *synchoronously* invoking this dtor.  (By nullification we mean `.reset()` and anything else that makes the
+   * *synchronously* invoking this dtor.  (By nullification we mean `.reset()` and anything else that makes the
    * `Ptr` null.  For example destroying a `vector<Ptr>` that contains a `Ptr` pointing to `*this` = nullification.)
    * Therefore, if a nullification statement can possibly make the ref-count reach 0, then the user must zealously
    * protect that statement from running concurrently with another send/receive API call on `*this`.  That is to say,
@@ -294,8 +294,8 @@ public:
   /**
    * In PEER state: Returns max `meta_blob.size()` such that send_native_handle() shall not fail due to too-long
    * payload with error::Code::S_INVALID_ARGUMENT.  Always the same value once in PEER state.  The opposing
-   * Blob_receiver::receive_meta_blob_max_size() shall return the same value (in the opposing object potentially
-   * in a different process).
+   * Native_handle_receiver::receive_meta_blob_max_size() shall return the same value (in the opposing object
+   * potentially in a different process).
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns zero; else
    * a positive value.
@@ -425,8 +425,8 @@ public:
    *
    * @internal
    * The semantic re. calling `*end_sending()` after already having called it and having that exclusively
-   * return `false` and do nothing was a judgment call.  As of this writing there's a long-ish comment at the top of
-   * of `"sync_io::Native_socket_stream_impl::*end_sending()"`" body discussing why I (ygoldfel) went that way.
+   * return `false` and do nothing was a judgment call.  As of this writing there's a long-ish comment at the top
+   * of `"sync_io::Native_socket_stream_impl::*end_sending()"` body discussing why I (ygoldfel) went that way.
    * @endinternal
    *
    * @tparam Task_err
@@ -468,9 +468,9 @@ public:
    * an auto-ping shall be sent near auto_ping() time to establish a baseline.
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns `false` immediately
-   * instead and otherwise no-ops (logging aside).  If auto_ping() has already been called successfuly,
-   * subsequently it will return `false` and no-op (logging aside).  If `*end_sending()` has been called succesfully,
-   * auto_ping() will return `false` and no-op (logging side).
+   * instead and otherwise no-ops (logging aside).  If auto_ping() has already been called successfully,
+   * subsequently it will return `false` and no-op (logging aside).  If `*end_sending()` has been called successfully,
+   * auto_ping() will return `false` and no-op (logging aside).
    *
    * ### Behavior past `*end_sending()` ###
    * As noted: auto_ping() returns `false` and no-ops if invoked after successful `*end_sending()`.
@@ -892,7 +892,7 @@ public:
    * "Blob underflow semantics" for explanation of these semantics.
    *
    * Always the same value once in PEER state.  The opposing
-   * Blob_sender::send_meta_blob_max_size() shall return the same value (in the opposing object potentially
+   * Native_handle_sender::send_meta_blob_max_size() shall return the same value (in the opposing object potentially
    * in a different process).
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns zero; else
@@ -911,7 +911,7 @@ public:
    *     The falsy code indicates success; `N <= target_meta_blob.size()` indicates the number of bytes received into
    *     `target_meta_blob.data()` (zero means no blob was sent in the message).  `*target_hndl` is set
    *     (`target_hndl->null() == true` means no handle was sent in the message).
-   *   - Graceful-close.  This is indicated by `on_done_func(error::code::S_RECEIVES_FINISHED_CANNOT_RECEIVE, 0)`;
+   *   - Graceful-close.  This is indicated by `on_done_func(error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE, 0)`;
    *     neither the target blob nor target native handle are touched.
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns `false` immediately
@@ -920,6 +920,13 @@ public:
    * ### Blob copying behavior; synchronicity/blockingness guarantees ###
    * `*target_hndl` and the area described by `target_meta_blob` must both remain valid until `on_done_func()`
    * executes.  The method itself shall be non-blocking.
+   *
+   * Moreover -- and this applies to *all* `async_receive_*()` forms including `*_batch()` -- while a given
+   * async-receive request is outstanding (its completion handler not yet invoked), its target areas
+   * (`*target_hndl` and the `target_meta_blob` area here; the entire `*batch` object for the batch forms)
+   * belong to `*this`: accessing them, or issuing another `async_receive_*()` whose targets overlap them,
+   * yields undefined behavior.  (In particular: to issue 2+ concurrently-outstanding requests -- which is
+   * allowed -- use disjoint targets: distinct buffers; distinct batch objects.)
    *
    * The implementation shall, informally, strive to *not* copy the received blob (if any) into
    * `target_meta_blob.data()...` except from the low-level transport mechanism.  That is: it shall strive to not
@@ -976,7 +983,7 @@ public:
   /**
    * In PEER state: Asynchronously awaits 1+ discrete message(s) -- as sent by the opposing peer via
    * Native_handle_sender::send_native_handle() or `"Native_handle_sender::*end_sending()"` -- and
-   * receives them into into the target locations as described by `*batch` slots, reliably and in-order.
+   * receives them into the target locations as described by `*batch` slots, reliably and in-order.
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns
    * `false` immediately instead and otherwise no-ops (logging aside).  Otherwise:
@@ -990,6 +997,10 @@ public:
    *
    * @see This concept class doc header, section "Batch-receiving."  It provides essential background.
    *
+   * @note Reminder (see async_receive_native_handle() "Blob copying behavior" section): an outstanding
+   *       async-receive's targets belong to `*this`; hence 2+ concurrently-outstanding batch-receives must
+   *       target *distinct* batch objects.
+   *
    * @note It is not possible that the result of the async-op is 1+ messages received *and* an error is emitted.
    *       Even if internally this occurs, `*this` must first emit the 1+ messages; and report the error
    *       in the next `async_receive_*()` call.  For example, if 3 messages and graceful-close are simultaneously
@@ -997,9 +1008,9 @@ public:
    *
    * @note Be aware of the *implied would-block* condition.  See Msg_batch_in::full() doc header.  Spoiler alert:
    *       if we yielded data/no error (`batch->n_used()` increased), then it wasn't would-block... but if
-   *       `batch->full() == true` post-op, then the pipe is nevertheless in would-block state.  In this case
+   *       `batch->full() == false` post-op, then the pipe is nevertheless in would-block state.  In this case
    *       for performance the next (typically immediate) `async_receive_*_batch()` call should set
-   *       `assume_would_block = true`; other to `false`.
+   *       `assume_would_block = true`; otherwise to `false`.
    *
    * ### Error semantics ###
    * Same notes as for async_receive_native_handle().  Additionally: If `(!batch->initialized()) || batch->full()`
@@ -1012,7 +1023,7 @@ public:
    * without any would-blocks in there), but the Nth one yields a (non-`INVALID_ARGUMENT`, at least in-pipe-hosing,
    * possibly out-pipe-hosing too) error.
    *
-   * Now consider the analogous *single* batch-receive, async_receive_native_handle(), where `*batch` capacity
+   * Now consider the analogous *single* batch-receive, async_receive_native_handle_batch(), where `*batch` capacity
    * is at least N (and pre-condition `batch->n_used() == 0` for simplicity of discussion).  Should the
    * batch-receive yield success with `(batch->n_used() == N - 1)`, while the next async-receive yields error
    * (*delayed error*)?  Or should the batch-receive yield the error immediately, eating the `(N - 1)` in-messages?
@@ -1034,6 +1045,8 @@ public:
    *       sync_io::async_receive_batch_emulation() which will specially treat that specific error as of this writing.
    *   - For any other error outcome, including but not limited to `S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE`,
    *     the *instant error* outcome *must* occur.
+   *     - In this outcome any `Native_handle`s received with the eaten in-messages shall be closed (returned
+   *       to the OS) -- not leaked.
    *     - Rationale: It would have been not-unreasonable to allow the concept impl to do *delayed error* here
    *       (but not mandate it).  In particular that would mirror the experience of using single-receives only.
    *       The reason we do not allow it is for consistency of expected behavior across impls.  (For example
@@ -1078,7 +1091,7 @@ public:
    * not seconds).
    *
    * If `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns `false` immediately
-   * instead and otherwise no-ops (logging aside).  If idle_timer_run() has already been called successfuly,
+   * instead and otherwise no-ops (logging aside).  If idle_timer_run() has already been called successfully,
    * subsequently it will return `false` and no-op (logging aside).
    *
    * ### Important: Relationship between idle_timer_run() and async_receive_native_handle() ###

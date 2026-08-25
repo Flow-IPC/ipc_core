@@ -50,6 +50,12 @@ public:
   /**
    * Persistent_mq_handle holder that takes a deleter lambda on construction, intended here to perform additional deinit
    * steps in addition to closing the #Mq by deleting it.  Used by ensure_unique_peer() machinery.
+   *
+   * ### Rationale: Why `unique_ptr` and not `boost::scope::unique_resource`? ###
+   * The latter (cf. its use as util::Own_native_handle) would store the #Mq inline (no heap alloc) and skip the
+   * type-erased deleter.  However: the alloc and erasure are one-time costs at stream-object construction -- nowhere
+   * near a hot path -- and `Blob_stream_mq_sender_impl`/`_receiver_impl` rely on the null-pointer idiom
+   * (null <=> pipe hosed/closed) which `unique_ptr` provides naturally.  So the simpler thing stays.
    */
   using Auto_closing_mq = boost::movelib::unique_ptr<Mq, Function<void (Mq*)>>;
 
@@ -94,7 +100,7 @@ public:
    * `mq` is untouched if null is returned.
    *
    * @param logger_ptr
-   *        Logger to use subsequently. Errors are logged as WARNING; otherwise nothing of INFO or higher verbosity
+   *        Logger to use subsequently.  Errors are logged as WARNING; otherwise nothing of INFO or higher verbosity
    *        is logged.
    * @param mq
    *        See above.
@@ -282,7 +288,11 @@ typename Blob_stream_mq_base_impl<Persistent_mq_handle>::Auto_closing_mq
     *err_code = is_dupe_error ? Error_code{snd_else_rcv
                                              ? error::Code::S_BLOB_STREAM_MQ_SENDER_EXISTS
                                              : error::Code::S_BLOB_STREAM_MQ_RECEIVER_EXISTS}
-                              : Error_code{errno, system_category()};
+                                /* The following logic borrows from the op_with_possible_bipc_mq_exception()s
+                                 * of this world. */
+                              : ((native_code_raw == 0)
+                                   ? Error_code{error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR}
+                                   : Error_code{native_code_raw, system_category()});
     return {};
   } // catch (bipc::interprocess_exception)
   // Got here: OK, no dupe, no other problem.

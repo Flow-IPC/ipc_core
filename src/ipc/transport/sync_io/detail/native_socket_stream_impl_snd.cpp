@@ -227,7 +227,7 @@ bool Native_socket_stream_impl::send_native_handle(Native_handle hndl_or_null, c
      * (If meta_size is 0, meta_blob is basically as-if-default-cted Blob_const{} and will be ignored.) */
     snd_sync_write_or_q_payload(hndl_or_null, meta_length_blob, meta_blob, false);
     /* That may have returned `true` indicating everything (up to and including our 1-2 payloads) was synchronously
-     * given to kernel successfuly; or this will never occur, because outgoing-pipe-ending error was encountered.
+     * given to kernel successfully; or this will never occur, because outgoing-pipe-ending error was encountered.
      * Since this is send_native_handle(), we do not care: there is no on-done
      * callback to invoke, as m_snd_finished is false, as *end_sending() has not been called yet. */
 
@@ -531,10 +531,16 @@ bool Native_socket_stream_impl::auto_ping(util::Fine_duration period)
   /* Important: avoid_qing=true for reasons explained in its doc header.  Namely:
    * If blob_with_ff would-block entirely, then there are already data that would signal-non-idleness sitting
    * in the kernel buffer, so the auto-ping can be safely dropped in that case. */
-  snd_sync_write_or_q_payload({}, blob_with_ff, {}, true);
+  bool dropped;
+  snd_sync_write_or_q_payload({}, blob_with_ff, {}, true, &dropped);
 
   ++m_snd_stats.m_auto_pings; // Count even if dropped due to avoid_qing or error below.
-  m_snd_stats.m_total_low_lvl_bytes += sizeof(Native_socket_stream_cfg::S_PING_SENTINEL);
+  if (!dropped)
+  {
+    /* (A dropped ping puts nothing on the wire; count nothing then, so snd-side and rcv-side low-level byte
+     * totals can reconcile.) */
+    m_snd_stats.m_total_low_lvl_bytes += sizeof(Native_socket_stream_cfg::S_PING_SENTINEL);
+  }
 
   if (m_snd_pending_err_code)
   {
@@ -624,10 +630,15 @@ void Native_socket_stream_impl::snd_on_ev_auto_ping_now_timer_fired()
   const Blob_const blob_with_ff{&Native_socket_stream_cfg::S_PING_SENTINEL,
                                 sizeof(Native_socket_stream_cfg::S_PING_SENTINEL)};
 
-  snd_sync_write_or_q_payload({}, blob_with_ff, {}, true);
+  bool dropped;
+  snd_sync_write_or_q_payload({}, blob_with_ff, {}, true, &dropped);
 
   ++m_snd_stats.m_auto_pings;
-  m_snd_stats.m_total_low_lvl_bytes += sizeof(Native_socket_stream_cfg::S_PING_SENTINEL);
+  if (!dropped)
+  {
+    // (Dropped ping => nothing on wire => count nothing, so the 2 sides' byte totals can reconcile.)
+    m_snd_stats.m_total_low_lvl_bytes += sizeof(Native_socket_stream_cfg::S_PING_SENTINEL);
+  }
 
   if (m_snd_pending_err_code)
   {
@@ -654,7 +665,8 @@ void Native_socket_stream_impl::snd_on_ev_auto_ping_now_timer_fired()
 } // Native_socket_stream_impl::snd_on_ev_auto_ping_now_timer_fired()
 
 bool Native_socket_stream_impl::snd_sync_write_or_q_payload(Native_handle hndl_or_null, const util::Blob_const& blob1,
-                                                            const util::Blob_const& blob2_or_none, bool avoid_qing)
+                                                            const util::Blob_const& blob2_or_none, bool avoid_qing,
+                                                            bool* dropped_or_null)
 {
   using flow::util::Blob;
   using util::Blob_const;
@@ -662,6 +674,11 @@ bool Native_socket_stream_impl::snd_sync_write_or_q_payload(Native_handle hndl_o
   // We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
 
   assert((!m_snd_pending_err_code) && "Pipe must not be pre-hosed by contract.");
+
+  if (dropped_or_null)
+  {
+    *dropped_or_null = false; // Overwritten in the one relevant spot below.
+  }
 
   size_t n_sent_or_zero;
   if (m_snd_pending_payloads_q.empty())
@@ -740,6 +757,11 @@ bool Native_socket_stream_impl::snd_sync_write_or_q_payload(Native_handle hndl_o
                     "Therefore dropping payload (done for auto-pings at least).  Out-queue size remains "
                     "[" << q_size << "].");
 
+      if (dropped_or_null)
+      {
+        *dropped_or_null = true;
+      }
+
       /* We won't enqueue it, so there's nothing more to do, but careful in deciding what to return:
        * If the queue is empty, we promised we would return true.  If the queue is not empty, we promised
        * we would return false.  Whether that's what we should do is subtly questionable, but as of this
@@ -750,14 +772,14 @@ bool Native_socket_stream_impl::snd_sync_write_or_q_payload(Native_handle hndl_o
 
     if constexpr(!Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT)
     {
-      // This is even more interesting that what would've led to the preceding INFO msg; definitely INFO as well.
+      // This is even more interesting than what would've led to the preceding INFO msg; definitely INFO as well.
       FLOW_LOG_INFO("Socket stream [" << *this << "]: Want to send low-level payload(s): "
                     "handle [" << hndl_or_null << "]; "
                     "payload 1 sized [" << blob1.size() << "] @ [" << blob1.data() << "]; "
                     "payload 2 sized [" << blob2_or_none.size() << "] @ "
                     "[" << ((blob2_or_none.size() != 0) ? blob2_or_none.data() : nullptr) << "]; "
                     "result was would-block for all but [" << n_sent_or_zero << "] of its bytes (blocked-queue "
-                    "was empty, so nb-send was attmpted, and some -- but not all -- of payload's bytes "
+                    "was empty, so nb-send was attempted, and some -- but not all -- of payload's bytes "
                     "would-block at this time).  We cannot \"get back\" the sent bytes and thus are forced "
                     "to queue the remaining ones (would have dropped payload if all the bytes would-block).");
       // Fall-through.
@@ -1104,7 +1126,7 @@ void Native_socket_stream_impl::snd_on_ev_peer_socket_writable_or_error()
          * just "edit" it in-place as needed. */
         if (n_sent_or_zero != 0)
         {
-          // Even if (!m_hndl_or_null.null()): 1 bytes were sent => so was the native handle.
+          // Even if (!m_hndl_or_null.null()): 1+ bytes were sent => so was the native handle.
           low_lvl_payload.m_hndl_or_null = {};
           /* Slide its .begin() to the right by n_sent_or_zero (might be no-op if was not writable after all).
            * Note internally it's just a size_t +=; no realloc or anything. */

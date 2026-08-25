@@ -392,7 +392,8 @@ public:
    *         See above.
    * @param ev_wait_func
    *        See above.
-   * @return See above.  In addition return `false`/WARNING/no-op, if start_send_blob_ops() earlier succeeded.
+   * @return See above.  In addition return `false`/WARNING/no-op, if start_send_blob_ops() earlier succeeded;
+   *         same if `*this` is not in PEER state.
    */
   template<typename Event_wait_func_t>
   bool start_send_native_handle_ops(Event_wait_func_t&& ev_wait_func);
@@ -406,7 +407,8 @@ public:
    *         See above.
    * @param ev_wait_func
    *        See above.
-   * @return See above.  In addition return `false`/WARNING/no-op, if start_send_native_handle_ops() earlier succeeded.
+   * @return See above.  In addition return `false`/WARNING/no-op, if start_send_native_handle_ops() earlier succeeded;
+   *         same if `*this` is not in PEER state.
    */
   template<typename Event_wait_func_t>
   bool start_send_blob_ops(Event_wait_func_t&& ev_wait_func);
@@ -521,7 +523,8 @@ public:
    *         See above.
    * @param ev_wait_func
    *        See above.
-   * @return See above.  In addition return `false`/WARNING/no-op, if start_receive_blob_ops() earlier succeeded.
+   * @return See above.  In addition return `false`/WARNING/no-op, if start_receive_blob_ops() earlier succeeded;
+   *         same if `*this` is not in PEER state.
    */
   template<typename Event_wait_func_t>
   bool start_receive_native_handle_ops(Event_wait_func_t&& ev_wait_func);
@@ -536,7 +539,7 @@ public:
    * @param ev_wait_func
    *        See above.
    * @return See above.  In addition return `false`/WARNING/no-op, if start_receive_native_handle_ops() earlier
-   *         succeeded.
+   *         succeeded; same if `*this` is not in PEER state.
    */
   template<typename Event_wait_func_t>
   bool start_receive_blob_ops(Event_wait_func_t&& ev_wait_func);

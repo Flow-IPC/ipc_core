@@ -632,6 +632,11 @@ using Task_ptr = boost::shared_ptr<Task>;
  *   -# Upon `F()` being called, it shall register -- through a technique of the user's choice (a couple are
  *      explained below for your convenience) -- the specified event as one of interest.  The sooner this registration
  *      occurs, the more responsively `T` will behave.
+ *      - If the event is already active at registration time (e.g., `hndl_of_interest` is already
+ *        readable, when readability is the specified event), the wait must still complete (soon) per the following
+ *        steps; it must not sit awaiting a future edge/change.  (Internally `T`s do at times request waits on
+ *        possibly-already-active events.)  `poll()`, level-triggered `epoll_*()`, and boost.asio `.async_wait()`
+ *        all behave this way naturally; but see also the `EPOLLET` warning below.
  *   -# It shall arrange, via that same technique, to do the following upon detecting the
  *      event (or `hndl_of_interest` becoming hosed, i.e., the error event).  The sooner it does so, the more
  *      responsively `T` will behave.

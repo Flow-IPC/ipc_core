@@ -29,6 +29,7 @@
 #include "ipc/util/sync_io/detail/timer_ev_emitter.hpp"
 #include "ipc/util/sync_io/asio_waitable_native_hndl.hpp"
 #include "ipc/util/sync_io/sync_io_fwd.hpp"
+#include "ipc/util/native_handle.hpp"
 #include "ipc/util/util_fwd.hpp"
 #include <flow/error/error.hpp>
 #include <flow/util/blob.hpp>
@@ -210,7 +211,7 @@ namespace ipc::transport::sync_io
  * we cooperate with (essentially outsource to) our buddy Native_socket_stream_msg_batch_in, which
  *   - implements the required Msg_batch_in concept (pointer to an impl of which the user shall pass to
  *     `async_receive_*_batch()`);
- *   - is therefore the target of our #Native_handle_batch_in abd #Blob_batch_in aliases;
+ *   - is therefore the target of our #Native_handle_batch_in and #Blob_batch_in aliases;
  *   - speaks the protocol described below.
  *
  * Using batch-receiving does not change the per-message protocol; and one can mix-and-match single-message
@@ -219,7 +220,7 @@ namespace ipc::transport::sync_io
  * @see Native_handle_receiver concept class doc header section "Batch-receiving."  It provides key
  *      background/discussion about this tricky thing, in a general way.
  *
- * ### Protocol with `Protocol_byte_stream` (OS does not maintain meessage boundaries) ###
+ * ### Protocol with `Protocol_byte_stream` (OS does not maintain message boundaries) ###
  * Here's the protocol to handle these.
  *   - Each user message (send_native_handle()) is represented, in the same order, by 1+ bytes and optionally
  *     a handle: all sent over stream UDS.  Suppose (at least for exposition) we support blobs of size up to 64KiB.
@@ -240,7 +241,7 @@ namespace ipc::transport::sync_io
  * Naturally if user doesn't end_sending() before the whole thing is destroyed, then there is no
  * graceful-close message either.
  *
- * ### Protocol with `Protocol_pkt_stream` (OS maintains meessage boundaries) ###
+ * ### Protocol with `Protocol_pkt_stream` (OS maintains message boundaries) ###
  * Here's the protocol to handle these.
  *   - Each user message (send_native_handle()) is represented, in the same order, by 1+ bytes and optionally
  *     a handle: all sent over dgram-stream UDS.  Suppose (at least for exposition) we support blobs of size up to
@@ -335,7 +336,7 @@ namespace ipc::transport::sync_io
  * tactical.  To wit: Even if we wanted to, we couldn't do an OS-read of payload 1 and then a separate OS-read of
  * payload 2.  Fortunately (actually in some ways it is *the* reason to use `SEQPACKET`/`Protocol_pkt_stream`) we
  * can read both, using scatter/gather, in delightful fashion in exactly 1 OS-read.  Please see above
- * in section "Protocol with `Protocol_pkt_stream` (OS maintains meessage boundaries)."  (There's no need to encode
+ * in section "Protocol with `Protocol_pkt_stream` (OS maintains message boundaries)."  (There's no need to encode
  * any length, as the OS will maintain message boundaries for us.)
  *
  * So, for a regular (non-batch) receive (`async_receive_{native_handle|blob}()`), we implement this protocol as
@@ -441,7 +442,7 @@ namespace ipc::transport::sync_io
  *     and it cannot really be negotiated or detected... so users will (this time only) just have to ensure both
  *     ends use the same (or compatible, in the future) software.
  *   - We still bump up the protocol version to 2 however, just to be clear about it.  For simplicity, at this early
- *     juncture, we won't take advantage of Protocl_negotiator ability to support back-versions; meaning we'll just
+ *     juncture, we won't take advantage of Protocol_negotiator ability to support back-versions; meaning we'll just
  *     say we support version 2 and *only* version 2.
  *
  * As for the Protocol_negotiator mechanics themselves: If `pkt` protocol is in effect (as opposed to `byte`),
@@ -864,7 +865,7 @@ private:
   }; // enum class State
 
   /**
-   * Data store representing a payload corresponding to queud-up payload to write,
+   * Data store representing a payload corresponding to queued-up payload to write,
    * used if and only if we encounter would-block when performing a non-blocking-write op and have to queue
    * (and therefore one-time-copy) data in #m_snd_pending_payloads_q.
    *
@@ -883,7 +884,7 @@ private:
    * When #m_peer_socket is a datagram stream (UDP-like but in-order and reliable), then exactly this payload
    * (including the presence or absence of the native handle) must be transmitted using exactly one OS-write op.
    * (Message boundaries are maintained by the stream, so by doing this this same datagram payload shall be
-   * reaceived by the opposing side, not split up or combined with another payload.)
+   * received by the opposing side, not split up or combined with another payload.)
    */
   struct Snd_low_lvl_payload
   {
@@ -905,20 +906,83 @@ private:
   }; // struct Snd_low_lvl_payload
 
   /**
-   * Identical to sync_io::Async_adapter_receiver::User_request_one, except we only keep at most 1 of these
-   * and thus don't need a `Ptr` alias inside.  As in that other class, this records the args from an
-   * async_receive_native_handle() or async_receive_blob() call.
+   * Data store representing a deficit user single-message async-receive request: *the* one being currently handled
+   * by `*this` -- which can handle one at a time, no more.
+   *
+   * Essentially this stores args to async_receive_core(), itself being the core body of one of these user-invoked
+   * APIs: async_receive_native_handle(), its degenerate version async_receive_blob(), or (via lambda)
+   * async_receive_batch_emulation().
+   *
+   * A Rcv_user_request is constructed at start of `_core()`; and is destroyed by its end, unless `_core()`
+   * ~immediately saw would-block -- thus the operation becomes async, resuming next time the appropriate async-wait
+   * is reported ready to `*this`.  In that case it sticks around past the original async-receive API's return.
+   *
+   * @note While indeed most of the members are basically args to `_core()`, #m_own_hndl is not exactly that.
+   *       See its doc header.
    */
   struct Rcv_user_request
   {
     // Data.
 
-    /// Same as in sync_io::Async_adapter_receiver::User_request_one.
+    /// Same as in sync_io::Async_adapter_receiver::User_request_one; but see also #m_own_hndl.
     Native_handle* m_target_hndl_ptr;
     /// Same as in sync_io::Async_adapter_receiver::User_request_one.
     util::Blob_mutable m_target_meta_blob;
     /// Same as in sync_io::Async_adapter_receiver::User_request_one.
     flow::async::Task_asio_err_sz m_on_done_func;
+
+    /**
+     * The resulting native handle (possibly null) intended to be assigned to `*m_target_hndl_ptr` -- the user's
+     * specified location -- if and only if the receive op ultimately succeeds.  If it fails, then any handle
+     * stored here shall be closed (preventing a leak) and forgotten (preventing double-close and similar
+     * nefariousness).
+     *
+     * ### Sorry, what?  Rationale ###
+     * It's easiest to explain by starting in a world where there is no `m_own_hndl`, only #m_target_hndl_ptr.
+     * Reading a particular in-message involves a state machine, and this state machine can be simple or complex,
+     * depending especially on Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT.  (It is simplest if dgrams are
+     * available, so we use them; otherwise we don't have msg boundaries natively, so we have to do it ourselves
+     * w/r/t a byte stream.)  `m_own_hndl` is helpful either way, but in the complex case it's easiest to explain.
+     * So: With a byte stream, I might read (say) 1 byte and a non-null handle; but that's not enough -- I now
+     * need the rest of payload 1 which might encode the length of the meta-blob that came with the handle, or 0
+     * (and other possibilities).  Then I may have to read that meta-blob (or not).  Then I can report the
+     * handle -- with the other stuff -- to user.  No problem: algorithmically it'd be fine to save the handle
+     * straight into the user-specified place: `*m_target_hndl_ptr`.  Later we'll get the rest of the message,
+     * report the length received: cool.  Or, if we hit some error before getting the in-message, we'll report
+     * the error; by contract `*m_target_hndl_ptr` is meaningless/to be ignored (we touched it; fine): still cool.
+     *
+     * What's not cool in that latter (error) case, though, is that the handle (descriptor) we actually did receive
+     * (and it is a copy of the one the opposing side sent to us) now leaks.  So what we really want is, in that
+     * case, to "un-leak" `*m_target_hndl_ptr`.  That's doable, certainly, but in our case we have that complex
+     * code path with the state machine; which means it's not all that easy.  Or maybe it's easy enough, but
+     * maintainers that would change this code path would have a hard time keeping it working -- and a leak here
+     * is very quiet.
+     *
+     * util::Own_native_handle, which is `unique_resource<Native_handle>` (with `{}` as the default/"unallocated"
+     * sentinel), which (if you're not familiar) is kind-of like `unique_ptr<Native_handle>` sans heap-allocs:
+     * it is made for this.  The idea is: the moment we have a `Native_handle` from a lower layer, subsume it
+     * into an auto-closing `Own_native_handle`.  Then, once ready to actually *emit it to the user*, finally
+     * assign it to `*m_target_hndl_ptr`; and `m_own_hndl.release()` (to prevent double-close and other bad things).
+     * (Those last two things combined = util::disowned_native_handle().)  Now it's up to the user to worry about
+     * leaking or otherwise.  The emission-to-user spots are exactly these:
+     *
+     *   - In async_receive_core(), when about to *synchronously* report a successfully read in-message.
+     *   - In `rcv_on_ev_peer_socket_..._stream_readable_or_error()`, when about to *asynchronously* (through
+     *     #m_on_done_func) report a successfully read in-message.
+     *
+     * Any other eventuality causes `m_own_hndl.get()` -- if it ever became non-null in the first place -- to be
+     * nicely auto-closed when this Rcv_user_request is destroyed (which happens at the end of
+     * the `_core()` op, synchronously or otherwise), at the latest.
+     *
+     * Is it necessary to store it as state?  No: It could also be passed-around as args and captures.  Either way
+     * is fine; but the same applies to the other members here; this one is not special.
+     *
+     * Is it necessary to store it as state *here*, as opposed to directly in `_impl`?  No: We could store it
+     * separately.  It is quite convenient, however, as this way it starts off null at the start of the op.  That's
+     * indispensable, so otherwise we'd have to do it by hand: Why bother, when we've got this
+     * `optional<Rcv_user_request>` rig already just for that?
+     */
+    util::Own_native_handle m_own_hndl;
   }; // struct Rcv_user_request
 
   /**
@@ -994,7 +1058,7 @@ private:
     S_MSG_START,
 
     /**
-     * Reading payload 1, but at least byte 2: alreadu have at least byte 1 and either the #Native_handle or its lack.
+     * Reading payload 1, but at least byte 2: already have at least byte 1 and either the #Native_handle or its lack.
      * At least 1 more byte, of `sizeof(m_rcv_target_meta_length)`, is remaining.  (As of this writing -- that
      * `sizeof()` is 2... so in fact in this state exactly 1 byte remains.  No need to rely on that in code though.)
      */
@@ -1149,13 +1213,17 @@ private:
    * @param avoid_qing
    *        See above.  `true` <=> will return success (act as-if all of `blob1` and `blob2_or_none` was sent)
    *        if no bytes of even `blob1` could be immediately sent.
+   * @param dropped_or_null
+   *        If not null, `*dropped_or_null` is set to whether the payload was silently dropped
+   *        (possible only if `avoid_qing == true`; `false` otherwise/always).  E.g., stats-keeping may
+   *        hinge on this.
    * @return `false` if outgoing-direction pipe still has queued stuff in it that must be sent once transport
    *         becomes writable; `true` otherwise.  If `true` is returned, but `avoid_qing == true`, then
    *         possibly `blob1` was not sent (at all); and both `blob`s have been dropped.
    */
   bool snd_sync_write_or_q_payload(Native_handle hndl_or_null,
                                    const util::Blob_const& blob1, const util::Blob_const& blob2_or_none,
-                                   bool avoid_qing);
+                                   bool avoid_qing, bool* dropped_or_null = nullptr);
 
   /**
    * Initiates async-write over #m_peer_socket of the low-level payload at the head of out-queue
@@ -1396,7 +1464,7 @@ private:
    * more complex rcv_read_msg_from_byte_stream().
    *
    * @param hndl_or_null
-   *        The native handle, or lack thereof, received in dgram.
+   *        The native handle, or lack thereof, received in dgram.  Function assumes ownership.
    * @param n_rcvd
    *        Number of bytes in dgram.
    * @param sync_err_code
@@ -1404,7 +1472,7 @@ private:
    * @param sync_sz
    *        Outcome out-arg: If `*sync_err_code` truthy then zero; else size of completed in-message.
    */
-  void rcv_on_dgram(Native_handle hndl_or_null, size_t n_rcvd,
+  void rcv_on_dgram(util::Own_native_handle&& hndl_or_null, size_t n_rcvd,
                     Error_code* sync_err_code, size_t* sync_sz);
 
   /**
@@ -1444,7 +1512,7 @@ private:
    * simpler rcv_read_msg_from_pkt_stream().
    *
    * @param hndl_or_null
-   *        The handle, or none, received with byte 1 of payload 1.
+   *        The handle, or none, received with byte 1 of payload 1.  Function assumes ownership.
    * @param n_rcvd
    *        How many bytes of payload 1 were received.  Must be at least 1, or behavior undefined (assertion may
    *        trip).
@@ -1455,7 +1523,7 @@ private:
    * @param sync_sz
    *        Outcome out-arg: If `*sync_err_code` truthy then zero; else size of completed in-message.
    */
-  void rcv_on_handle_finalized(Native_handle hndl_or_null, size_t n_rcvd,
+  void rcv_on_handle_finalized(util::Own_native_handle&& hndl_or_null, size_t n_rcvd,
                                Error_code* sync_err_code, size_t* sync_sz);
 
   /**
@@ -1532,7 +1600,7 @@ private:
    * @param hndl_or_null
    *        The native-handle (`.null()` if none) that was obtained at the start of the incomplete payload.
    *        Since if even one byte of payload 1 is received, then the native-handle is received along with byte 1,
-   *        this value is always replayed, never ignored.
+   *        this value is always replayed, never ignored.  Function assumes ownership.
    * @param target_meta_length_possibly_incomplete
    *        If would-block encountered during payload 1 (while reading #m_rcv_target_meta_length),
    *        then this consists of the first `target_meta_length_incomplete_n_rcvd_or_zero_if_complete` bytes that
@@ -1553,7 +1621,7 @@ private:
    *        obtained, in which case its `.size() == 0`.)
    */
   void rcv_resume_incomplete_msg_processing
-         (Error_code* err_code, size_t* sz, Native_handle hndl_or_null,
+         (Error_code* err_code, size_t* sz, util::Own_native_handle&& hndl_or_null,
           Native_socket_stream_cfg::low_lvl_payload_blob_length_t target_meta_length_possibly_incomplete,
           size_t target_meta_length_incomplete_n_rcvd_or_zero_if_complete,
           const flow::util::Blob& target_blob_incomplete);
@@ -1621,7 +1689,7 @@ private:
    *         (potentially scattered) into the `blob`(s).
    *         Disregard if `*err_code` is truthy at return time.
    */
-  size_t rcv_nb_read_low_lvl_payload_from_pkt_stream(Native_handle* target_payload_hndl,
+  size_t rcv_nb_read_low_lvl_payload_from_pkt_stream(util::Own_native_handle* target_payload_hndl,
                                                      const util::Blob_mutable& target_payload_blob1,
                                                      const util::Blob_mutable& target_payload_blob2_or_none,
                                                      Error_code* err_code);
@@ -1661,7 +1729,7 @@ private:
    *         Disregard if `*err_code` is truthy at return time.
    */
   template<typename Ignored = void>
-  size_t rcv_nb_read_low_lvl_payload_from_byte_stream(Native_handle* target_payload_hndl_or_null,
+  size_t rcv_nb_read_low_lvl_payload_from_byte_stream(util::Own_native_handle* target_payload_hndl_or_null,
                                                       const util::Blob_mutable& target_payload_blob,
                                                       Error_code* err_code);
 
@@ -1773,14 +1841,14 @@ private:
   bool op_started(util::String_view context) const;
 
   /**
-   * Boiler-plate-reducing body of `start_*_ops()` for the given Op.
+   * Boiler-plate-reducing body of `start_*_ops()` for the given Op.  Also checks state: Op::S_CONN requires
+   * NULL, the others PEER; otherwise WARNs and returns `false` (as it does if already `start_*_ops()`ed).
    *
    * @tparam OP
    *         See Op.
    * @param ev_wait_func
    *        See `start_*_ops()`.
-   * @return See `start_*_ops()`.  Note that start_connect_ops(), as a special case, no-ops and returns `false`
-   *         if #m_state is not NULL.
+   * @return See `start_*_ops()`.
    */
   template<Op OP>
   bool start_ops(util::sync_io::Event_wait_func&& ev_wait_func);
@@ -1859,7 +1927,7 @@ private:
    *
    * state_peer() handles the check for PEER.
    *
-   * async_connect() and its completion handler conn_on_async_connect_or_error() handle all transitions
+   * async_connect() and its completion handler conn_on_ev_peer_socket_writable() handle all transitions
    * (NULL -> CONNECTING, CONNECTING -> NULL, CONNECTING -> PEER).
    *
    * ### Thread safety ###
@@ -1878,12 +1946,12 @@ private:
    * @see Protocol_negotiator doc header for key background on the topic.  In particular check out the discussion
    *      "Key tip: Coding for version-1 versus one version versus multiple versions."
    *
-   * ### Maintenace/future ###
+   * ### Maintenance/future ###
    * See doc header for sync_io::Blob_stream_mq_sender_impl.  Similar logic applies here.  The only thing
    * that does not apply, and is arguably simpler in our case, is that we *are* a bidirectional comm pathway;
    * there is no such thing as being a sender end without a corresponding receiver end.  So the stuff about needing
    * an API for telling us what protocol version to speak of multiple possibilities (in the hypothetical future
-   * in which we'd support such a thing).
+   * in which we'd support such a thing) does not apply.
    *
    * To restate: These are decisions and work for another day, though; it is not relevant until we issue
    * a version of code that can speak more than one protocol-version.  That might not even happen.  As of this
@@ -2040,7 +2108,7 @@ private:
    * So, at steady state, either #m_peer_socket is null, or #m_peer_socket_hosed is null, but never both null
    * or both non-null.
    *   - `m_peer_socket` begins as non-null, `m_peer_socket_hosed` null.
-   *   - `m_peer_socket_hosed = std::move(m_peer_socket` may execute (or never execute), swapping them.
+   *   - `m_peer_socket_hosed = std::move(m_peer_socket)` may execute (or never execute), swapping them.
    *   - In destructor, the non-null one gets destroyed; which internally closes the contained native-socket (FD).
    *
    * ### Rationale ###
@@ -2136,7 +2204,7 @@ private:
    * it is pretty annoying in other ways: replace_event_wait_handles() to set up future send-ops and receive-ops
    * can happen at any time, including before sync_connect(); so sync_connect() would need to save
    * #m_ev_wait_hndl_peer_socket, then re-associate it with #m_conn_async_worker, then restore it.  Whereas by
-   * decoupling as we do here, we separate the NULL-state and PEER-state algorithms cleanly and need to worry
+   * decoupling as we do here, we separate the NULL-state and PEER-state algorithms cleanly and need not worry
    * about that stuff.
    *
    * (Maintenance note: If/when -- as speculated in class doc header section "Connect-ops impl design" -- we make
@@ -2389,7 +2457,7 @@ private:
   util::Fine_duration m_rcv_idle_timeout;
 
   /**
-   * Timer that fires rcv_on_ev_idle_timer_fired() (which hoses the in-pipe with idle timeour error) and is
+   * Timer that fires rcv_on_ev_idle_timer_fired() (which hoses the in-pipe with idle timeout error) and is
    * (re)scheduled to fire in #m_rcv_idle_timeout each time `*this` receives a complete message
    * on #m_peer_socket.  If it does fire, without being preempted by some error to have occurred since then,
    * the in-pipe is hosed with a particular error indicating idle-timeout (so that `Error_code` is saved
@@ -2431,7 +2499,7 @@ private:
    * @note Native_socket_stream_msg_batch_in, used exclusively by `async_receive_*_batch()` (assuming
    *       we are compile-time-configured to use the former in that case; see e.g. #Blob_batch_in definition),
    *       keeps some more stats of potential interest.  This is orthogonal to the fact the #m_rcv_stats are
-   *       updated regarldess of how a particular payload is received (via batched or single-message receiving).
+   *       updated regardless of how a particular payload is received (via batched or single-message receiving).
    *       The additional stats have to do with observed batch sizes and such.
    */
   stat::Blob_rcv_stats m_rcv_stats;
@@ -2504,6 +2572,13 @@ bool Native_socket_stream_impl::start_ops(util::sync_io::Event_wait_func&& ev_wa
     // else
     assert((m_state == State::S_NULL)
            && "Should not be able to get to CONNECTING state without start_connect_ops() in the first place.");
+  }
+  else // if constexpr(OP is S_SND or S_RCV)
+  {
+    if (!state_peer("start_ops(SND or RCV)"))
+    {
+      return false; // It logged.
+    }
   }
 
   *ev_wait_func_ptr = std::move(ev_wait_func);

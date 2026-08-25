@@ -521,13 +521,14 @@ using Bipc_mqs_socket_stream_channel = Mqs_socket_stream_channel<true, Bipc_mq_h
  * and have the following arguments, in order:
  *   - (If and only if `NO_HNDLS == false`) `Native_handle*`: Target handle object.
  *   - `bool`: If `true`, your function may assume the pipe is in would-block state already
- *     which may help it be more efficient in doing its ask; otherwise it must make no such assumption.
+ *     which may help it be more efficient in doing its task; otherwise it must make no such assumption.
  *     (This will *not* simply always equal the eponymous argument to async_receive_batch_emulation()!)
  *   - util::Blob_mutable: Target memory area for the async-read.
  *   - `Error_code*`: The error-code object for the op.  This shall *not* be null (you do *not* need to throw
  *     an exception to emit an error).
  *   - `size_t*`: Set the pointee to the received in-blob's size, unless an error is emitted.
- *   - Function-object of the specific type: `Function<void (Error_code* err_code, size_t n_rcvd)>`.
+ *   - Function-object of the specific type `flow::async::Task_asio_err_sz`, a/k/a
+ *     `Function<void (const Error_code& err_code, size_t n_rcvd)>`.
  *     Attention!  This may, or may not, be `.empty()`.  See below.
  *
  * It shall act as-if `{Native_handle|Blob}_receiver::async_receive_{native_handle|blob}()` was called, except:
@@ -544,7 +545,8 @@ using Bipc_mqs_socket_stream_channel = Mqs_socket_stream_channel<true, Bipc_mq_h
  *       - error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE,
  *       - `boost::asio::error::eof`.
  *       - Any other `E` in that situation will cause the batch-receive to emit `E` (and therefore leave
- *         `batch->n_used()` unchanged); 1+ in-messages shall be eaten.
+ *         `batch->n_used()` unchanged); 1+ in-messages shall be eaten.  (Promise: any `Native_handle`s received
+ *         with the eaten in-messages shall be closed -- returned to the OS -- not leaked.)
  *   - The on-done handler may be non-empty (as required for normal user-triggered calls) or `.empty()`.
  *     If it's non-empty, act normally.  If it's empty, and no would-block is encountered, act normally; which is
  *     to say synchronously emit the result, and that's that (on-done handler ignored).  If it's empty, and
@@ -605,7 +607,7 @@ using Bipc_mqs_socket_stream_channel = Mqs_socket_stream_channel<true, Bipc_mq_h
  *          Your `async_rcv_impl_func()` must take care of that.
  *
  * ### Rationale / use-cases ###
- * @see Native_handle_receive concept doc header "Batch-receiving" section for background.
+ * @see Native_handle_receiver concept doc header "Batch-receiving" section for background.
  *
  * As of this writing Native_socket_stream and Blob_stream_mq_receiver use it internally.  The latter does so, since
  * (as of now anyway) there is no built-in batch-receiving OS support for POSIX MQs (nor bipc MQs).  The former does

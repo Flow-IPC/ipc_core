@@ -333,7 +333,7 @@ private:
    * #m_pending_err_code (pre-condition: it is falsy) is set to the error to ultimately return; and if no such
    * outgoing-pipe-hosing is synchronously encountered it is left untouched.  In particular, if falsy upon return,
    * you may call this again to send the next low-level payload.  Otherwise #m_mq cannot be subsequently used
-   * (it is hosed).  Thus we maintain the invariant that #m_mq is null if and only if that guy is truthy.
+   * (it is hosed) -- though per its doc header it stays non-null until dtor regardless.
    *
    * ### `avoided_qing` mode for auto-ping ###
    * If `avoided_qing_or_null` is null, then see above.  If it points to a `bool`, though, then:
@@ -381,10 +381,14 @@ private:
    *
    * @param cmd
    *        See above.
+   * @param dropped_or_null
+   *        If not null, `*dropped_or_null` is set to whether the payloads were silently dropped
+   *        (possible for Control_cmd::S_PING only; `false` otherwise/always for other `cmd`s).
+   *        E.g., stats-keeping may hinge on this.
    * @return A-la sync_write_or_q_payload(): `false` if outgoing-direction pipe still has stuff in it; `true`
    *         otherwise.
    */
-  bool sync_write_or_q_ctl_cmd(Control_cmd cmd);
+  bool sync_write_or_q_ctl_cmd(Control_cmd cmd, bool* dropped_or_null = nullptr);
 
   /**
    * Equivalent to sync_write_or_q_ctl_cmd() but takes the raw representation of the command to send;
@@ -396,9 +400,11 @@ private:
    *        Either a non-negative value, which equals the cast of a `Control_cmd` to its underlying type;
    *        or a negative value, which equals the arithmetic negation of our highest (preferred) protocol
    *        version.  So in the latter case -1 means version 1, -2 means version 2, etc.
+   * @param dropped_or_null
+   *        See sync_write_or_q_ctl_cmd().
    * @return See sync_write_or_q_ctl_cmd().
    */
-  bool sync_write_or_q_ctl_cmd_impl(std::underlying_type_t<Control_cmd> raw_cmd);
+  bool sync_write_or_q_ctl_cmd_impl(std::underlying_type_t<Control_cmd> raw_cmd, bool* dropped_or_null = nullptr);
 
   /**
    * Initiates async-write over #m_mq of the low-level payload at the head of out-queue
@@ -418,7 +424,7 @@ private:
    * @see Protocol_negotiator doc header for key background on the topic.  In particular check out the discussion
    *      "Key tip: Coding for version-1 versus one version versus multiple versions."
    *
-   * ### Maintenace/future ###
+   * ### Maintenance/future ###
    * This version of the software talks only the initial version of the protocol: version 1 by Protocol_negotiator
    * convention.  (Deities willing, we won't need to create more, but possibly we will.)  As expained in the
    * above-mentioned doc header section, we have very little to worry about as the sender: Just send
@@ -1016,7 +1022,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
      * se; I am just saying for context, to clarify what "send-or-queue" means. */
     sync_write_or_q_payload(blob, nullptr);
     /* That may have returned `true` indicating everything (up to and including our payload) was synchronously
-     * given to kernel successfuly; or this will never occur, because outgoing-pipe-ending error was encountered.
+     * given to kernel successfully; or this will never occur, because outgoing-pipe-ending error was encountered.
      * Since this is send_blob(), we do not care: there is no on-done
      * callback to invoke, as m_finished is false, as *end_sending() has not been called yet. */
 
@@ -1290,9 +1296,15 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::auto_ping(util::Fine_dura
   // else
 
   ++m_stats.m_auto_pings; // Count even if dropped due to avoid_qing or error below.
-  m_stats.m_total_low_lvl_bytes += sizeof(Control_cmd); // Escape payload is 0 bytes; enum payload is sizeof.
 
-  sync_write_or_q_ctl_cmd(Control_cmd::S_PING);
+  bool dropped;
+  sync_write_or_q_ctl_cmd(Control_cmd::S_PING, &dropped);
+  if (!dropped)
+  {
+    /* Escape payload is 0 bytes; enum payload is sizeof.  (A dropped ping puts nothing on the wire; count
+     * nothing then, so snd-side and rcv-side low-level byte totals can reconcile.) */
+    m_stats.m_total_low_lvl_bytes += sizeof(Control_cmd);
+  }
   if (m_pending_err_code)
   {
     FLOW_LOG_WARNING("Blob_stream_mq_sender [" << *this << "]: Wanted to send initial auto-ping but "
@@ -1350,7 +1362,7 @@ void Blob_stream_mq_sender_impl<Persistent_mq_handle>::on_ev_auto_ping_now_timer
   {
     /* Concept does not require us to report any error via auto_ping() itself.  It's for receiver's benefit anyway.
      * The local user will discover it, assuming they have interest, via the next send_*() or *end_sending(). */
-    FLOW_LOG_WARNING("Blob_stream_mq_sender_impl [" << *this << "]: Auto-ping timer fired, but an error was "
+    FLOW_LOG_WARNING("Blob_stream_mq_sender [" << *this << "]: Auto-ping timer fired, but an error was "
                      "previously encountered in 2-way pipe; so will neither auto-ping nor schedule next auto-ping.  "
                      "Error code details follow: [" << m_pending_err_code << "] "
                      "[" << m_pending_err_code.message() << "].");
@@ -1361,26 +1373,31 @@ void Blob_stream_mq_sender_impl<Persistent_mq_handle>::on_ev_auto_ping_now_timer
   if (m_finished)
   {
     // This is liable to be quite common and not of much interest at the INFO level; though it's not that verbose.
-    FLOW_LOG_TRACE("Blob_stream_mq_sender_impl [" << *this << "]: "
+    FLOW_LOG_TRACE("Blob_stream_mq_sender [" << *this << "]: "
                    "Auto-ping timer fired; but graceful-close API earlier instructed us to no-op.  No-op.");
     return;
   }
   // else
 
   // This may be of some interest sufficient for INFO.  @todo Reconsider due to non-trivial verbosity possibly.
-  FLOW_LOG_INFO("Blob_stream_mq_sender_impl [" << *this << "]: "
+  FLOW_LOG_INFO("Blob_stream_mq_sender [" << *this << "]: "
                 "Auto-ping timer fired; sending/queueing auto-ping; scheduling for next time; it may be "
                 "rescheduled if more user traffic occurs before then.");
 
   // The next code is similar to the initial auto_ping().
 
   ++m_stats.m_auto_pings; // Count even if dropped due to avoid_qing or error below.
-  m_stats.m_total_low_lvl_bytes += sizeof(Control_cmd); // Escape payload is 0 bytes; enum payload is sizeof.
 
-  sync_write_or_q_ctl_cmd(Control_cmd::S_PING);
+  bool dropped;
+  sync_write_or_q_ctl_cmd(Control_cmd::S_PING, &dropped);
+  if (!dropped)
+  {
+    // Escape payload is 0 bytes; enum payload is sizeof.  (Dropped ping => nothing on wire => count nothing.)
+    m_stats.m_total_low_lvl_bytes += sizeof(Control_cmd);
+  }
   if (m_pending_err_code)
   {
-    FLOW_LOG_WARNING("Blob_stream_mq_sender_impl [" << *this << "]: Wanted to send non-initial auto-ping "
+    FLOW_LOG_WARNING("Blob_stream_mq_sender [" << *this << "]: Wanted to send non-initial auto-ping "
                      "but detected error synchronously.  "
                      "Error code details follow: [" << m_pending_err_code << "] "
                      "[" << m_pending_err_code.message() << "].  "
@@ -1519,14 +1536,15 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(c
 } // Blob_stream_mq_sender_impl::sync_write_or_q_payload()
 
 template<typename Persistent_mq_handle>
-bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd(Control_cmd cmd)
+bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd(Control_cmd cmd,
+                                                                               bool* dropped_or_null)
 {
-  return sync_write_or_q_ctl_cmd_impl(static_cast<std::underlying_type_t<Control_cmd>>(cmd));
+  return sync_write_or_q_ctl_cmd_impl(static_cast<std::underlying_type_t<Control_cmd>>(cmd), dropped_or_null);
 }
 
 template<typename Persistent_mq_handle>
 bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd_impl
-       (std::underlying_type_t<Control_cmd> raw_cmd)
+       (std::underlying_type_t<Control_cmd> raw_cmd, bool* dropped_or_null)
 {
   using util::Blob_const;
 
@@ -1573,6 +1591,11 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd_i
    *   - Found no error, but had to queue payload 1 or both payloads => !q_is_flushed.
    *   - Dropped both payloads due to their comprising PING in a would-block situation when payload 1 was tried
    *     => depends on whether queue was (and thus remains) empty at the time payload 1 was tried. */
+
+  if (dropped_or_null)
+  {
+    *dropped_or_null = avoided_qing; // (Note: false unless S_PING.)
+  }
 
   return q_is_flushed;
 } // Blob_stream_mq_sender_impl::sync_write_or_q_ctl_cmd_impl()

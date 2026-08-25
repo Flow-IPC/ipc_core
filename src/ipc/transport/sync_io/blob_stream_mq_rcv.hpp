@@ -279,7 +279,7 @@ public:
    *        See above.
    * @return See above.
    */
-  bool idle_timer_run(util::Fine_duration timeout);
+  bool idle_timer_run(util::Fine_duration timeout = boost::chrono::seconds{5});
 
   /**
    * Implements sync_io::Blob_receiver API per contract.

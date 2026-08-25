@@ -64,7 +64,7 @@ constexpr int S_CODE_LOWEST_INT_VALUE = 1;
  * @internal
  *
  * When you add a value to this `enum`, also add its description to
- * error.cpp’s Category::message().  This description must be identical to the
+ * error.cpp's Category::message().  This description must be identical to the
  * description in the /// comment below, or at least as close as possible.  This mirrors Flow's convention.
  *
  * When you add a value to this `enum`, also add its symbolic representation to error.cpp's
@@ -171,6 +171,12 @@ enum class Code
 
   /// The opposing peer process involved in an IPC channel is currently reported by the OS as no longer running.
   S_PEER_PROCESS_NO_LONGER_EXISTS,
+
+  /**
+   * Low-level boost.ipc.shm: boost.interprocess emitted miscellaneous library exception sans a system code;
+   * a WARNING message at throw-time should contain all possible details.
+   */
+  S_SHM_BIPC_MISC_LIBRARY_ERROR,
 
   /// SENTINEL: Not an error.  This Code must never be issued by an error/success-emitting API; I/O use only.
   S_END_SENTINEL

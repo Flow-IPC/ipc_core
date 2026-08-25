@@ -93,13 +93,19 @@ void async_receive_batch_emulation(flow::log::Logger* logger_ptr,
                      "batch object is not initialized() (not all slots have been prepare_target_payload()ed).");
     *sync_err_code = error::Code::S_INVALID_ARGUMENT;
     return; // Notable before reading anything off the pipe (as advertised).  Pipe is not hosed by this.
+
+    /* Note on asymmetry: !initialized() => graceful INVALID_ARGUMENT here; but full()-at-entry is guarded
+     * only by an assert() (inside ->next_target_blob(); callers pre-check full() themselves).  The user-facing
+     * contracts like Blob_receiver::async_receive_blob_batch() don't have this problem, so while somewhat odd
+     * in and of itself, we combine with other parts of the jigsaw puzzle to do the right thing in the end.
+     * @todo Revisit anyway sometime; maybe it can be rejiggered so as to not require such comments.  */
   }
   // else
 
   FLOW_LOG_TRACE("Msg_batch [" << *batch << "]: Emulating async-receive (no-hndls? = [" << NO_HNDLS << "]; "
                  "assume-would-block? = [" << assume_would_block << "]).");
 
-  size_t sync_init_sz;
+  size_t sync_init_sz = 0; // (Initialized just to avoid copying an indeterminate value in the error case below.)
   if constexpr(NO_HNDLS)
   {
     async_rcv_impl_func(assume_would_block, batch->next_target_blob(), sync_err_code, &sync_init_sz,

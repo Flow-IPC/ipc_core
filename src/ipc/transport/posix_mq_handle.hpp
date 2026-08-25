@@ -23,6 +23,7 @@
 #include "ipc/util/detail/util.hpp"
 #include "ipc/util/shared_name.hpp"
 #include "ipc/util/native_handle.hpp"
+#include "ipc/transport/transport_fwd.hpp"
 #include <flow/log/log.hpp>
 #include <flow/common.hpp>
 #include <mqueue.h>
@@ -282,9 +283,9 @@ public:
    * ### INFO+ logging ###
    * WARNING on error.
    *
-   * @param err_code
-   *        See above.
    * @param timeout_from_now
+   *        See above.
+   * @param err_code
    *        See above.
    * @return See above.
    */
@@ -368,9 +369,9 @@ public:
    * ### INFO+ logging ###
    * WARNING on error.
    *
-   * @param err_code
-   *        See above.
    * @param timeout_from_now
+   *        See above.
+   * @param err_code
    *        See above.
    * @return See above.
    */
@@ -428,7 +429,7 @@ public:
 
   /**
    * Implements Persistent_mq_handle API: Returns the max message size of the underlying queue.  Reminder:
-   * This is not required to match was was passed to `Create_only` or `Open_or_create` ctor.
+   * This is not required to match what was passed to `Create_only` or `Open_or_create` ctor.
    *
    * @return See above.
    */
@@ -436,7 +437,7 @@ public:
 
   /**
    * Implements Persistent_mq_handle API: Returns the max message count of the underlying queue.  Reminder:
-   * This is not required to match was was passed to `Create_only` or `Open_or_create` ctor.
+   * This is not required to match what was passed to `Create_only` or `Open_or_create` ctor.
    *
    * @return See above.
    */
@@ -494,16 +495,17 @@ private:
   // Methods.
 
   /**
-   * Ctor helper that sets up `m_interrupt*` pipe items.  If it fails it returns truthy code
-   * and cleans up what it did.  It ignores everything else like #m_mq.
+   * Ctor helper that sets up `m_interrupt*` pipe items.  If (and only if) it fails it returns truthy code but performs
+   * no cleanup of any resources including the ones it may have part-setup.  That is caller's responsibility.
    *
    * @return See above.
    */
   Error_code pipe_setup();
 
   /**
-   * Ctor helper that sets up #m_epoll_hndl_snd and #m_epoll_hndl_rcv.  If it fails it returns truthy code
-   * and puts everything back to as-if-ctor-failed state, including #m_mq being null.
+   * Ctor helper that sets up #m_epoll_hndl_snd and #m_epoll_hndl_rcv.  If (and only if) it fails it returns truthy
+   * code but performs no cleanup of any resources including the ones it may have part-setup.  That is caller's
+   * responsibility.
    *
    * @return See above.
    */
@@ -597,7 +599,7 @@ private:
   /**
    * Starting at `false`, this is made `true` via interrupt_sends(), and back by allow_sends(); acts as a guard
    * against doing it when already in effect.  Note that that is its only purpose; as wait_impl() never checks it;
-   * instead it relies on `epoll_wait()` detecting a readable #m_interrupt_detector_rcv.
+   * instead it relies on `epoll_wait()` detecting a readable #m_interrupt_detector_snd.
    */
   bool m_interrupting_snd;
 

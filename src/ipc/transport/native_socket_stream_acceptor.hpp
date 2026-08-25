@@ -63,7 +63,7 @@ namespace ipc::transport
  *     for `Native_socket_stream`s.
  *
  * @todo At the moment, *if* one decides to use a Native_socket_stream_acceptor directly -- not really necessary
- * given ipc::session `Channel`-opening capabilities -- the the user must come up with their own naming scheme
+ * given ipc::session `Channel`-opening capabilities -- the user must come up with their own naming scheme
  * that avoids name clashes; we could supply an ipc::session-facilitated system for providing this service instead.
  * I.e., ipc::session could either expose a facility for generating the `Shared_name absolute_name` arg to
  * the Native_socket_stream_acceptor ctor (and opposing Native_socket_stream::sync_connect() call).  Alternatively
@@ -95,7 +95,7 @@ namespace ipc::transport
  *
  * Now, despite that change, Native_socket_stream_acceptor was left unchanged.  It still, internally, accepts
  * as many as are available; and caches a surplus internally if one occurs (until async_accept() x N come in to
- * balance it iout).  The rationale?  Well, it was just a good feature.  There's no copying (of anything sizable)
+ * balance it out).  The rationale?  Well, it was just a good feature.  There's no copying (of anything sizable)
  * involved, and it seemed like a decent idea to not leave handles languishing in some kernel queue.  Essentially
  * the reasoning for that change inside Native_socket_stream (and Blob_stream_mq_receiver) -- well outside our scope
  * here -- simply did not apply to Native_socket_stream_acceptor.
@@ -192,18 +192,18 @@ public:
 
   /**
    * Asynchronously awaits for a peer connection to be established and calls `on_done_func()`,
-   * once the connection occurs, or an error occurs, in the former case move-assigning a PEER-state
-   * Native_socket_stream object to the passed-in Native_socket_stream `*target_peer`.
-   * `on_done_func(Error_code{})` is called on success.  `on_done_func(E)`, where `E` is a non-success
+   * once the connection occurs, or an error occurs, in the former case move-assigning a PEER-state #Peer
+   * object to the passed-in #Peer `*target_peer`.  `on_done_func(Error_code{})` is
+   * called on success.  `on_done_func(E)`, where `E` is a non-success
    * error code, is called otherwise.  In the latter case `*this` has met an unrecoverable error and should
-   * be shut down via the destructor, as no further `async_accept()`s
-   * will succeed (they'll quickly yield the same error).
+   * be shut down via the destructor, as no further `async_accept()`s will succeed (they'll quickly yield the
+   * same error).
    *
    * Multiple async_accept() calls can be queued while no connection is pending;
    * they will grab incoming connections in FIFO fashion as they arrive.
    *
    * The aforementioned #Peer generated and move-assigned to `*target_peer` on success shall
-   * inherit `this->get_logger()` as its `->get_logger()`; and its sync_op::Native_socket_stream::nickname() shall be
+   * inherit `this->get_logger()` as its `->get_logger()`; and its sync_io::Native_socket_stream::nickname() shall be
    * something descriptive.
    *
    * `on_done_func()` shall be called from some unspecified thread, not the calling thread, but never concurrently with

@@ -179,8 +179,8 @@ public:
                                 Error_code* err_code = nullptr);
 
   /**
-   * Implements Persistent_mq_handle API.  Impl note for exposition: we use the fact that, e.g., in Linux
-   * the POSIX MQ devices are listed in flat fashion in /dev/mqueue.
+   * Implements Persistent_mq_handle API.  Impl note for exposition: we use the fact that bipc stores each MQ
+   * in a same-named SHM pool; those are listed in flat fashion (e.g., in Linux in /dev/shm).
    *
    * @tparam Handle_name_func
    *         See above.
@@ -421,7 +421,7 @@ public:
 
   /**
    * Implements Persistent_mq_handle API: Returns the max message size of the underlying queue.  Reminder:
-   * This is not required to match was was passed to `Create_only` or `Open_or_create` ctor.
+   * This is not required to match what was passed to `Create_only` or `Open_or_create` ctor.
    *
    * @return See above.
    */
@@ -429,7 +429,7 @@ public:
 
   /**
    * Implements Persistent_mq_handle API: Returns the max message count of the underlying queue.  Reminder:
-   * This is not required to match was was passed to `Create_only` or `Open_or_create` ctor.
+   * This is not required to match what was passed to `Create_only` or `Open_or_create` ctor.
    *
    * @return See above.
    */
@@ -531,7 +531,7 @@ private:
   template<Wait_type WAIT_TYPE, bool SND_ELSE_RCV>
   bool wait_impl(util::Fine_duration timeout_from_now, Error_code* err_code);
 
-  // Data.
+  // Data.  ATTN: If messing with this area: don't forget to check swap()!
 
   /**
    * Underlying MQ handle.  We are a thin wrapper around this really.  Null if creation fails in ctor, or if

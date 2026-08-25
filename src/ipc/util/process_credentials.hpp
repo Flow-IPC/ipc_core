@@ -24,6 +24,12 @@
 
 #include "ipc/util/util_fwd.hpp"
 #include "ipc/util/process_credentials_fwd.hpp"
+#include <flow/common.hpp>
+
+#ifndef FLOW_OS_LINUX
+static_assert(false,
+              "Not tested outside Linux; look into it when porting this module.  Might be fine in POSIXy OS at least.");
+#endif
 
 namespace ipc::util
 {

@@ -68,7 +68,7 @@ namespace ipc::transport::sync_io
  * ### Impl design ###
  * This is almost entirely subsumed by our `sync_io` core, Async_adapter_sender::Core, an instance of
  * sync_io::Native_handle_sender or sync_io::Blob_sender.  It has a send op-type (possibly among others), so we invoke
- * its `"sync_io::*_sender:start_send_blob_ops()"` during our initialization.  After that:
+ * its `"sync_io::*_sender::start_send_blob_ops()"` during our initialization.  After that:
  *
  * The main method, send_native_handle() (and its degenerate version send_blob())
  * lacks a completion handler and hence can be forwarded to `Core m_sync_io`... that's it.  auto_ping() -- same deal.
@@ -108,7 +108,7 @@ public:
    *        The worker thread loop of `X`.  Background work, as needed, will be posted onto this
    *        "thread W."  Note that `X` may (or may not) share this thread with unrelated tasks;
    *        for example `Native_socket_stream` uses it for both a `*this` (outgoing-direction)
-   *        and an Async_adapter_receiver (incoming-direction).  `*worker* must already be `->start()`ed.
+   *        and an Async_adapter_receiver (incoming-direction).  `worker` must already be `->start()`ed.
    * @param sync_io
    *        The core object of `X`.  It should have just (irreversibly) entered state PEER.
    */
@@ -270,7 +270,7 @@ Async_adapter_sender<Core_t>::Async_adapter_sender(flow::log::Logger* logger_ptr
    * The *this=>m_sync_io interaction shall be our APIs, like send_blob(),
    * simply invoking the same API in m_sync_io (m_sync_io.send_blob() for that example). */
 
-  /* (.start_send_native_handler_ops() would do the same thing, if it exists.  If it exists, that's because it has
+  /* (.start_send_native_handle_ops() would do the same thing, if it exists.  If it exists, that's because it has
    * both to satisfy two concepts -- for when the user uses the sync_io::X directly -- but we don't care about that;
    * we know they are the same in this case; so just use the one we know exists for any X.) */
 #ifndef NDEBUG
@@ -380,9 +380,9 @@ void Async_adapter_sender<Core_t>::send_native_handle(Native_handle hndl, const 
   // We are in thread U (or thread W in a completion handler, but not concurrently).
 
   /* This one is particularly simple, as there is no async completion handler to invoke.  So we essentially just
-   * forward it to m_sync_io.send_native_handler() with identical signature.  The only subtlety -- and it is
+   * forward it to m_sync_io.send_native_handle() with identical signature.  The only subtlety -- and it is
    * quite important -- is that we must lock m_mutex.  That might seem odd if one does not remember that
-   * m_sync_io send-ops explicit API (.send_native_handler() in this case) must never be invoked concurrently
+   * m_sync_io send-ops explicit API (.send_native_handle() in this case) must never be invoked concurrently
    * with the start_send_*_ops()-passed Event_wait_func's `on_active_ev_func()` -- which might call
    * on_sync_io_end_sending_done().  So we lock it, and elsewhere we lock it when calling on_active_ev_func().
    *
@@ -475,7 +475,7 @@ void Async_adapter_sender<Core_t>::on_sync_io_end_sending_done(const Error_code&
 
   assert(err_code != boost::asio::error::operation_aborted);
 
-  FLOW_LOG_TRACE(m_log_pfx << ":: Earlier async-wait => event active => snd-mutex lock => "
+  FLOW_LOG_TRACE(m_log_pfx << ": Earlier async-wait => event active => snd-mutex lock => "
                  "on-active-event-func => sync_io module => here (on-end-sending-done handler).  Or else "
                  "snd-mutex lock => no async-wait needed => here... (ditto).");
 

@@ -138,6 +138,8 @@ void swap(Bipc_mq_handle& val1, Bipc_mq_handle& val2)
   swap(static_cast<Log_context&>(val1), static_cast<Log_context&>(val2));
   swap(val1.m_mq, val2.m_mq);
   swap(val1.m_absolute_name, val2.m_absolute_name);
+  swap(val1.m_interrupting_snd, val2.m_interrupting_snd);
+  swap(val1.m_interrupting_rcv, val2.m_interrupting_rcv);
 }
 
 size_t Bipc_mq_handle::max_msg_size() const
@@ -150,7 +152,7 @@ size_t Bipc_mq_handle::max_n_msgs() const
 {
   assert(m_mq && "As advertised: max_n_msgs() => undefined behavior if not successfully cted or was moved-from.");
   return m_mq->get_max_msg();
-} // Bipc_mq_handle::max_msg_size()
+} // Bipc_mq_handle::max_n_msgs()
 
 bool Bipc_mq_handle::try_send(const util::Blob_const& blob, Error_code* err_code)
 {
@@ -244,7 +246,7 @@ void Bipc_mq_handle::send(const util::Blob_const& blob, Error_code* err_code)
       // Threw => true error => *err_code set; get out.  Didn't throw and returned true => success; get out.
       return;
     }
-    // else if (would-block): as promised, INFO logs.
+    // else if (would-block): TRACE-logs.
 
     FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                    "size [" << blob.size() << "]: would-block.  Executing blocking-wait.");
@@ -290,9 +292,8 @@ bool Bipc_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_duratio
     FLOW_LOG_DATA("Blob contents: [\n" << buffers_dump_string(blob, "  ") << "].");
   }
 
-  auto now = Fine_clock::now();
-  auto after = now;
   bool ok;
+  auto before = Fine_clock::now();
 
   while (true)
   {
@@ -311,12 +312,11 @@ bool Bipc_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_duratio
     {
       break; // Instant success.
     }
-    // else if (would-block): as promised, INFO logs.
+    // else if (would-block): TRACE-logs.
 
     FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                    "size [" << blob.size() << "]: would-block.  Executing blocking-wait.");
 
-    timeout_from_now -= (after - now); // No-op the first time; after that reduces time left.
     const bool ready = timed_wait_sendable(timeout_from_now, err_code);
     if (*err_code)
     {
@@ -333,8 +333,9 @@ bool Bipc_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_duratio
     // else: successful wait for transmissibility.  Try nb-transmitting again.
     FLOW_LOG_TRACE("Blocking-wait reported transmissibility.  Retrying.");
 
-    after = Fine_clock::now();
-    assert((after >= now) && "Fine_clock is supposed to never go backwards.");
+    const auto after = Fine_clock::now();
+    timeout_from_now -= (after - before); // Reduce time left by the duration of the last attempt.
+    before = after;
   } // while (true)
 
   return true;
@@ -439,7 +440,7 @@ void Bipc_mq_handle::receive(util::Blob_mutable* blob, Error_code* err_code)
       }
       return; // Instant success.
     }
-    // else if (would-block): as promised, INFO logs.
+    // else if (would-block): TRACE-logs.
 
     FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-pop to blob @[" << blob->data() << "], "
                   "max-size [" << blob->size() << "]: would-block.  Executing blocking-pop.");
@@ -478,13 +479,13 @@ bool Bipc_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duration
   size_t n_rcvd = {}; // (Why initialize?  See comment near first such initializer for explanation.)
   unsigned int pri_ignored;
 
-  auto now = Fine_clock::now();
-  auto after = now;
   bool ok;
+  auto before = Fine_clock::now();
 
   while (true)
   {
-    op_with_possible_bipc_mq_exception(err_code, "Bipc_mq_handle::timed_send(): bipc::message_queue::try_send()",
+    op_with_possible_bipc_mq_exception(err_code,
+                                       "Bipc_mq_handle::timed_receive(): bipc::message_queue::try_receive()",
                                        [&]()
     {
       ok = m_mq->try_receive(blob->data(), blob->size(), // Throws <=> error wrapper sets truthy *err_code.
@@ -506,12 +507,11 @@ bool Bipc_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duration
       }
       break; // Instant success.
     }
-    // else if (would-block): as promised, INFO logs.
+    // else if (would-block): TRACE-logs.
 
     FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-pop to blob @[" << blob->data() << "], "
                   "max-size [" << blob->size() << "]: would-block.  Executing blocking-wait.");
 
-    timeout_from_now -= (after - now); // No-op the first time; after that reduces time left.
     const bool ready = timed_wait_receivable(timeout_from_now, err_code);
     if (*err_code)
     {
@@ -528,8 +528,9 @@ bool Bipc_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duration
     // else: successful wait for transmissibility.  Try nb-transmitting again.
     FLOW_LOG_TRACE("Blocking-wait reported transmissibility.  Retrying.");
 
-    after = Fine_clock::now();
-    assert((after >= now) && "Fine_clock is supposed to never go backwards.");
+    const auto after = Fine_clock::now();
+    timeout_from_now -= (after - before); // Reduce time left by the duration of the last attempt.
+    before = after;
   } // while (true)
 
   return true;
@@ -589,7 +590,7 @@ bool Bipc_mq_handle::interrupt_allow_impl()
        * their local m_interrupting_*.  (Note: If `*this` wakes up, it'll see it's `true`.  If another
        * one wakes up, it will probably see `false` and re-enter the wait.  If by some coincidence that non-`*this`
        * had just set *that* m_interrupting_*, then -- well, cool -- presumably we won a race against
-       * their own interrupt_allow_impl() doing the same thing. */
+       * their own interrupt_allow_impl() doing the same thing.) */
       cond.notify_all(); // By the docs, and even by the source code as of Boost-1.81, this does not throw.
 
       /* (bipc::message_queue code does .notify_one() in send/receive impl, which makes sense since one
@@ -761,13 +762,13 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
 
         if constexpr(WAIT_TYPE == Wait_type::S_POLL)
         {
-          FLOW_LOG_TRACE("Not immediatelly unstarved.  Poll = done.");
+          FLOW_LOG_TRACE("Not immediately unstarved.  Poll = done.");
           not_starved = false;
           return;
         }
         else // if constexpr(WAIT_TYPE == Wait_type::S_[TIMED_]WAIT)
         {
-          FLOW_LOG_TRACE("Not immediatelly unstarved.  Awaiting unstarvedness or timeout.");
+          FLOW_LOG_TRACE("Not immediately unstarved.  Awaiting unstarvedness or timeout.");
 
           ++blocked_dudes;
           try

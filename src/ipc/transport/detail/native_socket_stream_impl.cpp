@@ -30,7 +30,8 @@ namespace ipc::transport
 // General + connect-ops.
 
 // Delegated-to ctor (note the tag arg).
-Native_socket_stream_impl::Native_socket_stream_impl(sync_io::Native_socket_stream&& sync_io_core_moved, std::nullptr_t) :
+Native_socket_stream_impl::Native_socket_stream_impl(sync_io::Native_socket_stream&& sync_io_core_moved,
+                                                     std::nullptr_t) :
   flow::log::Log_context(sync_io_core_moved.get_logger(), Log_component::S_TRANSPORT),
 
   m_worker(get_logger(),
@@ -94,7 +95,7 @@ Native_socket_stream_impl::Native_socket_stream_impl(sync_io::Native_socket_stre
 
   // Lastly, as we're in PEER state, set up send-ops and receive-ops state machines.
 
-  const auto log_pfx = ostream_op_string("Socket stream [", *this, ']');
+  const auto log_pfx = ostream_op_string("Sck-", nickname()); // Brief-ish for use in OS thread names or some such.
   m_snd_sync_io_adapter.emplace(get_logger(), log_pfx, &m_worker, &m_sync_io);
   m_rcv_sync_io_adapter.emplace(get_logger(), log_pfx, &m_worker, &m_sync_io);
 
@@ -203,7 +204,7 @@ bool Native_socket_stream_impl::sync_connect(const Shared_name& absolute_name, E
   if (!*err_code)
   {
     // PEER state!  Yay!  Do the thing PEER-state ctor would have done.
-    const auto log_pfx = ostream_op_string("Socket stream [", *this, ']');
+    const auto log_pfx = ostream_op_string("Sck-", nickname()); // Brief-ish for use in OS thread names or some such.
     m_snd_sync_io_adapter.emplace(get_logger(), log_pfx, &m_worker, &m_sync_io);
     m_rcv_sync_io_adapter.emplace(get_logger(), log_pfx, &m_worker, &m_sync_io);
   }

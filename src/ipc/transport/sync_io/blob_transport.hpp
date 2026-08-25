@@ -101,7 +101,6 @@ public:
    * @return `*this`.
    */
   Blob_sender& operator=(Blob_sender&& src);
-  // Methods.
 
   /// Disallow copying.
   Blob_sender& operator=(const Blob_sender&) = delete;
@@ -174,7 +173,8 @@ public:
   bool async_end_sending(Error_code* sync_err_code, Task_err&& on_done_func);
 
   /**
-   * Equivalent to `async_end_sending(F)` wherein `F()` does nothing.
+   * Equivalent to `async_end_sending(&E, F)` wherein `F()` does nothing, and `E` is some `Error_code` "sink"
+   * ignored by the caller.
    *
    * All notes from sync_io::Native_handle_sender apply.
    *
@@ -192,7 +192,7 @@ public:
    *        See above.
    * @return See above.
    */
-  bool auto_ping();
+  bool auto_ping(util::Fine_duration period = default_value);
 
   /**
    * Returns the accumulated transport statistics as of this call.
@@ -274,7 +274,7 @@ public:
   Blob_receiver(const Blob_receiver&) = delete;
 
   /**
-   * Destroys this peer endpoint which will end the conceptual outgoing-direction pipe (in PEER state, and if it's
+   * Destroys this peer endpoint which will end the conceptual incoming-direction pipe (in PEER state, and if it's
    * still active) and return resources to OS as applicable.
    *
    * All notes from sync_io::Native_handle_receiver apply.
@@ -358,7 +358,7 @@ public:
    */
   template<typename Task_err_sz>
   bool async_receive_blob(const util::Blob_mutable& target_blob,
-                          Error_code* sync_err_code,  size_t* sync_sz,
+                          Error_code* sync_err_code, size_t* sync_sz,
                           Task_err_sz&& on_done_func);
 
   /**
@@ -383,8 +383,8 @@ public:
    * @return See above.
    */
   template<typename Msg_resource, typename Task_err>
-  bool async_receive_native_handle_batch(Blob_batch_in<Msg_resource>* batch, bool assume_would_block,
-                                         Error_code* sync_err_code, Task_err&& on_done_func);
+  bool async_receive_blob_batch(Blob_batch_in<Msg_resource>* batch, bool assume_would_block,
+                                Error_code* sync_err_code, Task_err&& on_done_func);
 
   /**
    * In PEER state: Irreversibly enables a conceptual idle timer whose potential side effect is, once at least
@@ -397,7 +397,7 @@ public:
    *        See above.
    * @return See above.
    */
-  bool idle_timer_run(util::Fine_duration timeout);
+  bool idle_timer_run(util::Fine_duration timeout = default_value);
 
   /**
    * Returns the accumulated transport statistics as of this call.
