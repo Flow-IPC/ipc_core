@@ -129,6 +129,8 @@ void Native_socket_stream_impl::async_receive_core(Native_handle* target_hndl_or
                                                    flow::async::Task_asio_err_sz&& on_done_func_or_none)
 {
   assert(sync_err_code);
+  // Might be redundant for some code paths, but avoiding the pre-clear is really not worth the maintenance-bug danger.
+  sync_err_code->clear();
 
   /* Background can be found by following the comment on this concept constant (S_BLOB_UNDERFLOW_ALLOWED).
    * In this context what is interesting for us, though, is that its value is `true`.  Let's explore:

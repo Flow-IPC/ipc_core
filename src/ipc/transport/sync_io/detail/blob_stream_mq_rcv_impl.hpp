@@ -628,7 +628,7 @@ Blob_stream_mq_receiver_impl<Persistent_mq_handle>::Blob_stream_mq_receiver_impl
   m_mq = Base::ensure_unique_peer(get_logger(),
                                   std::move(mq), false /* receiver */, &sys_err_code); // Does not throw.
   assert(bool(m_mq) == (!sys_err_code));
-  // On error *err_code will be truthy, and it will have returned null.
+  // On error sys_err_code will be truthy, and it will have returned null.
 
   if (!sys_err_code)
   {
@@ -687,6 +687,7 @@ Blob_stream_mq_receiver_impl<Persistent_mq_handle>::Blob_stream_mq_receiver_impl
   }
   // else: took over `mq` ownership.
   assert(!sys_err_code);
+  err_code && (*err_code = {});
 
   FLOW_LOG_INFO("Blob_stream_mq_receiver [" << *this << "]: MQ-handle-watching apparatus ready including running "
                 "blocking worker thread for would-block situations if necessary "

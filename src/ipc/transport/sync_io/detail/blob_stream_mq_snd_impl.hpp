@@ -709,7 +709,7 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
   m_mq = Base::ensure_unique_peer(get_logger(),
                                   std::move(mq), true /* sender */, &sys_err_code); // Does not throw.
   assert(bool(m_mq) == (!sys_err_code));
-  // On error *err_code will be truthy, and it will have returned null.
+  // On error sys_err_code will be truthy, and it will have returned null.
 
   /* Home free w/r/t m_mq.  No longer need to worry about anything but *this and other-side single _receiver.
    * Not even dtor has to worry (due to that deleter up there). */
@@ -779,6 +779,7 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
   }
   // else: took over `mq` ownership.
   assert(!sys_err_code);
+  err_code && (*err_code = {});
 
   FLOW_LOG_INFO("Blob_stream_mq_sender [" << *this << "]: MQ-handle-watching apparatus ready including running "
                 "blocking worker thread for would-block situations if necessary "
@@ -882,9 +883,9 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::
   if (!m_pending_err_code)
   {
     const auto protocol_ver_to_send = m_protocol_negotiator.local_max_proto_ver_for_sending();
-    assert((protocol_ver_to_send != Protocol_negotiator::S_VER_UNKNOWN)
+    assert((protocol_ver_to_send != Protocol_negotiator::S_VER_ALREADY_SENT)
            && "How'd we get to this line twice?  Or Protocol_negotiator bug?");
-    assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
+    assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_ALREADY_SENT)
            && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
 
     /* As discussed in m_protocol_negotiator doc header and class doc header "Protocol negotiation" section:

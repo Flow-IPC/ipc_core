@@ -37,9 +37,9 @@ bool Native_socket_stream_impl::start_send_native_handle_ops(util::sync_io::Even
   // else
 
   const auto protocol_ver_to_send_if_needed = m_protocol_negotiator.local_max_proto_ver_for_sending();
-  assert(protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_UNKNOWN);
+  assert(protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_ALREADY_SENT);
 
-  assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
+  assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_ALREADY_SENT)
          && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
   assert((!m_snd_pending_err_code) && "We should be the first send-related transmission code possible.");
 
@@ -72,7 +72,7 @@ bool Native_socket_stream_impl::start_send_native_handle_ops(util::sync_io::Even
 
   /* If we bring back transport::Native_socket_stream::release() (currently that code path if `#if 0`d out;
    * like see the `#if 0`d reset_sync_io_setup()), then instead of assert()ing
-   * that `protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_UNKNOWN` above, it would become an `if`,
+   * that `protocol_ver_to_send_if_needed != Protocol_negotiator::S_VER_ALREADY_SENT` above, it would become an `if`,
    * and if that isn't the case then we'd just log the following and no-op. */
 #if 0
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: Wanted to send protocol-negotiation info; "

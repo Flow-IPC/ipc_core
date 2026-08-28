@@ -134,6 +134,7 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
   }
   // else
   assert(!sys_err_code);
+  err_code && (*err_code = {});
 
   FLOW_LOG_INFO("Acceptor [" << *this << "]: Ready for incoming connections.");
 } // Native_socket_stream_acceptor::Native_socket_stream_acceptor()

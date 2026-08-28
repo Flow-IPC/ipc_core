@@ -656,7 +656,7 @@ void Native_socket_stream_impl::reset_sync_io_setup()
    *       nevertheless a send-op *will* have been invoked from start_send_*_ops().  As noted above, it would have
    *       sent the Protocol_negotiator out-message.  Thankfully, in actual fact, this can have caused one of
    *       exactly 2 state change sets, firstly m_protocol_negotiator.local_max_proto_ver_for_sending() now returns
-   *       UNKNOWN plus secondly either
+   *       ALREADY_SENT plus secondly either
    *       - (success -- likely) no other state change; or
    *       - (failure -- unlikely) m_snd_pending_err_code is made truthy; m_peer_socket is nullified.
    *       Undoing start_*_ops() and replace_event_wait_handles() does *not* conflict with any of these eventualities.

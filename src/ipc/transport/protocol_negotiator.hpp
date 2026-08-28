@@ -26,14 +26,15 @@ namespace ipc::transport
 {
 
 /**
- * A simple state machine that, assuming the opposide side of a comm pathway uses an equivalent state machine,
+ * A simple state machine that, assuming the opposing side of a comm pathway uses an equivalent state machine,
  * helps negotiate the protocol version to speak over that pathway, given each side being capable of speaking
  * a range of protocol versions and reporting the highest such version to the other side.  By *comm pathway*
  * we mean a bidirectional communication channel of some sort with two mutually-opposing endpoints (it need
  * not be full-duplex).
  *
  * It is copyable and movable, so that the containing object can be copyable and movable too.
- * A moved-from `*this` becomes as-if it was just constructed.
+ * A moved-from `*this` becomes as-if it was just constructed.  (More precisely: a moved-from `*this` is `.reset()`,
+ * which keeps all the initial config but resets any dynamic changes since construction.)
  *
  * The algorithm followed is quite straightforward and is exposed completely in the contract of this simple API:
  * The impetus behind this class is not for it to be able to perform some complex `private` operations but rather
@@ -44,7 +45,7 @@ namespace ipc::transport
  *
  * ### The algorithm ###
  * A Protocol_negotiator `*this` assumes it is used by a single open comm pathway's local endpoint, and that a
- * logically-equivalent Protocol_negotiator (or equivalent sofwatre) is used in symmetrical fashion by the opposide
+ * logically-equivalent Protocol_negotiator (or equivalent software) is used in symmetrical fashion by the opposing
  * side's endpoint.  (For example, a Native_socket_stream in PEER state uses a Protocol_negotiator internally,
  * and it therefore assumes the opposing Native_socket_stream does the same.)
  *
@@ -58,7 +59,7 @@ namespace ipc::transport
  *     to our ctor).
  *     - Note: Informally, one can think of H being the *preferred* version for us: We want to speak it if possible.
  *       However, if necessary, we can invoke alternative code paths to speak a lower version for compatibility.
- *   - They (the opposing endpoint) can similarly speak a range [Lp, Hp], with Hp > Lp >= 1.
+ *   - They (the opposing endpoint) can similarly speak a range [Lp, Hp], with Hp >= Lp >= 1.
  *     However we do not, at first at least, know Lp nor Hp.
  *   - Each side shall speak the *highest* possible version of the protocol such that:
  *     - It is in range [L, H].
@@ -70,7 +71,7 @@ namespace ipc::transport
  *       what that version V is.  Naturally each side must come to the same answer.
  *
  * While there are various ways to achieve this, including a back-and-forth negotiation, we opt for something quite
- * simple and symmetrical.  (Recall that the opposide side is assumed to have a Protocol_negotiator (equivalent)
+ * simple and symmetrical.  (Recall that the opposing side is assumed to have a Protocol_negotiator (equivalent)
  * following the same logic, and neither side shall be chosen (in our context) to be different from the other.
  * E.g., there's no client and server dichotomy -- even if in the subsequently negotiated protocol there is; that's
  * none of our business.)  The procedure:
@@ -83,10 +84,10 @@ namespace ipc::transport
  *     they are), we are insufficiently backwards-compatible.  Therefore V = UNSUPPORTED.  We should
  *     close the comm pathway ASAP.
  *     - Similarly, on their side, if V < Lp -- they are more advanced than we are, and they don't speak enough
- *       older versions to accomodate us -- then they will detect that V = UNSUPPORTED and should close the comm
+ *       older versions to accommodate us -- then they will detect that V = UNSUPPORTED and should close the comm
  *       pathway ASAP.
  *   - On our side: Otherwise (V >= L), speak V from this point on.
- *     - Similarly, on ther side, if V >= Lp, they shall speak V from this point on.
+ *     - Similarly, on their side, if V >= Lp, they shall speak V from this point on.
  *
  * The role of Protocol_negotiator is simple:
  *   - It memorizes the local L and H as passed to its ctor, and it starts with V = UNKNOWN.  negotiated_proto_ver()
@@ -97,7 +98,7 @@ namespace ipc::transport
  *     - compute_negotiated_proto_ver() shall not be called again.  One can check
  *     `negotiated_proto_ver() == S_VER_UNKNOWN`, if one would rather not independently keep track of whether
  *     compute_negotiated_proto_ver() has been called yet or not.
- *   - local_max_proto_ver_for_sending() shall return H once; after that UNSUPPORTED.  This is to encourage/help
+ *   - local_max_proto_ver_for_sending() shall return H once; after that ALREADY_SENT.  This is to encourage/help
  *     the sending-out of our H exactly once, no more.
  *
  * Couple notes:
@@ -119,7 +120,7 @@ namespace ipc::transport
  * and payload.
  *
  * ### Key tip: Coding for version-1 versus one version versus multiple versions ###
- * Using a `*this` is in and ofi itself extremely simple; just look at the API and/or read the above.  What is somewhat
+ * Using a `*this` is in and of itself extremely simple; just look at the API and/or read the above.  What is somewhat
  * more subtle is how to organize your comm pathway's behavior around the start, when the negotiation occurs.
  * That part is also straightforward for the most part:
  *   - Before you send out your first stuff, or possibly together with it, send an encoding of
@@ -152,7 +153,7 @@ namespace ipc::transport
  *     protocol.
  *     - So the problem only occurs when there's actual ambiguity about what to send.  Your code may still need to be
  *       somewhat more complex than the L=H case, but perf/responsiveness at least is less likely to be affected.
- *   - If your protocol has a built-in handshake/log-in/etc. phase (where one set side is expected to send
+ *   - If your protocol has a built-in handshake/log-in/etc. phase (where one side is expected to send
  *     a SYN-like thing, and the other side is supposed to reply with an ACK of some kind in response), then you
  *     can specifically:
  *     - Not add any version-dependent payload to the SYN-like (opening) message; or at least defer any such
@@ -161,7 +162,7 @@ namespace ipc::transport
  *       By the time the hand-shake completes, both sides know V and can proceed.
  *
  * @note In general, for the case of initial-protocol-release -- version 1 -- the usefulness of Protocol_negotiator
- *       minimal, but it does exist.  It is minimal, because *assuming* both sides promise to follow this
+ *       is minimal, but it does exist.  It is minimal, because *assuming* both sides promise to follow this
  *       algorithm, then *all* the code actually *needs* to do is: (1) send `H = 1` in some fashion that will never
  *       change in the future; (2) receive Hp in some fashion that will never change in the future either; and
  *       (3) explode, if Hp is not present or is not 1.  This is very much doable without Protocol_negotiator.
@@ -180,11 +181,11 @@ namespace ipc::transport
  *
  * ### Thread safety ###
  * For the same `*this`, the standard default assumptions apply (mutating access disallowed concurrently with
- * any other access) with the following potentially important exception: local_max_proto_ver_for_sending() can
- * be executed concurrently with any other API except itself.  In other words, the outgoing-direction
- * (local_max_proto_ver_for_sending()) and incoming-direction work
+ * any other access) with the following potentially important exception: the outgoing-direction work
+ * (local_max_proto_ver_for_sending()) and the incoming-direction work
  * (compute_negotiated_proto_ver(), negotiated_proto_ver()) can be safely performed independently/concurrently
- * w/r/t each other.
+ * w/r/t each other.  (This does not extend to reset() or the assignment operators: those touch both
+ * directions' state.)
  */
 class Protocol_negotiator :
   public flow::log::Log_context
@@ -213,6 +214,17 @@ public:
    * meaning is identified specifically where it might be returned or taken by the API.
    */
   static constexpr proto_ver_t S_VER_UNKNOWN = -1;
+
+  /**
+   * An #proto_ver_t value, namely a negative one, which is a reserved value specifically for return by
+   * local_max_proto_ver_for_sending() indicating: that method has already returned the true `local_max_proto_ver`
+   * earlier; hence one shall not send it to the opposing side again.
+   *
+   * @note An earlier, compatible, version of Protocol_negotiator lacked `S_VER_ALREADY_SENT` and reused
+   *       #S_VER_UNKNOWN instead.  Then we added this distinct name for clarity at call sites; but for compatibility
+   *       the two constants are equal/interchangeable value-wise.
+   */
+  static constexpr proto_ver_t S_VER_ALREADY_SENT = S_VER_UNKNOWN;
 
   // Constructors/destructor.
 
@@ -245,10 +257,12 @@ public:
   Protocol_negotiator(const Protocol_negotiator& src);
 
   /**
-   * Move-constructs `*this` to be equal to `src`, while `src` becomes as-if defaulted-cted.
+   * Move-constructs `*this` to be equal to `src`, while `src` becomes as-if just-cted.
+   * More precisely: `src` is `.reset()`, which keeps all the initial config but resets any post-construction
+   * changes.
    *
    * @param src
-   *        Moved-from object that becomes as-if default-cted.
+   *        Moved-from object that becomes as-if just-cted (`src.reset()`).
    */
   Protocol_negotiator(Protocol_negotiator&& src);
 
@@ -264,11 +278,10 @@ public:
   Protocol_negotiator& operator=(const Protocol_negotiator& src);
 
   /**
-   * Move-assigns `*this` to be equal to `src`, while `src` becomes as-if just constructed; or no-op
-   * if `&src == this`.
+   * Acts identically to the move ctor; or no-op if `&src == this`.
    *
    * @param src
-   *        Moved-from object that becomes as-if just-cted, unless it is `*this`.
+   *        Moved-from object that becomes as-if just-cted (`src.reset()`), unless it is `*this`.
    * @return `*this`.
    */
   Protocol_negotiator& operator=(Protocol_negotiator&& src);
@@ -297,11 +310,11 @@ public:
    * More formally:
    *   - If `negotiated_proto_ver() != S_VER_UNKNOWN`: does nothing except possibly logging; returns `false`.
    *     Informal tip: If you don't know whether that's the case, check for it via negotiated_proto_ver() and
-   *     neither try to parse `opposing_max_proto_ver` from your in-message, nor call the present method.
+   *     (if the case) neither try to parse `opposing_max_proto_ver` from your in-message, nor call the present method.
    *   - If `negotiated_proto_ver() == S_VER_UNKNOWN` (the case right after construction): Upon return
    *     `negotiated_proto_ver() != S_VER_UNKNOWN` and:
-   *     - If `err_code != nullptr`: `*error_code` is set to truthy suggested error to emit if applicable.
-   *       Returns `true`.
+   *     - If `err_code != nullptr`: `*err_code` is set to falsy on success; else to the truthy suggested
+   *       error to emit.  Returns `true`.
    *     - If `err_code == nullptr`: a truthy suggested error is emitted via exception.
    *
    * @param opposing_max_proto_ver
@@ -316,42 +329,42 @@ public:
    *        error::Code::S_PROTOCOL_NEGOTIATION_OPPOSING_VER_INVALID (`opposing_max_proto_ver` is invalid: not
    *        positive).
    * @return `false` if pre-condition was `negotiated_proto_ver() != S_VER_UNKNOWN`, so we no-oped;
-   *         `true` otherwise (unless exception thrown, only if `err_code == nullptr`.
+   *         `true` otherwise (unless exception thrown, only if `err_code == nullptr`).
    */
   bool compute_negotiated_proto_ver(proto_ver_t opposing_max_proto_ver, Error_code* err_code = nullptr);
 
   /**
-   * To be called at most once, this returns `local_max_proto_ver` from ctor the first time and
-   * #S_VER_UNKNOWN subsequently.
+   * Returns `local_max_proto_ver` from ctor the first time it is called and
+   * #S_VER_ALREADY_SENT subsequently.
    *
    * Tip: It's a reasonable tactic to call this when about to send any out-message; if it returns
-   * #S_VER_UNKNOWN, then you've already sent it and don't need to do so now; otherwise encode this value
+   * #S_VER_ALREADY_SENT, then you've already sent it and don't need to do so now; otherwise encode this value
    * before/with the out-message and send it.
    *
-   * @return See above.  Either a positive version number or #S_VER_UNKNOWN.
+   * @return See above.  Either a positive version number or #S_VER_ALREADY_SENT.
    */
   proto_ver_t local_max_proto_ver_for_sending();
 
   /**
    * Resets the negotiation state, meaning back to the state as-if just after ctor invoked.  Hence:
    * negotiated_proto_ver() yields #S_VER_UNKNOWN, while
-   * local_max_proto_ver_for_sending() would yield not-`S_VER_UNKNOWN`.
+   * local_max_proto_ver_for_sending() would yield not-`S_VER_ALREADY_SENT`.
    */
   void reset();
 
 private:
   // Data.
 
-  /// The `nickname` from ctor.  Not `const` so as to support copyability.
+  /// The `nickname` from ctor.  Not `const` so as to support assignment.
   std::string m_nickname;
 
-  /// `local_max_proto_ver` from ctor.  Not `const` so as to support copyability.
+  /// `local_max_proto_ver` from ctor.  Not `const` so as to support assignment.
   proto_ver_t m_local_max_proto_ver;
 
-  /// `local_min_proto_ver` from ctor.  Not `const` so as to support copyability.
+  /// `local_min_proto_ver` from ctor.  Not `const` so as to support assignment.
   proto_ver_t m_local_min_proto_ver;
 
-  /// Init value `false` indicating has local_max_proto_ver_for_sending() has not been called; subsequently `true`.
+  /// Init value `false` indicating local_max_proto_ver_for_sending() has not been called; subsequently `true`.
   bool m_local_max_proto_ver_sent;
 
   /// See negotiated_proto_ver().

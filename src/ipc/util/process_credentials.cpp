@@ -124,6 +124,7 @@ std::string Process_credentials::process_invoked_as(Error_code* err_code) const
   }
   // else
 
+  err_code->clear();
   return result; // Might still be empty (unlikely though)... but as noted -- that's OK by us.
 } // Process_credentials::process_invoked_as()
 

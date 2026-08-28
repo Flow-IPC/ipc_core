@@ -91,7 +91,7 @@ bool Protocol_negotiator::compute_negotiated_proto_ver(proto_ver_t opposing_max_
                      "We speak preferred (highest) version [" << m_local_max_proto_ver << "]; "
                      "they speak at most [" << opposing_max_proto_ver << "].  The latter value is in and of itself "
                      "invalid -- we cannot trust the other side at all; or there may be a bug in user code here.  "
-                     "Presumably we will abruptly close this comm pathway shorly.");
+                     "Presumably we will abruptly close this comm pathway shortly.");
     m_negotiated_proto_ver = S_VER_UNSUPPORTED;
     *err_code = error::Code::S_PROTOCOL_NEGOTIATION_OPPOSING_VER_INVALID;
   }
@@ -105,6 +105,7 @@ bool Protocol_negotiator::compute_negotiated_proto_ver(proto_ver_t opposing_max_
                   "[" << m_local_max_proto_ver << "], unless opposing side lacks backwards-compatibility with it, "
                   "in which case it will abruptly close this comm pathway shortly.");
     m_negotiated_proto_ver = m_local_max_proto_ver;
+    err_code->clear();
   }
   else if (opposing_max_proto_ver >= m_local_min_proto_ver)
   {
@@ -112,14 +113,15 @@ bool Protocol_negotiator::compute_negotiated_proto_ver(proto_ver_t opposing_max_
                   "We speak preferred (highest) version [" << m_local_max_proto_ver << "]; "
                   "they speak at most [" << opposing_max_proto_ver << "]; therefore we shall speak "
                   "[" << opposing_max_proto_ver << "], as we are backwards-compatible with that version.");
-    m_negotiated_proto_ver = m_local_max_proto_ver;
+    m_negotiated_proto_ver = opposing_max_proto_ver;
+    err_code->clear();
   }
   else
   {
     FLOW_LOG_WARNING("Protocol_negotiator [" << m_nickname << "]: Negotiation computation: "
                      "We speak preferred (highest) version [" << m_local_max_proto_ver << "]; "
                      "they speak at most [" << opposing_max_proto_ver << "]; therefore we lack backwards-compatibility "
-                     "with that older version.  Presumably we will abruptly close this comm pathway shorly.");
+                     "with that older version.  Presumably we will abruptly close this comm pathway shortly.");
     m_negotiated_proto_ver = S_VER_UNSUPPORTED;
     *err_code = error::Code::S_PROTOCOL_NEGOTIATION_OPPOSING_VER_TOO_OLD;
   }
@@ -131,7 +133,7 @@ Protocol_negotiator::proto_ver_t Protocol_negotiator::local_max_proto_ver_for_se
 {
   if (m_local_max_proto_ver_sent)
   {
-    return S_VER_UNKNOWN; // Don't spam logs; they might be calling this for every out-message.
+    return S_VER_ALREADY_SENT; // Don't spam logs; they might be calling this for every out-message.
   }
   // else
   FLOW_LOG_INFO("Protocol_negotiator [" << m_nickname << "]: About to send our preferred (highest) version "
