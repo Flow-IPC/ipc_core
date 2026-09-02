@@ -122,7 +122,7 @@ namespace ipc::transport
  * ### Key tip: Coding for version-1 versus one version versus multiple versions ###
  * Using a `*this` is in and of itself extremely simple; just look at the API and/or read the above.  What is somewhat
  * more subtle is how to organize your comm pathway's behavior around the start, when the negotiation occurs.
- * That part is also straightforward for the most part:
+ * That part is also mostly straightforward:
  *   - Before you send out your first stuff, or possibly together with it, send an encoding of
  *     local_max_proto_ver_for_sending().
  *   - When reading your first stuff, read the similar encoding from the opposing side.

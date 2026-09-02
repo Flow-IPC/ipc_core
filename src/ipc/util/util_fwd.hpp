@@ -309,23 +309,6 @@ const uint8_t* blob_data(const Blob_const& blob);
  */
 uint8_t* blob_data(const Blob_mutable& blob);
 
-/**
- * `std::construct_at()` equivalent; unavailable until C++20, so here it is.  Placement-constructs a `T`
- * at the given location with the given ctor args, using the expression used by C++20's `construct_at()` per
- * cppreference.com.
- *
- * @tparam T
- *         Object type.
- * @tparam Ctor_args
- *         `T` ctor arg types.
- * @param obj
- *        Pointer to uninitialized `T`.
- * @param ctor_args
- *        Ctor args for `T::T()`.
- */
-template<typename T, typename... Ctor_args>
-void construct_at(T* obj, Ctor_args&&... ctor_args);
-
 } // namespace ipc::util
 
 /// Stats-related sub-namespace of ipc::util, for general organization (and ADL segregation if needed).

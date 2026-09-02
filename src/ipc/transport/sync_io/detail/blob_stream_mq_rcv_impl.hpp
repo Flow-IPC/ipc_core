@@ -27,6 +27,7 @@
 #include "ipc/util/detail/util.hpp"
 #include <flow/async/single_thread_task_loop.hpp>
 #include <flow/error/error.hpp>
+#include <cstring>
 
 namespace ipc::transport::sync_io
 {
@@ -1164,6 +1165,7 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(bool assume_wo
   using util::Task;
   using util::Blob_mutable;
   using flow::util::Lock_guard;
+  using std::memcpy;
   using raw_ctl_cmd_enum_t = std::underlying_type_t<Control_cmd>;
 
   assert(!m_pending_err_code);
@@ -1269,7 +1271,8 @@ void Blob_stream_mq_receiver_impl<Persistent_mq_handle>::read_msg(bool assume_wo
 
           if (target_blob.size() == sizeof(Control_cmd))
           {
-            const auto& cmd = *(reinterpret_cast<const Control_cmd*>(target_blob.data()));
+            Control_cmd cmd;
+            memcpy(&cmd, target_blob.data(), sizeof(cmd));
             const auto raw_cmd = raw_ctl_cmd_enum_t(cmd);
 
             if (proto_negotiating)

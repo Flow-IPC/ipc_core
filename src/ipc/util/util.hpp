@@ -20,25 +20,6 @@
 
 #include "ipc/util/util_fwd.hpp"
 
-namespace ipc::util
-{
-
-// Template implementations.
-
-template<typename T, typename... Ctor_args>
-void construct_at(T* obj, Ctor_args&&... ctor_args)
-{
-  using Value = T;
-
-  // Use placement-new expression used by C++20's construct_at() per cppreference.com.
-  ::new (const_cast<void*>
-           (static_cast<void const volatile*>
-              (obj)))
-    Value(std::forward<Ctor_args>(ctor_args)...);
-}
-
-} // namespace ipc::util
-
 namespace ipc::util::stat
 {
 

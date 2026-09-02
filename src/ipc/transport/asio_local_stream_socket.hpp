@@ -30,6 +30,7 @@
 #include <type_traits>
 #include <algorithm>
 #include <stdexcept>
+#include <cstring>
 #include <sys/types.h>
 #include <sys/socket.h>
 
@@ -1113,6 +1114,7 @@ bool
   using boost::io::ios_all_saver;
   namespace sys_err_codes = boost::system::errc;
   using std::swap;
+  using std::memcpy;
   using ::recvmmsg;
   using ::recvmsg;
   using ::mmsghdr;
@@ -1328,8 +1330,9 @@ bool
           && (recvmsg_hdr_cmsg_ptr->cmsg_level == SOL_SOCKET)
           && (recvmsg_hdr_cmsg_ptr->cmsg_type == SCM_RIGHTS))
       {
-        Native_handle{*(reinterpret_cast<const Native_handle::handle_t*>(CMSG_DATA(recvmsg_hdr_cmsg_ptr)))}
-          .close();
+        Native_handle hndl;
+        memcpy(&hndl.m_native_handle, CMSG_DATA(recvmsg_hdr_cmsg_ptr), sizeof(hndl.m_native_handle));
+        hndl.close();
         /* Closed handle, as promised. / Did not touch *this (m_mdts[].m_result_hndl); allowed by our contract.
          * (In practice, as of this writing, this is equivalent behavior to never having received the
          * post-error slots; clearly sensible.  As of this writing that applies to the error-slot in particular too,
@@ -1463,8 +1466,8 @@ bool
       {
         static_assert(N_PAYLOAD_FDS == 1, "Should be only dealing with one native handle with recvmsg() "
                                           "as of this writing.");
-        mdt.m_result_hndl
-          = *(reinterpret_cast<const Native_handle::handle_t*>(CMSG_DATA(recvmsg_hdr_cmsg_ptr)));
+        memcpy(&mdt.m_result_hndl.m_native_handle, CMSG_DATA(recvmsg_hdr_cmsg_ptr),
+               sizeof(mdt.m_result_hndl.m_native_handle));
       }
       else
       {
@@ -1619,6 +1622,7 @@ size_t nb_write_some_with_native_handle(flow::log::Logger* logger_ptr,
   using boost::array;
   using boost::asio::detail::buffer_sequence_adapter;
   using std::is_same_v;
+  using std::memcpy;
   namespace sys_err_codes = boost::system::errc;
   using ::sendmsg;
   using ::msghdr;
@@ -1690,9 +1694,9 @@ size_t nb_write_some_with_native_handle(flow::log::Logger* logger_ptr,
   sendmsg_hdr_cmsg_ptr->cmsg_level = SOL_SOCKET;
   sendmsg_hdr_cmsg_ptr->cmsg_type = SCM_RIGHTS;
   sendmsg_hdr_cmsg_ptr->cmsg_len = CMSG_LEN(sizeof(Native_handle::handle_t) * N_PAYLOAD_FDS);
-  // Copy the FDs.  We have just the one; simply assign (omit `memcpy`) but static_assert() to help future-proof.
+  // Copy the FDs.  We have just the one; copy just one thing but static_assert() to help future-proof.
   static_assert(N_PAYLOAD_FDS == 1, "Should be only passing one native handle into sendmsg() as of this writing.");
-  *(reinterpret_cast<Native_handle::handle_t*>(CMSG_DATA(sendmsg_hdr_cmsg_ptr))) = payload_hndl.m_native_handle;
+  memcpy(CMSG_DATA(sendmsg_hdr_cmsg_ptr), &payload_hndl.m_native_handle, sizeof(payload_hndl.m_native_handle));
 
   const auto n_sent_or_error
     = sendmsg(peer_socket.native_handle(), &sendmsg_hdr,
@@ -1781,6 +1785,7 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
   using boost::system::system_category;
   using boost::array;
   using std::is_same_v;
+  using std::memcpy;
   namespace sys_err_codes = boost::system::errc;
   using ::recvmsg;
   using ::msghdr;
@@ -2020,8 +2025,9 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
     {
       static_assert(N_PAYLOAD_FDS == 1,
                     "Should be only dealing with one native handle with recvmsg() as of this writing.");
-      target_payload_hndl.m_native_handle
-        = *(reinterpret_cast<const Native_handle::handle_t*>(CMSG_DATA(recvmsg_hdr_cmsg_ptr)));
+      memcpy(&target_payload_hndl.m_native_handle, CMSG_DATA(recvmsg_hdr_cmsg_ptr),
+             sizeof(target_payload_hndl.m_native_handle));
+
       if (*err_code)
       {
         target_payload_hndl.close(); // Avoid the native-handle (which is a received copy) leak.
