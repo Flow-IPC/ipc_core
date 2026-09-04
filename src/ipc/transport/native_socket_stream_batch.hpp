@@ -1097,6 +1097,7 @@ bool Native_socket_stream_msg_batch_in<Msg_resource_t>::nb_read
         {
           // *msg_resource_impl->m_msg_type was not fully read => illegal.
           *err_code = error::Code::S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER;
+          cleanup_on_error(this, orig_n_used, n_used_post_read); // Un-emit/un-leak: exceptional error.
           FLOW_LOG_WARNING("Native_socket_stream_batch [" << *this << "]: "
                            "Native_socket_stream batch nb-read post-post-processing scan of slot [" << idx << "]: "
                            "illegal too-short in-dgram.");
