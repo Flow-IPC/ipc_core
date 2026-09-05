@@ -18,7 +18,7 @@
 /// @file
 #pragma once
 
-#include <flow/common.hpp>
+#include "ipc/common.hpp"
 #include <boost/scope/unique_resource.hpp>
 #include <boost/core/functor.hpp>
 #include <ostream>
@@ -181,6 +181,44 @@ struct Native_handle
   void close() noexcept;
 
   /**
+   * Returns whether #m_native_handle is currently an open descriptor in this process; `false` if null().
+   *
+   * @warning Caveats due to the nature of what Native_handle stores:
+   *          1, is_open() is a point-in-time answernothing prevents a close immediately after).
+   *          2, returning `true` means *some* descriptor identified by #m_native_handle is open -- a stale value
+   *          whose value has since been recycled answers `true`.
+   *          So, watch out, particularly when there is asynchronicity and/or concurrency.
+   *
+   * Nothing is logged; no errors are emitted.
+   *
+   * @return See above.
+   */
+  bool is_open() const noexcept;
+
+  /**
+   * Returns a new handle referring to the same underlying OS-level open resource as `*this`, a-la POSIX `"::dup()"`
+   * (in POSIX parlance: a new descript*or* to the same open file descript*ion*).  The result is independent
+   * of `*this`: closing either leaves the other valid.
+   *
+   * @see duped_native_handle() to obtain the same in the auto-closing #Own_native_handle form.
+   *
+   * An error is possible but generally indicates a truly exceptional situation, probably classifiable in one of these:
+   *   - User error: null() is `true`.
+   *   - User error: The stored #m_native_handle is invalid/corrupt.
+   *   - Environment is hosed: Ran out of descriptors in the OS table/reached a configured limit/etc.
+   *
+   * @note For all applicable OS: close-on-exec is set on the returned handle.
+   *
+   * @param err_code
+   *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
+   *        transport::error::Code::S_INVALID_ARGUMENT if `*this` is `.null()`,
+   *        system error (likely culprits estimated above).
+   * @return On success a non-`.null()` Native_handle; on failure a `.null() == true` one.
+   *         (Per usual Flow semantics: on failure: if `!err_code`, exception is thrown instead.)
+   */
+  Native_handle dup(Error_code* err_code = nullptr) const;
+
+  /**
    * Simply returns `Native_handle{}`, a null handle.
    *
    * ### Rationale for existence ###
@@ -256,6 +294,20 @@ using Own_native_handle = boost::scope::unique_resource<Native_handle, Native_ha
  * @return See above.
  */
 Native_handle disowned_native_handle(Own_native_handle&& src) noexcept;
+
+/**
+ * Returns `Own_native_handle{src.dup(err_code)}`: an auto-closing duplicate of `src`; on error the result is
+ * `.get().null()`.  See Native_handle::dup() for details.
+ *
+ * @relatesalso Native_handle
+ *
+ * @param src
+ *        Handle to duplicate; it is unaffected.
+ * @param err_code
+ *        See Native_handle::dup().
+ * @return See above.
+ */
+Own_native_handle duped_native_handle(Native_handle src, Error_code* err_code = nullptr);
 
 /**
  * Returns `true` if and only if the two Native_handle objects are the same underlying handle.

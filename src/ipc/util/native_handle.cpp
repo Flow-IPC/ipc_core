@@ -17,7 +17,11 @@
 
 /// @file
 #include "ipc/util/native_handle.hpp"
+#include "ipc/transport/error.hpp"
+#include <flow/error/error.hpp>
 #include <boost/functional/hash/hash.hpp>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace ipc::util
 {
@@ -71,11 +75,56 @@ void Native_handle::static_close(Native_handle& hndl) noexcept // Static.
   hndl.close();
 }
 
+bool Native_handle::is_open() const noexcept
+{
+#ifndef FLOW_OS_LINUX
+  static_assert(false, "F_GETFD is POSIX but tested in Linux only; look into it when porting.");
+#endif
+  return ::fcntl(m_native_handle, F_GETFD) != -1; // (-1 a/k/a null() => EBADF => false, as promised.)
+}
+
+Native_handle Native_handle::dup(Error_code* err_code) const
+{
+  using boost::system::system_category;
+  using ::fcntl;
+
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(Native_handle, dup, _1);
+  // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
+
+  if (null())
+  {
+    *err_code = transport::error::Code::S_INVALID_ARGUMENT;
+    return {};
+  }
+  // else
+
+#ifndef FLOW_OS_LINUX
+  static_assert(false, "F_DUPFD_CLOEXEC is POSIX.1-2008 but tested in Linux only; look into it when porting.");
+#endif
+
+  // (Close-on-exec set atomically, so a fork()+exec() racing us cannot leak the new descriptor into the child.)
+  const handle_t result = fcntl(m_native_handle, F_DUPFD_CLOEXEC, 0);
+  if (result == -1)
+  {
+    *err_code = Error_code{errno, system_category()};
+    return {};
+  }
+  // else
+
+  err_code->clear();
+  return Native_handle{result};
+} // Native_handle::dup()
+
 Native_handle disowned_native_handle(Own_native_handle&& src) noexcept
 {
   Native_handle ret{src.get()};
   src.release();
   return ret;
+}
+
+Own_native_handle duped_native_handle(Native_handle src, Error_code* err_code)
+{
+  return Own_native_handle{src.dup(err_code)};
 }
 
 size_t hash_value(Native_handle val) noexcept

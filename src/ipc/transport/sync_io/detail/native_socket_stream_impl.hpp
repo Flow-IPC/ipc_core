@@ -895,8 +895,12 @@ private:
 
     // Data.
 
-    /// The native handle to transmit in the payload; `.null() == true` to transmit no such thing.
-    Native_handle m_hndl_or_null;
+    /**
+     * The native handle to transmit in the payload; `.get().null() == true` to transmit no such thing.
+     * It is our own auto-closing duplicate of the user's handle -- which need only stay valid until
+     * send_native_handle() returns per concept contract, while ours must survive until the eventual OS-write.
+     */
+    util::Own_native_handle m_hndl_or_null;
 
     /**
      * The buffer to transmit in the payload; `!m_blob.empty() == true`, period.  Note that this is the actual buffer
@@ -1190,6 +1194,12 @@ private:
    * you may call this again to send the next low-level payload.  Otherwise #m_peer_socket cannot be subsequently used
    * in either direction (connection is hosed).
    *
+   * Such a condition can arise not only from the OS-write itself but also in the queueing stage: if
+   * `hndl_or_null` must be queued, it is duplicated (see Snd_low_lvl_payload::m_hndl_or_null), and that can fail
+   * (descriptor-table full and such).  Note this can therefore occur even while an async-send of earlier-queued
+   * payload(s) is in progress -- the one way #m_snd_pending_err_code can become truthy during such a wait;
+   * snd_on_ev_peer_socket_writable_or_error() accounts for it.
+   *
    * ### `avoid_qing` mode for auto-ping ###
    * Setting this arg to `true` slightly modifies the above behavior as follows.  Suppose the blob(s) encode an
    * auto-ping message (see auto_ping()).  (So `handle_or_null` must be `.null()`.)  Its purpose is to inform the
@@ -1242,6 +1252,9 @@ private:
    * invokes snd_async_write_q_head_payload() again if not all could be so sent.  Lastly, if indeed it sends-out
    * everything, or encounters out-pipe being hosed, and async_end_sending() completion handler is pending
    * to be called -- it ensures that occurs (synchronously inside).
+   *
+   * If #m_snd_pending_err_code is already truthy on entry -- possible (as of this writing) only via the
+   * queueing-stage failure (see snd_sync_write_or_q_payload() doc header) -- it no-ops.
    */
   void snd_on_ev_peer_socket_writable_or_error();
 

@@ -317,10 +317,18 @@ public:
    * To *not* supply a handle, provide object with `.null() == true`.  To *not* supply a blob, provide
    * a buffer with `.size() == 0`.
    *
-   * ### Blob copying behavior; synchronicity/blockingness guarantees ###
+   * ### Blob and native-handle copying behavior; synchronicity/blockingness guarantees ###
    * If a blob is provided, it need only be valid until this method returns.  The implementation shall, informally,
    * strive to *not* save a copy of the blob (except into the low-level transport mechanism); but it is *allowed* to
-   * save it if required, such as if the low-level transport mechanism encounteres a would-block condition.
+   * save it if required, such as if the low-level transport mechanism encounters a would-block condition.
+   *
+   * The same goes for the native handle, if provided: it need only be valid until this method returns; the
+   * implementation shall duplicate it (a-la Native_handle::dup()) if it must defer transmission.  Hence the user
+   * may close their handle immediately after this returns.
+   *
+   * @note Subtlety inherent in that: in POSIX, classic `fcntl()` record locks on a file are released when the
+   *       process closes *any* descriptor to that file -- including such an internal duplicate.  Do not send handles
+   *       to files on which you hold such locks; open-file-description (OFD) locks are immune.
    *
    * This means, to the user, that this method is *both* non-blocking *and* synchronous *and* it must not
    * refuse to send and return any conceptual would-block error (unlike, say, with a typical networked TCP socket API).
@@ -399,7 +407,7 @@ public:
    * In addition: if `*this` is not in PEER state (in particular if it is default-cted or moved-from), returns
    * `false` immediately instead and otherwise no-ops (logging aside).
    *
-   * Informally one should think of async_end_sending() as just another message, which is queued after
+   * Informally one should think of async_end_sending() as sending just another message, which is queued after
    * preceding ones; but: it is the *last* message to be queued by definition.  It's like an EOF or a TCP-FIN.
    *
    * ### Synchronicity/blockingness guarantees ###

@@ -789,19 +789,25 @@ bool Native_socket_stream_impl::snd_sync_write_or_q_payload(Native_handle hndl_o
   // else if (!avoid_qing) { Fall through. }
 
   auto new_low_lvl_payload = boost::movelib::make_unique<Snd_low_lvl_payload>();
-  if constexpr(Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT)
+  if ((!hndl_or_null.null()) && sent_none) // (sent_none is always true if S_USE_OS_DGRAM_SUPPORT.)
   {
-    // `sent_none` has already been assert()ed; so:
-    new_low_lvl_payload->m_hndl_or_null = hndl_or_null;
-  }
-  else // if constexpr(!S_USE_OS_DGRAM_SUPPORT)
-  {
-    if (sent_none)
+    /* The handle goes with the payload -- as our own duplicate: the user's copy need only stay valid until
+     * send_native_handle() returns, but ours must survive until the eventual OS-write.  (Reminder: This is
+     * allowed (essentially mandated) by the concept; we cannot require they keep the handle open past
+     * send_*() return.) */
+    Error_code sys_err_code;
+    new_low_lvl_payload->m_hndl_or_null = util::duped_native_handle(hndl_or_null, &sys_err_code);
+    if (sys_err_code)
     {
-      new_low_lvl_payload->m_hndl_or_null = hndl_or_null;
+      FLOW_LOG_WARNING("Socket stream [" << *this << "]: Want to send low-level payload(s) with handle "
+                       "[" << hndl_or_null << "]; must queue it (would-block); but duplicating the handle for that "
+                       "purpose failed.  Outgoing-direction pipe is hosed.  Details follow.");
+      FLOW_ERROR_SYS_ERROR_LOG_WARNING();
+      m_snd_pending_err_code = sys_err_code;
+      return true; // Pipe-direction-ending error encountered; outgoing-direction pipe is finished forevermore.
     }
-    // else { Leave it as null.  Even if (!hndl_or_null.null()): 1+ bytes were sent OK => so was hndl_or_null. }
   }
+  // else { Leave it as null.  Even if (!hndl_or_null.null()): 1+ bytes were sent OK => so was hndl_or_null. }
 
   /* Allocate N bytes; copy N bytes into there from blob1 and/or blob2_or_none.  Start at 1st unsent byte (possibly 1st
    * byte).  This is the first and only place we copy the source blob (not counting the transmission into kernel
@@ -842,7 +848,7 @@ bool Native_socket_stream_impl::snd_sync_write_or_q_payload(Native_handle hndl_o
   } // if constexpr(!S_USE_OS_DGRAM_SUPPORT)
 
   FLOW_LOG_TRACE("Socket stream [" << *this << "]: Want to send pending-from-would-block low-level payload: "
-                 "handle [" << new_low_lvl_payload->m_hndl_or_null << "] with "
+                 "handle [" << new_low_lvl_payload->m_hndl_or_null.get() << "] with "
                  "new blob of size [" << new_low_lvl_payload->m_blob.size() << "] "
                  "located @ [" << new_low_lvl_payload->m_blob.const_buffer().data() << "]; "
                  "enqueued to out-queue which is now of size [" << (m_snd_pending_payloads_q.size() + 1) << "].");
@@ -1079,14 +1085,28 @@ void Native_socket_stream_impl::snd_on_ev_peer_socket_writable_or_error()
                  "can until would-block or total success.");
 
   assert((!m_snd_pending_payloads_q.empty()) && "Send-queue should not be touched while async-write of head is going.");
-  assert((!m_snd_pending_err_code) && "Send error would only be detected by us.  Bug?");
+
+  /* Normally the out-pipe cannot become hosed while we await writability: nothing touches the socket in that
+   * direction meanwhile.  The one exception as of this writing: snd_sync_write_or_q_payload() failing to duplicate
+   * a handle when queueing behind us.  Then the queue is moot; no-op.  (No handler is owed: *end_sending() could
+   * not have preceded that hosing send; and if invoked after it, it reported synchronously.) */
+  if (m_snd_pending_err_code)
+  {
+    assert(m_snd_pending_on_last_send_done_func_or_empty.empty()
+           && "*end_sending() should have reported synchronously, given already-hosed state.  Bug?");
+    // Interesting and rare enough for INFO-level.  (Even (another) WARNING would've been fine too.)
+    FLOW_LOG_INFO("Socket stream [" << *this << "]: User-performed wait-for-writable finished; but out-pipe "
+                  "was hosed meanwhile (previous logging should have explained).  Nothing to do.");
+    return;
+  }
+  // else
 
   // Let's do as much as we can.
   bool would_block = false;
   do
   {
     auto& low_lvl_payload = *m_snd_pending_payloads_q.front();
-    auto& hndl_or_null = low_lvl_payload.m_hndl_or_null;
+    const auto hndl_or_null = low_lvl_payload.m_hndl_or_null.get();
     auto& low_lvl_blob = low_lvl_payload.m_blob;
     auto low_lvl_blob_view = low_lvl_blob.const_buffer();
 
@@ -1097,7 +1117,7 @@ void Native_socket_stream_impl::snd_on_ev_peer_socket_writable_or_error()
                    "located @ [" << low_lvl_blob_view.data() << "].");
 
     const auto n_sent_or_zero
-      = snd_nb_write_low_lvl_payload(low_lvl_payload.m_hndl_or_null, low_lvl_blob_view, {}, &m_snd_pending_err_code);
+      = snd_nb_write_low_lvl_payload(hndl_or_null, low_lvl_blob_view, {}, &m_snd_pending_err_code);
     if (m_snd_pending_err_code)
     {
       continue; // Get out of the loop.
@@ -1107,7 +1127,8 @@ void Native_socket_stream_impl::snd_on_ev_peer_socket_writable_or_error()
     if (n_sent_or_zero == low_lvl_blob_view.size())
     {
       // Everything was sent nicely!
-      m_snd_pending_payloads_q.pop(); // This should dealloc low_lvl_payload.m_blob in particular.
+      m_snd_pending_payloads_q.pop();
+      // That should've dealloced low_lvl_payload.m_blob + closed duplicate .m_hndl_or_null (if any).
       m_snd_stats.m_snd_q_depth = m_snd_pending_payloads_q.size();
     }
     else // if (n_sent_or_zero != low_lvl_payload.m_blob.size())
@@ -1126,8 +1147,8 @@ void Native_socket_stream_impl::snd_on_ev_peer_socket_writable_or_error()
          * just "edit" it in-place as needed. */
         if (n_sent_or_zero != 0)
         {
-          // Even if (!m_hndl_or_null.null()): 1+ bytes were sent => so was the native handle.
-          low_lvl_payload.m_hndl_or_null = {};
+          // Even if (!m_hndl_or_null.get().null()): 1+ bytes were sent => so was the native handle.
+          low_lvl_payload.m_hndl_or_null.reset(); // Closes our duplicate.
           /* Slide its .begin() to the right by n_sent_or_zero (might be no-op if was not writable after all).
            * Note internally it's just a size_t +=; no realloc or anything. */
           low_lvl_payload.m_blob.start_past_prefix_inc(n_sent_or_zero);
@@ -1191,7 +1212,7 @@ void Native_socket_stream_impl::snd_on_ev_peer_socket_writable_or_error()
 
   /* See log_stats() doc header for basic background behind the logic here.
    * Note we put this ahead of any handler-call to avoid reentrant hellishness. */
-  if (m_snd_pending_err_code) // Note we've asserted it was not already truthy at the start.
+  if (m_snd_pending_err_code) // Note we would've returned early, if it was already truthy at the start.
   {
     snd_log_stats("snd_on_ev_peer_socket_writable_or_error(): while processing ev-ready snd-pipe hosed");
   }
