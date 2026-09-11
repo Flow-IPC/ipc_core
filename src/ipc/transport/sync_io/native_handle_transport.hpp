@@ -134,7 +134,7 @@ public:
    * To be (optionally) invoked before any `start_*_ops()`, supplies a factory for the
    * util::sync_io::Asio_waitable_native_handle objects pointers to which shall be subsequently passed into
    * any `Event_wait_func` (as registered via `start_*_ops()`), when `*this` requires an async-wait on
-   * a particular native-handle.  This is useful if the user event loop is built on boost.asio: the supplied factory
+   * a particular native-handle.  This is useful, if the user event loop is built on boost.asio: the supplied factory
    * function can associate the handle-object with the user's `Task_engine` (or strand or ...); hence
    * when an async-wait is requested, the user can simply `hndl_of_interest->async_wait(..., F)`; `F()` will
    * be invoked directly within the user's event loop.
