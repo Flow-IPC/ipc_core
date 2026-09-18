@@ -57,6 +57,7 @@ using util::sync_io::Task_ptr;
 using util::Blob_const;
 using util::Blob_mutable;
 using flow::async::Single_thread_task_loop;
+using flow::async::Synchronicity;
 using boost::promise;
 using std::string;
 using std::vector;
@@ -198,6 +199,15 @@ void start_sio_ops(Channel_t* channel, Single_thread_task_loop* loop)
   // Once any start_*_ops() succeeded, replacing the wait-handles is refused; the Channel ANDs the results.
   EXPECT_FALSE(channel->replace_event_wait_handles([loop]()
                                                      { return Asio_waitable_native_handle{*(loop->task_engine())}; }));
+}
+
+/* Runs `func` on the loop's thread and waits for it: the sync_io contract is that the object's API calls and its
+ * event-wait handlers execute on one thread, so once start_sio_ops() has armed handlers on `loop`, the test's
+ * own calls on that object must go through here rather than run on the test thread. */
+template<typename Func>
+void on_loop(Single_thread_task_loop* loop, Func&& func)
+{
+  loop->post(std::forward<Func>(func), Synchronicity::S_ASYNC_AND_AWAIT_CONCURRENT_COMPLETION);
 }
 
 // What one async-I/O receive yields.  m_hndl is meaningful for handle-pipe receives only.
@@ -856,35 +866,41 @@ struct End_sending_done
   }
 };
 
-/* The sync_io overload, over `a` (sync_io; ops started) with the opposing async-I/O `b` idle: fill the pipe(s)
- * indicated, or send 1 message over each pipe otherwise; end sending; check the synchronous result; check that
- * dupes are refused; drain `b`; check the completion handler fired exactly once, if and only if would-block. */
+/* The sync_io overload, over `a` (sync_io; ops started on `loop`) with the opposing async-I/O `b` idle: fill the
+ * pipe(s) indicated, or send 1 message over each pipe otherwise; end sending; check the synchronous result; check
+ * that dupes are refused; drain `b`; check the completion handler fired exactly once, if and only if would-block. */
 template<typename Sio_channel, typename Aio_channel>
-void end_sending_sio_test(Sio_channel* a, Aio_channel* b, bool fill_blob_pipe, bool fill_hndl_pipe)
+void end_sending_sio_test(Sio_channel* a, Single_thread_task_loop* loop, Aio_channel* b,
+                          bool fill_blob_pipe, bool fill_hndl_pipe)
 {
+  const bool would_block = fill_blob_pipe || fill_hndl_pipe;
   [[maybe_unused]] size_t n_blobs = 0;
   [[maybe_unused]] size_t n_hndls = 0;
-  if constexpr(Sio_channel::S_HAS_BLOB_PIPE) { n_blobs = send_marked_msgs<true>(a, fill_blob_pipe); }
-  if constexpr(Sio_channel::S_HAS_NATIVE_HANDLE_PIPE) { n_hndls = send_marked_msgs<false>(a, fill_hndl_pipe); }
-
   End_sending_done done;
-  Error_code sync_err_code;
-  EXPECT_TRUE(a->async_end_sending(&sync_err_code, done.handler()));
-  const bool would_block = fill_blob_pipe || fill_hndl_pipe;
-  if (would_block)
-  {
-    EXPECT_EQ(sync_err_code, error::Code::S_SYNC_IO_WOULD_BLOCK);
-  }
-  else
-  {
-    EXPECT_FALSE(sync_err_code) << sync_err_code.message();
-  }
-
-  // Dupe calls are refused, whether the first one is still pending or not.
   End_sending_done dupe;
-  Error_code dupe_err_code;
-  EXPECT_FALSE(a->async_end_sending(&dupe_err_code, dupe.handler()));
-  EXPECT_FALSE(a->end_sending());
+
+  // Everything touching `a` runs on its loop's thread (see on_loop()); the rest of the test thread's work follows.
+  on_loop(loop, [&]()
+  {
+    if constexpr(Sio_channel::S_HAS_BLOB_PIPE) { n_blobs = send_marked_msgs<true>(a, fill_blob_pipe); }
+    if constexpr(Sio_channel::S_HAS_NATIVE_HANDLE_PIPE) { n_hndls = send_marked_msgs<false>(a, fill_hndl_pipe); }
+
+    Error_code sync_err_code;
+    EXPECT_TRUE(a->async_end_sending(&sync_err_code, done.handler()));
+    if (would_block)
+    {
+      EXPECT_EQ(sync_err_code, error::Code::S_SYNC_IO_WOULD_BLOCK);
+    }
+    else
+    {
+      EXPECT_FALSE(sync_err_code) << sync_err_code.message();
+    }
+
+    // Dupe calls are refused, whether the first one is still pending or not.
+    Error_code dupe_err_code;
+    EXPECT_FALSE(a->async_end_sending(&dupe_err_code, dupe.handler()));
+    EXPECT_FALSE(a->end_sending());
+  });
 
   if constexpr(Sio_channel::S_HAS_BLOB_PIPE) { drain_pipe<true>(b, n_blobs); }
   if constexpr(Sio_channel::S_HAS_NATIVE_HANDLE_PIPE) { drain_pipe<false>(b, n_hndls); }
@@ -936,7 +952,7 @@ TEST(Channel_test, async_end_sending_sio_blobs_only)
     Socket_stream_channel_of_blobs<true> a{channel_logger(), "sioA", std::move(socks.first)};
     Socket_stream_channel_of_blobs<false> b{channel_logger(), "aioB", Native_socket_stream{std::move(socks.second)}};
     start_sio_ops(&a, &loop);
-    end_sending_sio_test(&a, &b, fill, false);
+    end_sending_sio_test(&a, &loop, &b, fill, false);
   }
 }
 
@@ -952,7 +968,7 @@ TEST(Channel_test, async_end_sending_sio_hndls_only)
     Socket_stream_channel<true> a{channel_logger(), "sioA", std::move(socks.first)};
     Socket_stream_channel<false> b{channel_logger(), "aioB", Native_socket_stream{std::move(socks.second)}};
     start_sio_ops(&a, &loop);
-    end_sending_sio_test(&a, &b, false, fill);
+    end_sending_sio_test(&a, &loop, &b, false, fill);
   }
 }
 
@@ -975,7 +991,7 @@ TEST(Channel_test, async_end_sending_sio_both)
       Posix_mqs_socket_stream_channel b{channel_logger(), "aioB", std::move(mqs_b.first), std::move(mqs_b.second),
                                         Native_socket_stream{std::move(ends.m_socks.second)}};
       start_sio_ops(&a, &loop);
-      end_sending_sio_test(&a, &b, fill_blob_pipe, fill_hndl_pipe);
+      end_sending_sio_test(&a, &loop, &b, fill_blob_pipe, fill_hndl_pipe);
     }
   }
 }
