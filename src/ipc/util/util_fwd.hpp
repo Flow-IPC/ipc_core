@@ -79,10 +79,11 @@ static_assert(false, "Design of Permissions_level assumes a POSIX-y security mod
  * still assume the 3 user groupings are "user themselves," "user's group," and "everyone."  The 1st and 3rd
  * are likely universal, but the 2nd may not apply to all OS -- through probably all POSIX/Unix ones --
  * and even for something like Linux there could be different groupings such as ones based on OS ACL.
- * As of this writing it's fine, as this is a POSIX-targeted library at least (in fact, Linux, as of this writing,
+ * As of this writing it's fine, as this is a POSIX-targeted library at least (in fact Linux as of this writing,
  * but that could change to include, say, macOS/similar).
  *
  * @internal
+ *
  * ### Maintenance ###
  * Do *not* change the order of these constants unless absolutely necessary.  In general any change here
  * means updating any `array<>`s (etc.) that map implicitly from a `size_t` representing

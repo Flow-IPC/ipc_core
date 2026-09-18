@@ -282,7 +282,44 @@ void Native_socket_stream_impl::rcv_read_batch_from_pkt_stream(Batch* batch,
         {
           if (m_rcv_pending_err_code)
           {
-            if (m_rcv_pending_err_code != error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE)
+            /* @todo There is some corner-case inconsistency between the behavior of single-message receive
+             * versus us (batch-receive).  Ideally these would be brought in-line with each other.  Namely the
+             * difference is in some cases we nullify/hose m_peer_socket -- essentially hosing *this, so
+             * out-APIs don't work subsequently either -- while they leave it alone, so out-APIs may work fine
+             * still (allowing for send*() and *end_sending()).  Details:
+             *   - System errors (originating in native APIs like `::recv*()`, delivered to us through boost.asio
+             *     or directly): Mutually consistent (hoses out-pipe too).
+             *   - Native `eof` graceful-close: Mutually consistent (hoses out-pipe too).
+             *   - RECEIVES_FINISHED_CANNOT_RECEIVE graceful-close: Mutually consistent (does not hose out-pipe).
+             *   - EXCEEDS_USER_STORAGE: Mutually consistent (does not hose out-pipe).
+             *   - Protocol errors like LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER, BLOB_RECEIVER_GOT_NON_BLOB:
+             *     - us (batched): hoses out-pipe too;
+             *     - them (single-message): does not hose out-pipe.
+             *
+             * Pointers for the doer of to-do:
+             *   - It is not urgent.  As can be seen above, the discrepancy is only for the protocol-errors
+             *     category.  INVALID_HEADER in particular means a bug by us; GOT_NON_BLOB means misuse
+             *     by user... or a bug by us.  So the precondition is unlikely, and the effect of the
+             *     inconsistency -- whether opposing-direction pipe remains usable in these conditions -- is
+             *     pretty obscure (most users would eliminate the problem rather than worry about the other pipe).
+             *   - It would still be nice, for cleanliness (and to delete this comment).
+             *   - Suggest changing them (single-message rcv) to be like us (batch rcv) and not vice versa.
+             *     It's easier (they already enumerate all the possible errors in rcv_on_dgram(), so just change
+             *     what happens; whereas we currently let .nb_read() deal with them and handle them all the same).
+             *     It's also arguably more consistent with other errors; essentially that true-blue unexpected
+             *     scenario => hose it all; only allow *this to remain useful under known normal-operation "errors,"
+             *     namely EXCEEDS_USER_STORAGE and RECEIVES_FINISHED_CANNOT_RECEIVE.
+             *     - On the other hand: GOT_NON_BLOB is at least potentially a user error (<= we used wrong
+             *       async_receive_*() API: cannot accept a Native_handle); and EXCEEDS_USER_STORAGE is definitely
+             *       one; so why treat them differently?  So perhaps add that specific error GOT_NON_BLOB
+             *       to the list (along with RECEIVES_FINISHED_CANNOT_RECEIVE, EXCEEDS_USER_STORAGE) of
+             *       non-other-pipe-hosing errors (both for us and for them consistently).
+             *   - Handle the preferred code path (Protocol_pkt_stream case): rcv_on_dgram().
+             *   - Handle also the other code path (Protocol_byte_stream case):
+             *     rcv_on_head_payload(), rcv_on_handle_finalized(), rcv_resume_incomplete_msg_processing(). */
+
+            if ((m_rcv_pending_err_code != error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE)
+                && (m_rcv_pending_err_code != error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE))
             {
               /* True-blue error.  Kill off *m_peer_socket (connection hosed).  We could simply nullify it, which'd
                * give it back to the system (it's a resource), but see m_peer_socket_hosed doc header for explanation as
@@ -294,10 +331,35 @@ void Native_socket_stream_impl::rcv_read_batch_from_pkt_stream(Batch* batch,
               m_peer_socket_hosed = std::move(m_peer_socket);
               assert((!m_peer_socket) && "Shocking unique_ptr misbehavior!");
             }
-            /* else if (m_rcv_pending_err_code == ...EXCEEDS_USER_STORAGE)
+            /* else if (m_rcv_pending_err_code == ...EXCEEDS_USER_STORAGE or graceful-close from *end_sending())
              * { m_rcv_pending_err_code is truthy; and to our user the *in*-direction pipe is likely hosed (or
              *   will be on next receive attempt) -- see just below for all that.  However, we choose *not*
-             *   to hose m_peer_socket, and therefore the *out*-direction pipe continues to operate if desired. } */
+             *   to hose m_peer_socket, and therefore the *out*-direction pipe continues to operate if desired. }
+             *
+             * Why do we choose this?  Answer: Firstly the concept does not specify how a hypothetical
+             * other-direction pipe would be affected; the _sender and _receiver concepts are separate and don't
+             * generally interact; we just happen to implement both.  So we're free to do what we want, as long
+             * as these errors both (as explicitly required) hose the in-pipe.  So why not also hose the out-pipe?
+             * Answer: Leaving it alive is just useful; it is closer to full-duplex which local-sockets support,
+             * so why not?
+             *
+             * In the case of RECEIVES_FINISHED_CANNOT_RECEIVE (graceful-close) it's stronger than that actually:
+             * hosing *this upon receiving graceful-close -- which results from opposing peer doing *end_sending() --
+             * makes it impossible for us to perform our own *end_sending(); it'll fail with
+             * LOW_LVL_TRANSPORT_HOSED_CANNOT_SEND.  So it would mean graceful-closing can only be fully carried
+             * out in one direction, whichever one wins the race.  Not fatal for most protocols but an unnecessary
+             * concession.
+             *
+             * Related: If we treat RECEIVES_FINISHED_CANNOT_RECEIVE this way, why not do the same for
+             * `eof`?  Answer: It would not be wrong, and we really refuse to do it mostly to reduce code/associated
+             * entropy/testing surface; but even if we did it, it would not bring us anything.  The reason is
+             * simply that the opposing entity is a Native_socket_stream_impl like us, and we simply lack a
+             * send-API that would trigger it; we don't do m_peer_socket->shutdown(); nor ->close(); and we
+             * destroy *m_peer_socket in destructor only, at which point the conversation is moot (opposing peer
+             * is fully gone, so we don't care about our out-pipe's hypothetical health).  In short: a native
+             * `eof`-as-graceful-close -- while specifically supported by nb_read() under us -- is not part of
+             * our protocol, so might as well treat it as a fully-*this-hosing event, as with broken-pipe and
+             * others. */
 
             // m_rcv_pending_err_code is truthy; n_rcvd_or_zero >= 0; now emit the proper thing per comment higher-up.
             if (n_rcvd_or_zero == 0)

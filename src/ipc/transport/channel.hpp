@@ -46,7 +46,7 @@ namespace ipc::transport
  * This bundling of the local peer objects of 1-2 pipes is the Channel template's core functionality;
  * it is therefore (data-wise -- but code-wise as well) an *extremely* thin wrapper around the stored 2-4 peer
  * objects.  At its core it provides:
- *   - construction in ??? state;
+ *   - construction in UNCONFIGURED state;
  *   - accessors for the peer objects (`Blob_sender`/`Blob_receiver`, which may be the same object or not; or
  *     `Native_handle_sender`/`Native_handle_receiver`, ditto; or both);
  *   - simple API for loading up the objects that shall be returned by those accessors.
@@ -166,18 +166,18 @@ namespace ipc::transport
  * `is_same_v<C1::Blob_sender_obj, C2::Blob_sender_obj> == true`, repeated for `Blob_receiver_obj`,
  * `Native_handle_sender_obj`, `Native_handle_receiver_obj`.
  *
- * ### ??? versus PEER states; pipe interaction ###
+ * ### UNCONFIGURED versus PEER states; pipe interaction ###
  * A Channel contains minimal logic.  It's a bundling of pipe peers; and secondarily of concept implementations.
  *
  * In that secondary role, befitting a Blob_sender, Blob_receiver, and/or Native_handle_sender, Native_handle_receiver:
  * A Channel `*this` is in one of 2 states:
- *   - During initialization: ??? state.
+ *   - During initialization: UNCONFIGURED state.
  *   - After initialization: PEER state.  The peer objects have been moved-into `*this`: it can now transmit.
  *
- * As per those concepts: The only way to exit PEER state is to move-from `*this` which makes it ??? (as-if
+ * As per those concepts: The only way to exit PEER state is to move-from `*this` which makes it UNCONFIGURED (as-if
  * default-cted) again.
  *
- * As of this writing, in ??? state methods other than `init*()` and the basic accessors shall have undefined
+ * As of this writing, in UNCONFIGURED state methods other than `init*()` and the basic accessors shall have undefined
  * behavior.  In PEER state however they shall all strive to do work (per concepts).  There's technically also
  * the no-man's-land wherein one has called some but not all intended `init_*_pipe()` calls.  Behavior is similarly
  * undefined in that no-man's-land.
@@ -390,7 +390,7 @@ public:
   // Constructors/destructor.
 
   /**
-   * Default ctor (Channel is in ??? state; intended to be move-assigned).
+   * Default ctor (Channel is in UNCONFIGURED state; intended to be move-assigned).
    *
    * This ctor is informally intended for the following uses:
    *   - A moved-from Channel (i.e., the `src` arg move-ctor and move-assignment operator)
@@ -404,7 +404,7 @@ public:
   Channel();
 
   /**
-   * Constructs Channel in ??? state with the intention to continue initialization via init_blob_pipe() and/or
+   * Constructs Channel in UNCONFIGURED state with the intention to continue initialization via init_blob_pipe() and/or
    * init_native_handle_pipe() call(s).
    *
    * This ctor is informally intended for the following use:
@@ -425,7 +425,7 @@ public:
   Channel(flow::log::Logger* logger_ptr, util::String_view nickname_str);
 
   /**
-   * Move-constructs from `src`; `src` becomes as-if default-cted (therefore in ??? state).
+   * Move-constructs from `src`; `src` becomes as-if default-cted (therefore in UNCONFIGURED state).
    *
    * @param src
    *        See above.
@@ -458,11 +458,10 @@ public:
    *
    * Namely it will check that:
    *   - init_blob_pipe() was called if and only if #Blob_sender_obj is not Null_peer.
-   *     - If an overload was indeed called, and its 1-arg was the one, then #Blob_sender_obj and #Blob_receiver_obj
-   *       were the same type.
    *   - init_native_handle_pipe() was called if and only if #Native_handle_sender_obj is not Null_peer.
-   *     - If an overload was indeed called, and its 1-arg was the one, then #Native_handle_sender_obj and
-   *       #Native_handle_receiver_obj were the same type.
+   *
+   * (Which init_blob_pipe() or init_native_handle_pipe() overload is applicable, given the types involved, is
+   * enforced at compile time.)
    *
    * If this returns `false`, formally, behavior is undefined, if one attempts transmission.
    * Informally, likely some intended-for-use transmission methods will always return `false` and no-op;
@@ -477,8 +476,8 @@ public:
   bool initialized(bool suppress_log = false) const;
 
   /**
-   * Move-assigns from `src`; `*this` acts as if destructed; `src` becomes as-if default-cted (therefore in ??? state).
-   * No-op if `&src == this`.
+   * Move-assigns from `src`; `*this` acts as if destructed; `src` becomes as-if default-cted (therefore in
+   * UNCONFIGURED state).  No-op if `&src == this`.
    *
    * @see ~Channel().
    *
@@ -586,15 +585,15 @@ public:
    * Completes initialization of the *blobs pipe* by taking ownership (via move semantics) of an object that
    * is simultaneously the #Blob_sender_obj and #Blob_receiver_obj for our end of the blobs pipe.  Call this 0 times
    * (successfully) if blobs pipe disabled (in which case #Blob_sender_obj and #Blob_receiver_obj should both be
-   * Null_peer).  Call either this or the 2-arg overload exactly 1 time (successfully) otherwise.  If you call this,
-   * #Blob_sender_obj and #Blob_receiver_obj must be the same type.
+   * Null_peer).  Call either this or the 2-arg overload exactly 1 time (successfully) otherwise.
    *
-   * Certain mistaken uses are caught in this method; it no-ops and returns `false` (failure):
-   *   - You called this, but #Blob_sender_obj is Null_peer.
-   *   - You called this, but #Blob_sender_obj and #Blob_receiver_obj are not the same type.
+   * Compilable only if #Blob_sender_obj is not Null_peer (#S_HAS_BLOB_PIPE), and #Blob_sender_obj and
+   * #Blob_receiver_obj are the same type.
+   *
+   * One mistaken use is caught in this method; it no-ops and returns `false` (failure):
    *   - You called this after already calling an init_blob_pipe() overload successfully before.
    *
-   * The remaining mistakes are caught by initialized(), if you choose to call it before any transmission (and you
+   * The remaining mistake is caught by initialized(), if you choose to call it before any transmission (and you
    * should):
    *   - You called this or the overload 0 times (successfully), but #Blob_sender_obj is not Null_peer.
    *
@@ -605,17 +604,12 @@ public:
    * over the blobs pipe, even though technically it is possible to do so immediately.
    * Use initialized() to double-check.
    *
-   * @warning It is an error (as noted above) to call this, unless #Blob_sender_obj and #Blob_receiver_obj are the
-   *          same type.  This will no-op and return `false`.  The only reason it is not undefined behavior
-   *          (assertion trip) is so that this mistake can be caught without an `assert()`, if you choose
-   *          to call initialized() after the init phase yourself.
-   *
    * @note As a user, it is likely you can/should use an alias type that will take care of calling this for you.
    *       See Channel doc header.
    *
    * @param snd_and_rcv
    *        A #Blob_sender_obj *and* #Blob_receiver_obj in PEER state.
-   * @return `true` on success; `false` on no-op due to a mistaken use listed above.
+   * @return `true` on success; `false` on no-op due to the mistaken use listed above.
    */
   bool init_blob_pipe(Blob_sender_obj&& snd_and_rcv);
 
@@ -625,11 +619,13 @@ public:
    * blobs pipe disabled (in which case #Blob_sender_obj and #Blob_receiver_obj should both be Null_peer).
    * Call either this or the 1-arg overload exactly 1 time otherwise.
    *
-   * Certain mistaken uses are caught in this method; it no-ops and returns `false` (failure):
-   *   - You called this, but #Blob_sender_obj is Null_peer and/or #Blob_receiver_obj is Null_peer.
+   * Compilable only if #Blob_sender_obj is not Null_peer (#S_HAS_BLOB_PIPE), and #Blob_sender_obj and
+   * #Blob_receiver_obj are different types.
+   *
+   * One mistaken use is caught in this method; it no-ops and returns `false` (failure):
    *   - You called this after already calling an init_blob_pipe() overload successfully before.
    *
-   * The remaining mistakes are caught by initialized(), if you choose to call it before any transmission (and you
+   * The remaining mistake is caught by initialized(), if you choose to call it before any transmission (and you
    * should):
    *   - You called this or the overload 0 times (successfully), but #Blob_sender_obj is not Null_peer.
    *
@@ -647,7 +643,7 @@ public:
    *        A #Blob_sender_obj in PEER state.
    * @param rcv
    *        A #Blob_receiver_obj in PEER state.
-   * @return `true` on success; `false` on no-op due to a mistaken use listed above.
+   * @return `true` on success; `false` on no-op due to the mistaken use listed above.
    */
   bool init_blob_pipe(Blob_sender_obj&& snd, Blob_receiver_obj&& rcv);
 
@@ -1586,10 +1582,37 @@ typename CLASS_CHANNEL::Async_io_obj CLASS_CHANNEL::async_io_obj()
 } // Channel::async_io_obj()
 
 TEMPLATE_CHANNEL
-CLASS_CHANNEL::Channel(Channel&&) = default;
+CLASS_CHANNEL::Channel(Channel&& src) :
+  Channel()
+{
+  operator=(std::move(src));
+}
 
 TEMPLATE_CHANNEL
-CLASS_CHANNEL& CLASS_CHANNEL::operator=(Channel&&) = default;
+CLASS_CHANNEL& CLASS_CHANNEL::operator=(Channel&& src)
+{
+  using flow::log::Log_context;
+
+  /* Not `= default` but why?  Main reason: A moved-from truthy std::optional<> stays truthy (<=> holding a moved-from
+   * peer object <=> holding one in NULL state), but to satisfy our contract ("as-if default-cted") it should become
+   * falsy (<=> holding no peer object).  Hence `src` should become !initialized() a/k/a UNCONFIGURED, but `= default`
+   * does not achieve that.
+   *
+   * Secondary/minor/optional reason: We can add the `&src != this` check (and therefore promise it in contract).
+   *
+   * If we add ADL-swap() support at some point, we could streamline the below by using swap() in here. */
+
+  if (&src != this)
+  {
+    Log_context::operator=(std::move(src));
+    m_nickname = std::move(src.m_nickname);
+    m_blob_snd = std::move(src.m_blob_snd); m_blob_rcv = std::move(src.m_blob_rcv);
+    m_hndl_snd = std::move(src.m_hndl_snd); m_hndl_rcv = std::move(src.m_hndl_rcv);
+    src.m_blob_snd.reset(); src.m_blob_rcv.reset();
+    src.m_hndl_snd.reset(); src.m_hndl_rcv.reset();
+  }
+  return *this;
+}
 
 TEMPLATE_CHANNEL
 CLASS_CHANNEL::~Channel()

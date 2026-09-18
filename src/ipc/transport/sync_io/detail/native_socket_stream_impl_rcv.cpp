@@ -532,6 +532,8 @@ void Native_socket_stream_impl::rcv_on_dgram(util::Own_native_handle&& hndl_or_n
                      "*only* a meta-blob: but received Native_handle is non-null which is "
                      "unexpected; emitting error via completion handler (or via sync-args).");
     m_rcv_pending_err_code = error::Code::S_BLOB_RECEIVER_GOT_NON_BLOB;
+    /* @todo Consider nullifying m_peer_socket (hosing out-pipe) here per to-do in rcv_read_batch_from_pkt_stream().
+     * Or comment the reverse and explain why (all part of that to-do). */
   } // if (!hndl_is_null && (!m_rcv_user_request->m_target_hndl_ptr))
   else // if (no prob with hndl_or_null or m_target_hndl_ptr)
   {
@@ -559,6 +561,8 @@ void Native_socket_stream_impl::rcv_on_dgram(util::Own_native_handle&& hndl_or_n
                        "but the entire in-dgram has size only [" << n_rcvd << "]; "
                        "emitting error via completion handler (or via sync-args).");
       m_rcv_pending_err_code = error::Code::S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER;
+      /* @todo Consider nullifying m_peer_socket (hosing out-pipe) here per to-do in rcv_read_batch_from_pkt_stream().
+       * Same for all below instances of emitting INVALID_HEADER. */
     }
     else // if (n_rcvd >= sizeof(m_rcv_target_meta_length))
     {
@@ -650,6 +654,23 @@ void Native_socket_stream_impl::rcv_on_dgram(util::Own_native_handle&& hndl_or_n
                         "message.  Will not proceed with any further low-level receiving.  "
                         "Will invoke handler (graceful-close error).");
           m_rcv_pending_err_code = error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE;
+
+          /* Discussion/sanity-checks: RECEIVES_FINISHED_CANNOT_RECEIVE is not like other errors emitted in the
+           * present function, as it is (even in the concept docs) more like an in-message: if user send*()s A, B, C
+           * and then async_end_sending(), then we will receive A, B, C, error R_F_C_R.  So are we doing the right
+           * thing?  What we do is emit it (hence in-pipe is hosed) but leave m_peer_socket alone; out-pipe
+           * remains healthy; they can send*() and/or *end_sending() just fine.
+           *
+           * Why do we choose this?  Answer: See comment in similar spot in rcv_read_batch_from_pkt_stream(), where
+           * it discusses graceful-close RECEIVES_FINISHED_CANNOT_RECEIVE but also `eof` and
+           * MESSAGE_SIZE_EXCEEDS_USER_STORAGE.  (That comment covers more situations than we have
+           * here, so that's why the "pointee" comment is there, while the "pointer" is here.)  In our case,
+           * that comment covers the situation relevant to the present function: receiving
+           * RECEIVES_FINISHED_CANNOT_RECEIVE.
+           *
+           * The MESSAGE_SIZE_EXCEEDS_USER_STORAGE and `eof` cases are handled one level down, in
+           * rcv_nb_read_low_lvl_payload_from_pkt_stream() (as it's emitted by low-level-transmit APIs as an error
+           * rather than encoded in the dgram as here in rcv_on_dgram()). */
 
           m_rcv_stats.m_total_low_lvl_bytes += n_rcvd;
         } // if (m_rcv_target_meta_length == 0)
@@ -912,6 +933,8 @@ void Native_socket_stream_impl::rcv_on_handle_finalized(util::Own_native_handle&
                      "*only* a meta-blob: but received Native_handle is non-null which is "
                      "unexpected; emitting error via completion handler (or via sync-args).");
     m_rcv_pending_err_code = error::Code::S_BLOB_RECEIVER_GOT_NON_BLOB;
+    /* @todo Consider nullifying m_peer_socket (hosing out-pipe) here per to-do in rcv_read_batch_from_pkt_stream().
+     * Or comment the reverse and explain why (all part of that to-do). */
   } // if (!hndl_is_null && (!m_rcv_user_request->m_target_hndl_ptr))
   else // if (no prob with hndl_or_null or m_target_hndl_ptr)
   {
@@ -1099,6 +1122,7 @@ void Native_socket_stream_impl::rcv_on_head_payload(Error_code* sync_err_code, s
                      "this warning.  Will not proceed with any further low-level receiving; will invoke "
                      "handler (failure).");
     m_rcv_pending_err_code = error::Code::S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER;
+    // @todo Consider nullifying m_peer_socket (hosing out-pipe) here per to-do in rcv_read_batch_from_pkt_stream().
   }
   else // if (m_rcv_target_meta_length != PING)
   {
@@ -1125,6 +1149,11 @@ void Native_socket_stream_impl::rcv_on_head_payload(Error_code* sync_err_code, s
                        "this warning.  Will not proceed with any further low-level receiving; will invoke "
                        "handler (failure).");
       m_rcv_pending_err_code = error::Code::S_MESSAGE_SIZE_EXCEEDS_USER_STORAGE;
+
+      /* Note: We don't nullify m_peer_socket in response to this user error; so they could still send*()
+       * and/or *end_sending() in the out-direction.  This is consistent with the Protocol_pkt_stream-path
+       * behavior.  See comment in rcv_nb_read_low_lvl_payload_from_pkt_stream()'s handling of EXCEEDS_USER_STORAGE;
+       * it explains why we do this. */
     } // else if (m_rcv_target_meta_length != 0) (also not ping)
     else // if (m_rcv_target_meta_length == 0)
     {
@@ -1149,6 +1178,12 @@ void Native_socket_stream_impl::rcv_on_head_payload(Error_code* sync_err_code, s
                       "message.  Will not proceed with any further low-level receiving.  "
                       "Will invoke handler (graceful-close error).");
         m_rcv_pending_err_code = error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE;
+
+        /* Note: We don't nullify m_peer_socket in response to this event which is not really a true-blue error but
+         * rather indication that opposing user did *end_sending() after the message we'd last received; so they could
+         * still send*() and/or *end_sending() in the out-direction.  This is consistent with the
+         * Protocol_pkt_stream-path behavior.  See comment in rcv_on_dgram()'s handling of
+         * RECEIVES_FINISHED_CANNOT_RECEIVE. */
 
         m_rcv_stats.m_total_low_lvl_bytes += sizeof(m_rcv_target_meta_length);
       }
@@ -1456,6 +1491,7 @@ void Native_socket_stream_impl::rcv_resume_incomplete_msg_processing
                      "*only* a meta-blob: but earlier-received Native_handle is non-null which is "
                      "unexpected; emitting error.");
     *err_code = m_rcv_pending_err_code = error::Code::S_BLOB_RECEIVER_GOT_NON_BLOB;
+    // @todo See to-do near GOT_NON_BLOB handling in rcv_on_handle_finalized().
     *sz = 0;
     return;
   } // if (hndl_or_null && (!m_rcv_user_request->m_target_hndl_ptr))
@@ -1646,10 +1682,21 @@ size_t Native_socket_stream_impl::rcv_nb_read_low_lvl_payload_from_pkt_stream
         // *err_code is truthy; n_rcvd_or_zero == 0; cool.
       }
       /* else if (!*err_code) { *err_code is falsy; n_rcvd_or_zero >= 1; cool. }
+       *
        * else if (*err_code == MESSAGE_SIZE_EXCEEDS_USER_STORAGE)
        * { *err_code is truthy; n_rcvd_or_zero == 0; and to our user the *in*-direction pipe is likely hosed --
        *   our caller shall set m_rcv_pending_err_code accordingly, and that's that.  However, we choose *not*
-       *   to hose m_peer_socket, and therefore the *out*-direction pipe continues to operate if desired. } */
+       *   to hose m_peer_socket, and therefore the *out*-direction pipe continues to operate if desired. }
+       *
+       * Why do we choose that?  Answer: See comment in similar spot in rcv_read_batch_from_pkt_stream(), where
+       * it discusses MESSAGE_SIZE_EXCEEDS_USER_STORAGE but also graceful-close RECEIVES_FINISHED_CANNOT_RECEIVE
+       * and `eof`.  (That comment covers more situations than we have here, so that's why the "pointee" comment
+       * is there, while the "pointer" is here.)  In our case, that comment covers these situations relevant to
+       * the present function:
+       *   - Why we don't hose m_peer_socket/`*this` here on MESSAGE_SIZE_EXCEEDS_USER_STORAGE.
+       *   - Why we *do* hose it here on native `eof`.
+       * The RECEIVES_FINISHED_CANNOT_RECEIVE case is handled one level up, in rcv_on_dgram() (as it's not
+       * emitted by low-level-transmit APIs as an error but rather encoded in the dgram by opposing *end_sending()). */
     } // if (m_peer_socket)
     else // if (!m_peer_socket)
     {
