@@ -824,7 +824,7 @@ void Msg_batch_in<Mutable_buffer_sequence_t, Msg_resource_t>::prepare_target_pay
     msg_hdr.msg_iov = mdt.m_buf_seq_adapter.buffers();
     // (Does not change except via prepare_target_payload() or reuse_result_payloads(); see below.)
     msg_hdr.msg_iovlen = mdt.m_buf_seq_adapter.count();
-    msg_hdr.msg_control = mdt.m_msg_control_as_union.m_buf.c_array(); // (Ptr does not change.)
+    msg_hdr.msg_control = mdt.m_msg_control_as_union.m_buf.data(); // (Ptr does not change.)
     // (Compile-time constant as in-arg *and* is modified by recv[m]msg() as out-arg; but nb_read() shall correct it.)
     msg_hdr.msg_controllen = sizeof(Msg_control_as_union::m_buf);
     // (Compile-time constant as in-arg *and* is modified by recv[m]msg() as out-arg; but nb_read() shall correct it.)
@@ -1017,7 +1017,7 @@ void
        *   - The out-arg mmsghdr::msg_len (# of bytes received) is clearly correct to swap in normal fashion; it
        *     is accessed via public accessor(s).
        *   - msg_control points to where ::recvmmsg() is to place received FDs.
-       *     Its value is: mdt[...].m_msg_control_as_union.m_buf.c_array(): ptr to element 0 of array, namely the
+       *     Its value is: mdt[...].m_msg_control_as_union.m_buf.data(): ptr to element 0 of array, namely the
        *     ancillary-data (FD) storage area of a certain constant (no matter the slot) size.  Even if the
        *     values inside said array mattered (they don't as of this writing; nb_read() copies FD(s) into m_mdts[]),
        *     pointing to the same-index-th mdts[].m_msg_control_as_union would have been correct; meaning
@@ -1683,7 +1683,7 @@ size_t nb_write_some_with_native_handle(flow::log::Logger* logger_ptr,
     buf_seq_adapter.buffers(),
     buf_seq_adapter.count(), // msg_iovlen - # elements in msg_iov.
     // The next 2 fields msg_control[len] contain ancillary data to send; we used it for the FDs.
-    msg_control_as_union.m_buf.c_array(), // Still need to load it with stuff after this (uninit for now).
+    msg_control_as_union.m_buf.data(), // Still need to load it with stuff after this (uninit for now).
     sizeof(Msg_control_as_union::m_buf),
     0 // msg_flags is unused.  The language won't let me leave it as garbage though.
   };
@@ -1860,7 +1860,7 @@ size_t nb_read_some_with_native_handle(flow::log::Logger* logger_ptr,
      *   can/will be set by recv[m]msg() (not important for us here but can be important if reusing inputs in
      *   a subsequent calls; see class Msg_batch_in).
      * msg_flags - This is an out-arg containing special feature flags.  These may be checked below after call. */
-    msg_control_as_union.m_buf.c_array(),
+    msg_control_as_union.m_buf.data(),
     sizeof(Msg_control_as_union::m_buf),
     0 // May or may not need to be initialized, but the language won't let me avoid it, and anyway it seems prudent.
   };

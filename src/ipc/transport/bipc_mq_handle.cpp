@@ -22,6 +22,7 @@
 #include <flow/error/error.hpp>
 #include <flow/common.hpp>
 #include <boost/interprocess/ipc/message_queue.hpp>
+#include <boost/version.hpp>
 #include <boost/move/make_unique.hpp>
 #include <boost/io/ios_state.hpp>
 
@@ -742,7 +743,12 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
                                        "bipc::interprocess_condition::[timed_]wait()",
                                      [&]()
   {
-#ifndef BOOST_INTERPROCESS_MSG_QUEUE_CIRCULAR_INDEX
+#if (BOOST_VERSION < 109100) && !defined(BOOST_INTERPROCESS_MSG_QUEUE_CIRCULAR_INDEX)
+    /* Through Boost 1.90 bipc offers 2 MQ algorithms; the macro selects the circular-index one, which bipc
+     * comments show is the default as of many Boost versions ago, unless unset which would decrease performance;
+     * and we do not do that.  Our code for simplicity assumes it and does not support the lower-perf algorithm.
+     * As of Boost 1.91 the macro is gone: the circular-index algorithm is the only one (mq_hdr_t layout unchanged,
+     * m_cur_first_msg included); so there is nothing to check. */
     static_assert(false,
                   "bipc comments show this shall be true as of many Boost versions ago, unless unset which "
                     "would decrease performance; and we do not do that.  Our code for simplicity assumes "
