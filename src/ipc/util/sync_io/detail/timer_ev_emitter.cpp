@@ -30,15 +30,14 @@ namespace ipc::util::sync_io
 Timer_event_emitter::Timer_event_emitter(flow::log::Logger* logger_ptr, String_view nickname_str) :
   flow::log::Log_context(logger_ptr, Log_component::S_UTIL),
   m_nickname(nickname_str),
+  m_worker_started(false),
   m_worker(get_logger(),
            /* (Linux) OS thread name will truncate m_nickname to 15-5=10 chars here; high chance that'll include
             * something decently useful; probably not everything though; depends on nickname.  It's a decent attempt. */
            std::string("TEvE-") + m_nickname)
 {
-  m_worker.start(flow::async::reset_this_thread_pinning);
-  // Don't inherit any strange core-affinity!  ^-- Worker must float free.
-
-  FLOW_LOG_TRACE("Timer_event_emitter [" << *this << "]: Idle timer-emitter thread started.");
+  FLOW_LOG_TRACE("Timer_event_emitter [" << *this << "]: Created; worker thread not yet started (lazily started "
+                 "by first timer async-wait, if any).");
 }
 
 flow::util::Timer Timer_event_emitter::create_timer()
@@ -54,8 +53,9 @@ Timer_event_emitter::Timer_fired_read_end* Timer_event_emitter::create_timer_sig
   using boost::asio::connect_pipe;
   using boost::movelib::make_unique;
 
-  auto read_end = make_unique<Timer_fired_read_end>(*(m_worker.task_engine()));
-  auto write_end = make_unique<writable_pipe>(*(m_worker.task_engine()));
+  auto& task_engine = *(m_worker.task_engine());
+  auto read_end = make_unique<Timer_fired_read_end>(task_engine);
+  auto write_end = make_unique<writable_pipe>(task_engine);
   Error_code sys_err_code;
   connect_pipe(*read_end, *write_end, sys_err_code);
 
@@ -74,8 +74,7 @@ Timer_event_emitter::Timer_fired_read_end* Timer_event_emitter::create_timer_sig
 #ifndef NDEBUG
   const auto result =
 #endif
-  m_signal_pipe_writers.insert({ read_end_ref.get(),
-                                 std::move(write_end) });
+  m_signal_pipe_writers.emplace(read_end_ref.get(), std::move(write_end));
   assert(result.second);
 
   FLOW_LOG_TRACE("Timer_event_emitter [" << *this << "]: Pipe created; read-end ptr = [" << read_end_ref.get() << "].");
@@ -88,6 +87,16 @@ void Timer_event_emitter::timer_async_wait(flow::util::Timer* timer, Timer_fired
   FLOW_LOG_TRACE("Timer_event_emitter [" << *this << "]: Starting timer async-wait; when/if it fires, "
                  "we will write to write-end corresponding to read-end ptr = [" << read_end << "].");
 
+  if (!m_worker_started)
+  {
+    m_worker_started = true;
+
+    FLOW_LOG_TRACE("Timer_event_emitter [" << *this << "]: First async-wait => lazily starting thread.");
+
+    m_worker.start(flow::async::reset_this_thread_pinning);
+    // Don't inherit any strange core-affinity!  ^-- Worker must float free.
+  }
+
   /* Careful: this is a user thread, but the handler below is in our worker thread.
    * Accessing m_signal_pipe_writers inside there would be not thread-safe, as if some timer happens to fire,
    * while they (say) create_timer_signal_pipe() for another future timer's purposes, things could explode.
@@ -99,6 +108,8 @@ void Timer_event_emitter::timer_async_wait(flow::util::Timer* timer, Timer_fired
 
   timer->async_wait([this, write_end, read_end](const Error_code& async_err_code)
   {
+    // We are in the worker thread m_worker.
+
     auto sys_err_code = async_err_code;
 
     if (sys_err_code == boost::asio::error::operation_aborted)
@@ -111,7 +122,7 @@ void Timer_event_emitter::timer_async_wait(flow::util::Timer* timer, Timer_fired
     if (sys_err_code)
     {
       /* This decision (to simply pretend it was a success code) is borrowed from flow::async::schedule_*().
-       * assert() is another option, but use Flow wisdom.  Note, e.g., snd_auto_ping_now() does the same. */
+       * assert() is another option, but use Flow wisdom. */
       FLOW_ERROR_SYS_ERROR_LOG_WARNING();
       FLOW_LOG_WARNING("Timer_event_emitter [" << *this << "]: "
                        "Timer system error; just logged; totally unexpected; pretending it fired normally.");
@@ -137,7 +148,6 @@ std::ostream& operator<<(std::ostream& os, const Timer_event_emitter& val)
 {
   return
     os << '[' << val.m_nickname << "]@" << static_cast<const void*>(&val);
-
 }
 
 } // namespace ipc::util::sync_io

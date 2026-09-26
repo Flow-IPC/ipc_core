@@ -2290,8 +2290,8 @@ private:
    * `*end_sending()`, while also sending bytes, does not schedule #m_snd_auto_ping_timer, as `*end_sending()`
    * closes the conceptual pipe, and there is no need for auto-pinging (see Native_handle_receiver::idle_timer_run()).
    *
-   * Since we implement `sync_io` pattern, the timer is obtained from, and used via, util::sync_io::Timer_event_emitter
-   * #m_timer_worker.  See that member's doc header for more info.
+   * Since we implement `sync_io` pattern, the timer is obtained from, and used via,
+   * util::sync_io::Timer_event_emitter #m_timer_worker.  See that member's doc header for more info.
    *
    * Relevant only once terminal State::S_PEER is reached.
    */

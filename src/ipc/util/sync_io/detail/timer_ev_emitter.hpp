@@ -20,15 +20,21 @@
 
 #include "ipc/util/util_fwd.hpp"
 #include <flow/async/single_thread_task_loop.hpp>
+#include <boost/unordered/unordered_flat_map.hpp>
 
 namespace ipc::util::sync_io
 {
 
 /**
  * An object of this type, used internally to implement `sync_io`-pattern objects that require timer events,
- * starts a thread dedicated exclusively to running timer waits on the `sync_io` object's behalf, so that when
+ * runs a thread dedicated exclusively to running timer waits on the `sync_io` object's behalf, so that when
  * such a timer fires, it emits a pipe-readable event to be detected by the user's event loop, which it then reports to
  * `sync_io` object.
+ *
+ * The thread is started lazily: by the first timer_async_wait() call, if any; from then on it lives for the rest of
+ * `*this` lifetime.  This is an optimization that makes a `*this` particularly light for (potentially quite common)
+ * cases where the user `sync_io` object may not actually need to do any timer work; but a `*this` can still be
+ * constructed greedily and merely take some memory until/unless it's actually needed.
  *
  * @see ipc::util::sync_io for discussion of the `sync_io` pattern.  This is necessary background for the present
  *      class which is used in implementing objects within that pattern.
@@ -103,13 +109,14 @@ namespace ipc::util::sync_io
  * Timer_event_emitter supplies those things.
  *
  * ### How to use ###
- * Construct Timer_event_emitter.  This will start an idle thread (and it will remain totally idle with the
- * sole exception of a pipe-write executing when a timer actually fires).
+ * Construct Timer_event_emitter.  This sets up -- but does not yet start -- the worker thread; the first
+ * timer_async_wait() starts it.  Once started it remains totally idle with the sole exception of a pipe-write
+ * executing when a timer actually fires.
  *
  * Call create_timer().  This just returns a totally normal `flow::util::Timer` to be saved in the
- * `sync_io`-pattern-implementing object.  create_timer() merely associates the `*this` thread with that
- * timer, so that when `Timer::async_wait(F)` eventually causes `F()` to execute, it will execute `F()`
- * in that thread.
+ * `sync_io`-pattern-implementing object.  create_timer() merely associates the `*this` worker thread (started
+ * or not yet) with that timer, so that when `Timer::async_wait(F)` eventually causes `F()` to execute, it will
+ * execute `F()` in that thread.
  *
  * Call create_timer_signal_pipe() (for each timer one plans to use).  This creates a pipe; saves both ends
  * inside `*this`; and returns a pointer to the read-end.  The `sync_io`-pattern object saves this,
@@ -164,7 +171,7 @@ public:
   // Constructors/destructor.
 
   /**
-   * Constructs emitter, creating idle thread managing no timers.
+   * Constructs emitter.  No thread is yet started; the first timer_async_wait() starts it lazily.
    *
    * @param logger_ptr
    *        Logger to use for subsequently logging.
@@ -177,8 +184,9 @@ public:
   // Methods.
 
   /**
-   * Creates idle timer for use with timer_async_wait() subsequently.  It is associated with the thread
-   * started in the ctor, meaning completion handlers shall execute in that thread.
+   * Creates idle timer for use with timer_async_wait() subsequently.  It is associated with the `*this` worker
+   * thread (whether or not it has been lazily started yet), meaning completion handlers shall execute in that
+   * thread.
    *
    * Formally, behavior is undefined if T is the returned timer or one moved-from it, and one invokes
    * `T.async_wait()` on it; you must use `timer_async_wait(&T, ...)` instead.  You may call other `T`
@@ -246,6 +254,9 @@ public:
 private:
   // Data.
 
+  /// Whether `m_worker.start()` has already been lazily called (first timer_async_wait()); initially `false`.
+  bool m_worker_started;
+
   /// The thread where (only) timer-firing events (from create_timer()-created `Timer`s) execute.
   flow::async::Single_thread_task_loop m_worker;
 
@@ -262,8 +273,10 @@ private:
    * pointer to their respective read-ends.  timer_async_wait() can therefore look-up a write-end
    * based on the read-end pointer it gave to the user, which the user must pass-to timer_async_wait().
    */
-  boost::unordered_map<Timer_fired_read_end*,
-                       boost::movelib::unique_ptr<boost::asio::writable_pipe>> m_signal_pipe_writers;
+  boost::unordered_flat_map<Timer_fired_read_end*,
+                            boost::movelib::unique_ptr<boost::asio::writable_pipe>> m_signal_pipe_writers;
+
+  //XXXu_flat_*-ening wherever possible: we have notes on this and have been doing it opportunistically; do the survey of what's left before merging, ideally. Don't forget Flow.
 }; // class Timer_event_emitter
 
 // Free functions: in *_fwd.hpp.
