@@ -743,7 +743,7 @@ bool Blob_stream_mq_receiver_impl<Persistent_mq_handle>::replace_event_wait_hand
   // else
 
   FLOW_LOG_INFO("Blob_stream_mq_receiver [" << *this << "]: Replacing event-wait handles (probably to replace "
-                "underlying execution context without outside event loop's boost.asio Task_engine or similar).");
+                "underlying execution context with outside event loop's boost.asio Task_engine or similar).");
 
   assert(m_ev_wait_hndl_mq.is_open());
   assert(m_ev_wait_hndl_idle_timer_fired_peer.is_open());

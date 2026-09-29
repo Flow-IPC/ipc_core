@@ -327,7 +327,7 @@ bool Native_socket_stream_acceptor::replace_event_wait_handles(const Create_ev_w
   // else
 
   FLOW_LOG_INFO("Acceptor [" << *this << "]: Replacing event-wait handles (probably to replace underlying "
-                "execution context without outside event loop's boost.asio Task_engine or similar).");
+                "execution context with outside event loop's boost.asio Task_engine or similar).");
 
   assert(m_ev_wait_hndl.is_open());
 
