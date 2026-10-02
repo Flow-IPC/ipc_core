@@ -25,14 +25,6 @@ namespace ipc::util
 
 // Initializers.
 
-/* Underscores are allowed for all applicable shared resource types.  Ideally we'd use them to separate words, but 2
- * factors are responsible for making _ the folder separator and using camelCase to separate words between pairs of
- * nearby underscores: 1, characters are at a premium against S_MAX_LENGTH, so we shouldn't waste them on cosmetic
- * concerns if possible; and 2, it's unclear what other special characters (not an alphanumeric) would be suitable. */
-const char Shared_name::S_SEPARATOR = '_';
-
-// See our doc header for discussion of chosen value.
-const size_t Shared_name::S_MAX_LENGTH = 75;
 
 const Shared_name Shared_name::S_EMPTY;
 

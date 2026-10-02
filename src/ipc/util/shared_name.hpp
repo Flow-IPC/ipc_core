@@ -37,6 +37,17 @@ namespace ipc::util
  * is a good place to get into those topics as well.  Hence, we first cover practical aspects, with the architectural
  * context referenced only as needed.  Then, below that, there's an architecture discussion about naming in general.
  *
+ * @todo It would be good to `constexpr`-ify Shared_name to the extent possible; it might even make a dent in
+ * perf in some contexts.  Internally this is annoying until C++20, where `std::string` itself got `costexpr`-ified,
+ * as we use `std::string` internally; best left alone until then.
+ *
+ * @todo Consider adding a `Shared_name_view` which would be to Shared_name as `String_view` is to `string`; and
+ * that could itself be constructed from a `String_view` (and therefore from `const char*` [+ length], etc.).
+ * The main work would arguably not be the creation of that class itself but rather (1) ensuring proper implicit
+ * conversion between the main class and the new one and (2) conversion of the many Flow-IPC APIs that take
+ * a `const Shared_name&` that would (hopefully in essentialy non-user-code-breaking ways) instead
+ * take `Shared_name_view`.
+ *
  * ### Construction/assignment from and conversion to strings/similar ###
  * Internally it stores an `std::string`.
  *
@@ -258,14 +269,22 @@ public:
    * @internal
    *
    * @todo Research real limits on Shared_name::S_MAX_LENGTH for different real resource types; choose something for
-   * MAX_LENGTH that leaves enough slack to avoid running into trouble when making actual sys calls; as discussed in
+   * `MAX_LENGTH` that leaves enough slack to avoid running into trouble when making actual sys calls; as discussed in
    * the at-internal section of Shared_name doc header about this topic.  Explain here how we get to the
-   * limit ultimately chosen.  The limit as of this writing is 64, but real research is needed.
+   * limit ultimately chosen.  The current value is a guess; real research is needed.
    */
-  static const size_t S_MAX_LENGTH;
+  static constexpr size_t S_MAX_LENGTH = 75;
 
-  /// Character we use, by convention, to separate conceptual folders within str().
-  static const char S_SEPARATOR;
+  /**
+   * Character we use, by convention, to separate conceptual folders within str().
+   *
+   * @internal
+   *
+   * Underscores are allowed for all applicable shared resource types.  Ideally we'd use them to separate words, but 2
+   * factors are responsible for making `_` the folder separator and using camelCase to separate words between pairs of
+   * nearby underscores: 1, characters are at a premium against #S_MAX_LENGTH, so we shouldn't waste them on cosmetic
+   * concerns if possible; and 2, it's unclear what other special characters (not an alphanumeric) would be suitable. */
+  static constexpr char S_SEPARATOR = '_';
 
   /**
    * A Shared_name fragment, with no #S_SEPARATOR characters inside, to be used in any Shared_name maintained by
