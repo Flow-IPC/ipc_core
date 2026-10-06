@@ -42,6 +42,15 @@ struct Info_dump_format
   /**
    * If `true`: Print everything you've got; if `false`: refrain from producing multi-page output if possible.
    *
+   * Moreover: if `false` then a snapshot-populating API *is allowed* to save cycles/resources by consulting
+   * this #m_verbose (before `ostream <<` is ever invoked) so as to not compute/save some potentially-verbose
+   * data.
+   *
+   * @warning For this reason it's best for the user to not change `m_verbose` between snapshot-collection
+   *          (e.g.,  ipc::shm::arena_lend::jemalloc::Ipc_arena::info_dump() => `Arena_info_dump`) and output
+   *          via `<<` (e.g., of `Arena_info_dump`).  Otherwise unnecesary computation/resource use or misleading
+   *          output may occur.
+   *
    * Default: `true`.
    */
   bool m_verbose = true;

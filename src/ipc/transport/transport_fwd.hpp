@@ -20,8 +20,8 @@
 
 #include "ipc/util/shared_name_fwd.hpp"
 #include "ipc/util/native_handle.hpp"
+#include <flow/util/stat/stat_fwd.hpp>
 #include <ostream>
-#include <string>
 
 /**
  * Flow-IPC module providing transmission of structured messages and/or low-level blobs (and more)
@@ -358,7 +358,8 @@ struct Blob_rcv_stats;
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix, const Blob_snd_stats* src_stats, Blob_snd_stats* target_stats,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
+                   const Blob_snd_stats* src_stats, Blob_snd_stats* target_stats,
                    Visitor&& visitor);
 
 /**
@@ -412,7 +413,8 @@ Blob_snd_stats& blob_snd_stats_mutable(Stats_t& stats);
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix, const Blob_rcv_stats* src_stats, Blob_rcv_stats* target_stats,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
+                   const Blob_rcv_stats* src_stats, Blob_rcv_stats* target_stats,
                    Visitor&& visitor);
 
 /**
