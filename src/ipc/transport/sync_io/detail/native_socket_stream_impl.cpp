@@ -21,6 +21,7 @@
 #include "ipc/transport/error.hpp"
 #include <flow/error/error.hpp>
 #include <flow/util/stat/stat_set.hpp>
+#include <flow/util/util_fwd.hpp>
 #include <boost/move/make_unique.hpp>
 #include <cstddef>
 
@@ -546,6 +547,7 @@ const util::Process_credentials&
   using util::Process_credentials;
   using util::NULL_PROCESS_CREDENTIALS;
   using flow::error::Runtime_error;
+  using flow::util::Lock_guard;
 
   const Process_credentials* ret = nullptr;
 
@@ -553,9 +555,17 @@ const util::Process_credentials&
   {
     ret = &NULL_PROCESS_CREDENTIALS;
   }
-  else if (m_peer_socket)
+  else
   {
-    ret = &m_peer_process_creds;
+    /* Lock, as the public class doc header formally allows calling us concurrently with a
+     * send-op and/or a receive-op; and indeed transport::Native_socket_stream (built around a `*this` core) calls
+     * us from its user's thread U, while its internal thread W may be executing a receive-op on `*this` -- where a
+     * true-blue error nullifies m_peer_socket.  (m_peer_process_creds itself is not touched by any such op.) */
+    Lock_guard<decltype(m_peer_socket_mutex)> peer_socket_lock{m_peer_socket_mutex};
+    if (m_peer_socket)
+    {
+      ret = &m_peer_process_creds;
+    }
   }
 
   if (ret)

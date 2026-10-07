@@ -117,6 +117,9 @@ namespace ipc::transport::sync_io
  *
  * Formally that's simply the case.
  *
+ * Additionally: The remote_peer_process_credentials() accessor (not the mutator) may be invoked concurrently with
+ * any 1 operation from the "send-ops" list and/or any 1 operation from the "receive-ops" list.
+ *
  * Informally: it may be highly significant to performance of the user code
  * that this is the case.  It means that the two mutually-opposing pipes can operate concurrently, despite the
  * fact they're operating on the same socket.  E.g., an upload and download being highly active simultaneously

@@ -2175,8 +2175,11 @@ private:
    */
   util::sync_io::Asio_waitable_native_handle m_ev_wait_hndl_peer_socket;
 
-  /// Protects #m_peer_socket and its bros #m_ev_wait_hndl_peer_socket and #m_peer_socket_hosed.
-  flow::util::Mutex_non_recursive m_peer_socket_mutex;
+  /**
+   * Protects #m_peer_socket and its bros #m_ev_wait_hndl_peer_socket and #m_peer_socket_hosed.  `mutable`, as
+   * the `const` remote_peer_process_credentials() accessor locks it too.
+   */
+  mutable flow::util::Mutex_non_recursive m_peer_socket_mutex;
 
   /**
    * As typical in timer-needing `sync_io`-pattern-implementing objects, maintains a thread exclusively for

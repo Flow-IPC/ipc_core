@@ -47,8 +47,8 @@ struct Info_dump_format
    * data.
    *
    * @warning For this reason it's best for the user to not change `m_verbose` between snapshot-collection
-   *          (e.g.,  ipc::shm::arena_lend::jemalloc::Ipc_arena::info_dump() => `Arena_info_dump`) and output
-   *          via `<<` (e.g., of `Arena_info_dump`).  Otherwise unnecesary computation/resource use or misleading
+   *          (e.g., ipc::shm::arena_lend::jemalloc::Ipc_arena::info_dump() => `Arena_info_dump`) and output
+   *          via `<<` (e.g., of `Arena_info_dump`).  Otherwise unnecessary computation/resource use or misleading
    *          output may occur.
    *
    * Default: `true`.
