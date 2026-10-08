@@ -49,8 +49,6 @@ void op_with_possible_bipc_exception(flow::log::Logger* logger_ptr, Error_code* 
   }
   // else
 
-  FLOW_LOG_SET_CONTEXT(logger_ptr, Log_component::S_UTIL);
-
   try
   {
     func();
@@ -62,6 +60,8 @@ void op_with_possible_bipc_exception(flow::log::Logger* logger_ptr, Error_code* 
      * @todo Unify the 2 somehow, for code reuse.
      *
      * Keeping comments light because of that.  See that method. */
+
+    FLOW_LOG_SET_CONTEXT(logger_ptr, Log_component::S_UTIL);
 
     const auto native_code_raw = exc.get_native_error();
     const auto bipc_err_code_enum = exc.get_error_code();
