@@ -42,7 +42,7 @@
  * "factored out" into Flow.  Update: I (ygoldfel) took a look at it for another project, and so far no obvious
  * de-boiler-plate ideas come to mind.  Ideally the inputs are: (1) an `enum` with the codes, like error::Code;
  * (2) an `int`-to-`string` message table function, for log messages; and (3) a brief `const char*` identifying the
- * code set, for log messages.  The rest is the boiler-plate, but all of it seems to either already be accepably
+ * code set, for log messages.  The rest is the boiler-plate, but all of it seems to either already be acceptably
  * brief, and where something isn't quite so, I can't think of any obvious way to factor it out.
  * Of course a macro-based "meta-language" is always a possibility, as we did in `flow::log`, but in this case it
  * doesn't seem worth it at all.
@@ -68,15 +68,15 @@ constexpr int S_CODE_LOWEST_INT_VALUE = 1;
  * description in the /// comment below, or at least as close as possible.  This mirrors Flow's convention.
  *
  * When you add a value to this `enum`, also add its symbolic representation to error.cpp's
- * error.cpp's Category::code_symbol().  This string must be identical to the symbol, minus the `S_`;
- * e.g., Code::S_INVALID_ARGUMENT => `"INVALID_ARGUMENT".  This enables the consistent and human-friendly
+ * Category::code_symbol().  This string must be identical to the symbol, minus the `S_`;
+ * e.g., Code::S_INVALID_ARGUMENT => `"INVALID_ARGUMENT"`.  This enables the consistent and human-friendly
  * serialization `<<` and deserialization `>>` of a Code w/r/t standard streams.
  *
  * If, when adding a new revision of the code, you add a value to this `enum`, add it to the end, but ahead of
  * Code::S_END_SENTINEL.
  * If, when adding a new revision of the code, you deprecate a value in this `enum`, do not delete
  * it from this `enum`.  Instead mark it as deprecated here and then remove it from
- * Ipc_transport_category::message().
+ * Category::message().
  *
  * Errors that indicate apparent logic bugs (in other words, assertions that we were too afraid
  * to write as actual `assert()`s) should be prefixed with `S_INTERNAL_ERROR_`, and their messages
@@ -261,8 +261,8 @@ namespace boost::system
 /**
  * Ummm -- it specializes this `struct` to -- look -- the end result is boost.system uses this as
  * authorization to make `enum` `Code` convertible to `Error_code`.  The non-specialized
- * version of this sets `value` to `false`, so that random arbitary `enum`s can't just be used as
- * `Error_code`s.  Note that this is the offical way to accomplish that, as (confusingly but
+ * version of this sets `value` to `false`, so that random arbitrary `enum`s can't just be used as
+ * `Error_code`s.  Note that this is the official way to accomplish that, as (confusingly but
  * formally) documented in boost.system docs.
  */
 template<>
