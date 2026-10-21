@@ -113,33 +113,6 @@ enum class Permissions_level : size_t
   S_END_SENTINEL
 }; // enum class Permissions_level
 
-/// Caller into a given API `F()` is providing information on whether `F()` is safe or not at this time.
-enum class Call_timing
-{
-  /**
-   * Means `F()` is always safe; e.g., the software version or compilation environment is such that there is
-   * no need for the caller to actively specify `Call_timing`.
-   *
-   * `F()` shall treat this the same as `S_CALLER_ENSURES_SAFE`.  By convention:
-   *   - Declaration `F(Call_timing c = Call_timing::S_ALWAYS_SAFE)` means coder of `F()` prefers to by-default
-   *     assume the call is safe.
-   *   - If `F()` caller guarantees the environment is such that this can never be unsafe, they omit `c` arg.
-   *   - If `F()` caller *cannot* make that guarantee but *can* make it in a *specific* invocation, then they
-   *     specify `c = Call_timing::S_CALLER_ENSURES_SAFE`.
-   */
-  S_ALWAYS_SAFE,
-
-  /**
-   * Means `F()` may or many not be always safe; but the caller is vouching that it is safe *this* time.
-   *
-   * @see Call_timing::S_ALWAYS_SAFE doc header.
-   */
-  S_CALLER_ENSURES_SAFE,
-
-  /// Means `F()` may or many not be always safe; and the caller *cannot* vouch that it is safe *this* time.
-  S_POSSIBLY_UNSAFE
-}; // enum class Call_timing
-
 /// Short-hand for Flow's `String_view`.
 using String_view = flow::util::String_view;
 /// Short-hand for Flow's `Fine_duration`.
