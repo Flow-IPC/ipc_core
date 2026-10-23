@@ -74,7 +74,7 @@ namespace ipc::util
  * @todo ipc::util::Default_init_allocator should be moved into Flow's `flow::util`.
  *
  * ### Source ###
- * I (ygoldfel) took it from the above link(s), made stylistic edits, and added documentation.  This is legal.
+ * I (ygoldfel) took it from the above link(s), made stylistic edits, and added documentation.
  *
  * @tparam T
  *         The type managed by this instance of the allocator.
