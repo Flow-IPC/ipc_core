@@ -298,7 +298,8 @@ TEST(Shared_name_test, self_append)
   }
   {
     auto name = tight_name();
-    name /= name;
+    const auto& same_name = name; // Alias, so clang's -Wself-assign-overloaded (x /= x) does not trigger.
+    name /= same_name;
     EXPECT_EQ(name.str(), base + SEP + base);
   }
   {
@@ -324,7 +325,8 @@ TEST(Shared_name_test, self_append)
   {
     // Degenerate: empty.
     Shared_name name;
-    name /= name;
+    const auto& same_name = name; // See above.
+    name /= same_name;
     EXPECT_EQ(name.str(), string(1, SEP));
     Shared_name name2;
     name2 /= name2.str();

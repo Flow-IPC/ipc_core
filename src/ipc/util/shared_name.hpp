@@ -816,35 +816,32 @@ Shared_name& Shared_name::operator/=(const Source& raw_name_to_append)
    *   - C: Otherwise (Source=char, initializer_list<char>, ...): No problem; no overlap is possible.
    *
    * We promised not to mess this up.  So:
-   *   - A: Really this is just a case of B; string is convertible to string_view.  With some other (than what we're
-   *        doing as of this writing) impl tactics contexts it could be its own thing, so we listed it separately,
-   *        for clarity/posterity/completeness.
+   *   - A: Really this is just a case of B; string is convertible to string_view.  With other impl tactics it could
+   *        be its own thing, so we listed it separately, for clarity/posterity/completeness.
    *   - C: To handle it: just do the simple thing we'd prefer to do.  To detect it: it's not B, so detect B
    *        and handle B properly; otherwise do the simple thing.
    *
    * That leaves B.  To detect: use the traits-thing is_convertible_v + explicitly check for the range-overlap
    * case.  If detected: To handle it: We just make a copy of raw_name_to_append first,
    * append SEP, then append the copy (instead of raw_name_to_append range as in the naive impl).
-   * (This would do some unnecessary copying.  Could instead copy directly within m_raw_name; but this adds
-   * cognitive difficulties/worries about overlap shape/longer code.  That's too annoying given, at least, the
-   * rarity of the corner case.  If really desired can tweak that part, alone, later.)
+   * (This does some unnecessary copying.  Could instead copy directly within m_raw_name; but this adds
+   * cognitive difficulties/worries about overlap shape/longer code (and it would be subtly wrong, if the range
+   * includes the trailing NUL, which SEP would overwrite).  That's too annoying given, at least, the rarity of the
+   * corner case.  If really desired can tweak that part, alone, later.)
    *
    * So that's what we'll do.
    *
    * @todo We could do a tiny bit better by handling the ostensibly more-common sub-cases of (the already uncommon)
    * B.  The present function is fine; but: Case A above (Source=string) can get its own overload which would only
-   * need to check for `&m_raw_name.begin() == &raw_name_to_append` rather than the more-complex overlap check.
+   * need to check for `&m_raw_name == &raw_name_to_append` rather than the more-complex overlap check.
    * /=(const Shared_name&) can forward to that overload also.  The rest would be handled by the present function. */
 
   if constexpr(is_convertible_v<const Source&, string_view>)
   {
-    /* This is case B (currently including case A) above.  Overlap is possible.  Check for raw_name_to_append[0]
-     * sitting inside m_raw_name.  (raw_name_to_append range containing areas outside m_raw_name *and* also inside
-     * would be possible in some lower-level memmove()ish situation, but in our context it's illegal shenanigans we
-     * need not cover.)
+    /* This is case B (currently including case A) above.  Overlap (non-empty intersection) of the ranges is possible.
      *
-     * less<> (instead of < et al): gets formally well-defined ordering even for pointers into unrelated objects.
-     * In practice it would've been fine, but this is better/free. */
+     * less<const char*> (instead of < et al): gets formally well-defined ordering even for pointers into unrelated
+     * objects.  In practice it would've been fine, but this is better/free. */
     const string_view view_to_append{raw_name_to_append};
     const less<const char*> lt;
 
@@ -860,7 +857,7 @@ Shared_name& Shared_name::operator/=(const Source& raw_name_to_append)
       m_raw_name += S_SEPARATOR;
       m_raw_name += copy_to_append;
     }
-    else // if (the simple case after all)
+    else // if (no overlap)
     {
       // As a bonus can do the tiny .reserve() optimization.
       m_raw_name.reserve(m_raw_name.size() + 1 + view_to_append.size());
