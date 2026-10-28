@@ -25,6 +25,7 @@
 #include "ipc/util/util_fwd.hpp"
 #include "ipc/util/process_credentials_fwd.hpp"
 #include <flow/common.hpp>
+#include <string>
 
 #ifndef FLOW_OS_LINUX
 static_assert(false,

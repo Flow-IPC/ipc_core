@@ -121,6 +121,8 @@ struct Native_handle
    * underlying handle.  Wouldn't the auto-generated move ctor take care of it?  No, because it'd just copy the handle
    * and not nullify the source.
    *
+   * However: this is not a replacement for #Own_native_handle.
+   *
    * @param src
    *        Source object which will be made `null() == true`.
    */
@@ -184,7 +186,7 @@ struct Native_handle
    * Returns whether #m_native_handle is currently an open descriptor in this process; `false` if null().
    *
    * @warning Caveats due to the nature of what Native_handle stores:
-   *          1, is_open() is a point-in-time answernothing prevents a close immediately after).
+   *          1, is_open() is a point-in-time answer (nothing prevents a close immediately after).
    *          2, returning `true` means *some* descriptor identified by #m_native_handle is open -- a stale value
    *          whose value has since been recycled answers `true`.
    *          So, watch out, particularly when there is asynchronicity and/or concurrency.
@@ -223,7 +225,7 @@ struct Native_handle
    *
    * ### Rationale for existence ###
    * It is so that Native_handle can be used as its own traits class in `unique_resource<Native_handle>`.
-   * You probably need not worry about it: just use #Own_native_handle, when you need those capabilities.
+   * You probably need not worry about it: just use #Own_native_handle when you need those capabilities.
    *
    * @return See above.
    */
@@ -278,7 +280,7 @@ using Own_native_handle = boost::scope::unique_resource<Native_handle, Native_ha
 
 /**
  * Returns Native_handle constructed by relieving an existing auto-closing #Own_native_handle of its ownership of a
- * particular raw handle and storing it, sans auto-closing protection, in that Native_handle.  That is it is equal to:
+ * particular raw handle and storing it, sans auto-closing protection, in that Native_handle.  That is, it is equal to:
  *
  *   ~~~
  *   // src is Own_native_handle.
@@ -455,7 +457,8 @@ constexpr bool operator<(Native_handle val1, Native_handle val2) noexcept
   /* In POSIX and Windows this is valid.  So don't worry about #ifdef'ing for OS, static_assert(false), etc.
    * I did check that even in Windows they are formally integers still.  Update: Actually... not sure... depends
    * on what's a Native_handle; if it's SOCKET then sure, but otherwise -- who knows?  There's probably a ticket
-   * about that whole topic. */
+   * about that whole topic (porting for Windows, that is; a big part would be figuring out what Native_handle might
+   * even be... if anything). */
   return val1.m_native_handle < val2.m_native_handle;
 }
 

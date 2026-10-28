@@ -21,6 +21,10 @@
 #include "flow/error/error.hpp"
 #include <boost/move/make_unique.hpp>
 #include <cstddef>
+#include <cassert>
+#include <ostream>
+#include <string>
+#include <utility>
 
 namespace ipc::transport
 {

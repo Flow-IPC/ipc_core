@@ -27,6 +27,12 @@
 #include "ipc/transport/error.hpp"
 #include "ipc/transport/transport_fwd.hpp"
 #include "ipc/util/process_credentials.hpp"
+#include <cassert>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <type_traits>
+#include <utility>
 
 namespace ipc::transport
 {

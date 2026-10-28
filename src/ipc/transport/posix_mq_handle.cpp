@@ -23,6 +23,15 @@
 #include <flow/util/util.hpp>
 #include <boost/chrono/floor.hpp>
 #include <boost/array.hpp>
+#include <boost/asio/connect_pipe.hpp>
+#include <boost/io/ios_state.hpp>
+#include <cassert>
+#include <cerrno>
+#include <cstdlib>
+#include <ostream>
+#include <string>
+#include <type_traits>
+#include <utility>
 
 namespace ipc::transport
 {

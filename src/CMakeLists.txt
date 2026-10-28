@@ -106,7 +106,6 @@ set(HDRS
     ipc/transport/sync_io/native_socket_stream.hpp
     ipc/transport/sync_io/native_socket_stream_acceptor.hpp
     ipc/transport/transport_fwd.hpp
-    ipc/util/default_init_allocator.hpp
     ipc/util/detail/util.hpp
     ipc/util/detail/util_fwd.hpp
     ipc/util/native_handle.hpp

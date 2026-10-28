@@ -24,6 +24,10 @@
 #include "ipc/util/sync_io/asio_waitable_native_hndl.hpp"
 #include <flow/log/log.hpp>
 #include <flow/async/single_thread_task_loop.hpp>
+#include <boost/noncopyable.hpp>
+#include <cassert>
+#include <string>
+#include <utility>
 
 namespace ipc::transport::sync_io
 {

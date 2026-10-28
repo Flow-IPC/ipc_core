@@ -25,6 +25,9 @@
 #include "ipc/util/sync_io/sync_io_fwd.hpp"
 #include "ipc/util/sync_io/asio_waitable_native_hndl.hpp"
 #include "ipc/transport/error.hpp"
+#include <boost/noncopyable.hpp>
+#include <cassert>
+#include <utility>
 
 namespace ipc::transport::sync_io
 {

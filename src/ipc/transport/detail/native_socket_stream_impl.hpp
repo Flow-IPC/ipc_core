@@ -24,6 +24,10 @@
 #include "ipc/transport/asio_local_stream_socket_fwd.hpp"
 #include <cstddef>
 #include <flow/async/single_thread_task_loop.hpp>
+#include <boost/noncopyable.hpp>
+#include <optional>
+#include <string>
+#include <utility>
 
 namespace ipc::transport
 {

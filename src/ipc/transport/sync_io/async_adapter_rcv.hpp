@@ -24,8 +24,12 @@
 #include <flow/log/log.hpp>
 #include <flow/async/single_thread_task_loop.hpp>
 #include <boost/move/make_unique.hpp>
+#include <boost/noncopyable.hpp>
 #include <queue>
 #include <variant>
+#include <cassert>
+#include <string>
+#include <utility>
 
 namespace ipc::transport::sync_io
 {

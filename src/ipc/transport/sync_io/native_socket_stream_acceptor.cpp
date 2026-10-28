@@ -18,6 +18,8 @@
 /// @file
 #include "ipc/transport/sync_io/native_socket_stream_acceptor.hpp"
 #include <flow/error/error.hpp>
+#include <boost/asio/connect_pipe.hpp>
+#include <ostream>
 
 namespace ipc::transport::sync_io
 {

@@ -19,6 +19,7 @@
 #pragma once
 
 #include "ipc/common.hpp"
+#include <iosfwd>
 
 /**
  * Namespace containing the ipc::transport module's extension of boost.system error conventions, so that that API

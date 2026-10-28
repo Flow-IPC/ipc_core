@@ -26,6 +26,8 @@
 #include <boost/asio.hpp>
 #include <boost/interprocess/permissions.hpp>
 #include <boost/interprocess/creation_tags.hpp>
+#include <cstdint>
+#include <string>
 
 /**
  * Flow-IPC module containing miscellaneous general-use facilities that are ubiquitously used by ~all Flow-IPC modules
@@ -52,9 +54,6 @@ namespace ipc::util
 // Types.
 
 // Find doc headers near the bodies of these compound types.
-
-template <typename T, typename Allocator = std::allocator<T>>
-class Default_init_allocator;
 
 class Use_counted_object;
 

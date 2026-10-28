@@ -21,6 +21,10 @@
 #include <vector>
 #include "ipc/transport/transport_fwd.hpp"
 #include "ipc/util/util_fwd.hpp"
+#include <boost/noncopyable.hpp>
+#include <cassert>
+#include <ostream>
+#include <utility>
 
 namespace ipc::transport
 {

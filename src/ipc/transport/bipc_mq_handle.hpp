@@ -23,6 +23,7 @@
 #include "ipc/util/detail/util.hpp"
 #include "ipc/util/shared_name.hpp"
 #include <flow/log/log.hpp>
+#include <boost/move/unique_ptr.hpp>
 
 namespace ipc::transport
 {

@@ -27,10 +27,17 @@
 #include <flow/common.hpp>
 #include <boost/array.hpp>
 #include <boost/io/ios_state.hpp>
+#include <boost/noncopyable.hpp>
 #include <type_traits>
 #include <algorithm>
 #include <stdexcept>
 #include <cstring>
+#include <cassert>
+#include <cerrno>
+#include <cstdlib>
+#include <ostream>
+#include <utility>
+#include <vector>
 #include <sys/types.h>
 #include <sys/socket.h>
 

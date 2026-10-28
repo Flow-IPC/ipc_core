@@ -24,6 +24,8 @@
 #include "ipc/util/util_fwd.hpp"
 #include <flow/error/error.hpp>
 #include <flow/util/util_fwd.hpp>
+#include <cassert>
+#include <utility>
 
 namespace ipc::transport::sync_io
 {

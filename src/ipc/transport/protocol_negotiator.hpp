@@ -21,6 +21,8 @@
 #include "ipc/common.hpp"
 #include "ipc/util/util_fwd.hpp"
 #include <flow/log/log.hpp>
+#include <cstdint>
+#include <string>
 
 namespace ipc::transport
 {

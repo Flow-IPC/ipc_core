@@ -24,6 +24,9 @@
 #include <flow/error/error.hpp>
 #include <flow/common.hpp>
 #include <boost/move/make_unique.hpp>
+#include <cassert>
+#include <ostream>
+#include <variant>
 
 namespace ipc::transport
 {

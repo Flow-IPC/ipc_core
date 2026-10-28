@@ -25,6 +25,12 @@
 #include "ipc/transport/error.hpp"
 #include "ipc/util/sync_io/sync_io_fwd.hpp"
 #include <flow/async/single_thread_task_loop.hpp>
+#include <boost/noncopyable.hpp>
+#include <cassert>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <utility>
 
 namespace ipc::transport
 {

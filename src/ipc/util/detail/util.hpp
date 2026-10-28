@@ -24,6 +24,7 @@
 #include <flow/error/error.hpp>
 #include <flow/common.hpp>
 #include <boost/interprocess/exceptions.hpp>
+#include <cassert>
 
 namespace ipc::util
 {
@@ -56,7 +57,7 @@ void op_with_possible_bipc_exception(flow::log::Logger* logger_ptr, Error_code* 
   catch (const interprocess_exception& exc)
   {
     /* This code is based off Bipc_mq_handle::op_with_possible_bipc_mq_exception().
-     * It is somewhat simpler, due to lacking the special case to do with MQs.
+     * It is somewhat simpler due to lacking the special case to do with MQs.
      * @todo Unify the 2 somehow, for code reuse.
      *
      * Keeping comments light because of that.  See that method. */
@@ -70,7 +71,7 @@ void op_with_possible_bipc_exception(flow::log::Logger* logger_ptr, Error_code* 
                      "[" << native_code_raw << "]; bipc error_code_t enum->int "
                      "[" << int(bipc_err_code_enum) << "]; message = [" << exc.what() << "]; "
                      "context = [" << context << "].");
-    // else
+
     if (native_code_raw != 0)
     {
       const auto& sys_err_code = *err_code = {native_code_raw, system_category()};
@@ -95,8 +96,12 @@ void for_each_persistent_impl(const fs::path& persistent_obj_dev_dir_path, const
 
   /* We could use directory_options::skip_permission_denied => no error if lack permissions for `ls D`; but other
    * errors are still possible, and we promised to ignore them.  So simply do ignore them: eat the Error_code
-   * and let persistent_obj_dev_dir = <the end iterator>.  E.g., if there is no error but no contents either,
-   * it'll equal <the end interator> equivalently. */
+   * and let the iterator = <the end iterator>.  E.g., if there is no error but no contents either,
+   * it'll equal <the end iterator> equivalently.
+   *
+   * @todo Low-priority: technically the implied ++dir_entry can throw, while we promised to ignore all file
+   * errors, only letting-through handle_name_func() throwing.  This is essentially impossible though.
+   * Could handle it, nevertheless, by using explicit .increment(&err_code). */
   Error_code sink;
   for (const auto& dir_entry : directory_iterator(persistent_obj_dev_dir_path, sink))
   {
@@ -109,7 +114,7 @@ void for_each_persistent_impl(const fs::path& persistent_obj_dev_dir_path, const
      *     optimization, supposed to already store the status before we call is_regular_file(), hence no new
      *     system call occurs therein, but the stored status itself could contain an error.  Anyway we simply skip
      *     any non-vanilla situation, so whatever.)  (Subtlety 2: std::filesystem::directory_entry specifies
-     *     its own .is_regular_file(), but boost.fs lacks this; though the latter is described in terms of
+     *     its own .is_regular_file(), but boost.fs lacks this; though the latter is described in terms
      *     of the free function anyway; so meh.) */
 #ifndef FLOW_OS_LINUX
     static_assert(false, "We rely on Linux /dev/... (etc.) semantics, where the object-mapped files "

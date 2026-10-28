@@ -22,6 +22,8 @@
 #include "ipc/transport/transport_fwd.hpp"
 #include <flow/log/log_fwd.hpp>
 #include <type_traits>
+#include <cstdint>
+#include <limits>
 
 namespace ipc::transport
 {

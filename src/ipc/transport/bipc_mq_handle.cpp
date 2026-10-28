@@ -25,6 +25,11 @@
 #include <boost/version.hpp>
 #include <boost/move/make_unique.hpp>
 #include <boost/io/ios_state.hpp>
+#include <cassert>
+#include <cerrno>
+#include <ostream>
+#include <type_traits>
+#include <utility>
 
 namespace ipc::transport
 {

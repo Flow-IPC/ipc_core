@@ -22,6 +22,12 @@
 #include "ipc/common.hpp"
 #include <type_traits>
 #include <charconv>
+#include <cassert>
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <string_view>
+#include <typeinfo>
 
 namespace ipc::util
 {
@@ -38,14 +44,14 @@ namespace ipc::util
  * context referenced only as needed.  Then, below that, there's an architecture discussion about naming in general.
  *
  * @todo It would be good to `constexpr`-ify Shared_name to the extent possible; it might even make a dent in
- * perf in some contexts.  Internally this is annoying until C++20, where `std::string` itself got `costexpr`-ified,
+ * perf in some contexts.  Internally this is annoying until C++20, where `std::string` itself got `constexpr`-ified,
  * as we use `std::string` internally; best left alone until then.
  *
  * @todo Consider adding a `Shared_name_view` which would be to Shared_name as `String_view` is to `string`; and
  * that could itself be constructed from a `String_view` (and therefore from `const char*` [+ length], etc.).
  * The main work would arguably not be the creation of that class itself but rather (1) ensuring proper implicit
  * conversion between the main class and the new one and (2) conversion of the many Flow-IPC APIs that take
- * a `const Shared_name&` that would (hopefully in essentialy non-user-code-breaking ways) instead
+ * a `const Shared_name&` that would (hopefully in essentially non-user-code-breaking ways) instead
  * take `Shared_name_view`.
  *
  * ### Construction/assignment from and conversion to strings/similar ###
@@ -53,13 +59,13 @@ namespace ipc::util
  *
  * Conversion: That `string` is accessible by `const&` via str() and similarly the NUL-terminated native_str().
  * Also there is an `ostream<<` printer; do note it does not simply print str() but rather a beautified version.
- * (`ostream>>` input is also provided but is identical to `ostream >> string`.)
+ * (`istream>>` input is also provided but is identical to `istream >> string`.)
  *
  * Construction/assignment: It comes with standard default/copy/move ctors and assignment.  There is also a
- * constructor that takes two iterators-to-`char` (including 2 `const char*`).  However, construction
- * from `string` (including destuctive move-construction), util::String_view, NUL-terminated `const char*`,
- * `vector<char>` (etc.) is available exclusively in the form of `static` quasi-ctors ct().  Lastly: To assign please
- * use move ctor: `existing_sh_name = Shared_name::ct(src)`.
+ * constructor that takes two iterators-to-`char` (including 2 `const char*`); use it for other `char` containers such
+ * as `vector<char>`.  However, construction from `string` (including destructive move-construction),
+ * util::String_view, or NUL-terminated `const char*` is available exclusively in the form of `static` quasi-ctors ct().
+ * Lastly: To assign please use move ctor: `existing_sh_name = Shared_name::ct(src)`.
  *
  * Rationale: C++ ADL semantics cause a ton of super-annoying problems -- especially inside ipc::transport
  * namespace itself -- where compilers will auto-convert, e.g., a `string` to `Shared_name` without being asked
@@ -110,6 +116,7 @@ namespace ipc::util
  *     does not exceed #S_MAX_LENGTH; no multi-separator sequences).
  *   - sanitize() will attempt to non-destructively modify (if needed) name in such a way as to make sanitized() return
  *     `true`.
+ *
  * You should call them only when you specifically need some conventions checked or enforced.  Otherwise Shared_name
  * ops will be as dumb/fast as possible.
  *
@@ -130,6 +137,7 @@ namespace ipc::util
  * thread safety violations).
  *
  * @internal
+ *
  * ### Architecture discussion / shared name convention synopsis ###
  * As promised, we've covered the practical aspects of Shared_name first.  Now let's discuss the larger design.
  * Note that while this does inform some of Shared_name API (which is quite simple), really the discussion has wider
@@ -140,11 +148,11 @@ namespace ipc::util
  *
  * As noted before, there are N shared resource types, and Shared_name is to be used for all of them.  At minimum,
  * then:
- *   - 2 names are to be equal if and only if they refer to the same object of the same type, or they're 2 different
+ *   - 2 names are to be equal, if and only if they refer to the same object of the same type, or they're 2 different
  *     objects but of *different* types.
  *   - This must be the case at each given point in time.
  *
- * When designing Flow-IPC, we decided that if would be helpful for humans if we immediately made this more stringent
+ * When designing Flow-IPC, we decided that it would be helpful for humans if we immediately made this more stringent
  * by enforcing the following stronger requirement as well:
  *   - 2 names are to be equal if and only if they are referring to objects of the same (resource) type.  So then,
  *     e.g., if a SHM-area is named "X" then a POSIX queue cannot also be named "X" at the same point in time.
@@ -152,7 +160,7 @@ namespace ipc::util
  * Further, some things are made easier if the distinctness restriction (2 distinct names <=> 2 distinct objects
  * at each given point in time) is made more stringent by extending it to *all time*; resulting in:
  *   - 2 names are to be equal if and only if they refer to the same object of the same type.
- *   - This must be the case over all time (not merely a each *given* point in time).
+ *   - This must be the case over all time (not merely at each *given* point in time).
  *     - In other words, if a name "X" is used for some object of some type, then it's only *ever* used for that
  *       object and never another (until reboot).
  *
@@ -216,7 +224,7 @@ namespace ipc::util
  * that nevertheless requires a shared-resource name (e.g., for a lower-level-use SHM pool).  In that case
  * the following shall be equal to #S_SENTINEL: session-server application name; server-namespace.  The components
  * subsequent to that shall be as-if it's a global-scope resource; hence: #S_SENTINEL.
- * build_conventional_non_session_based_share_name() shall construct such a name.
+ * build_conventional_non_session_based_shared_name() shall construct such a name.
  *
  * @note *camelCase*: As of this writing, #S_SEPARATOR is `_` (because `/` is not available for native reasons).
  *       So, when it comes up, the convention is to use camelCase for tokens between nearby separators.  Briefly:
@@ -232,8 +240,8 @@ namespace ipc::util
  * API errors on account of bad names.  All *we* choose to do, regarding the length aspect, is choose one conservatively
  * low so that:
  *   - At least it is no greater than the *lowest* inherent limit out of all the known resource types to which
- *     Shared_name apply.
- *   - Additionally, because in many cases a given `public` API takes a relative Shared_name and pre-pends an
+ *     Shared_name applies.
+ *   - Additionally, because in some cases a given `public` API takes a relative Shared_name and pre-pends an
  *     absolute "folder" path of known length, further leave slack to make it so that that prefix can still comfortably
  *     fit without hitting the limit from the previous bullet point.
  *
@@ -248,8 +256,8 @@ namespace ipc::util
  *       is the case as of this writing; minus 1 leading and trailing NUL; and there's a note some (non-Linux?) Unix
  *       domain socket implementations go as low as `sun_path[92]`.  But in Linux: 106.
  *
- * So that puts us at 107 without the "prefix slack."  Applying a prefix slack of 32 characters gives us: 107 - 32 =
- * 75.
+ * So that puts us at 106 without the "prefix slack."  Applying a prefix slack of 32 characters gives us: 106 - 32 =
+ * 74.  We round it up slightly to 75.
  */
 class Shared_name
 {
@@ -268,10 +276,7 @@ public:
    *
    * @internal
    *
-   * @todo Research real limits on Shared_name::S_MAX_LENGTH for different real resource types; choose something for
-   * `MAX_LENGTH` that leaves enough slack to avoid running into trouble when making actual sys calls; as discussed in
-   * the at-internal section of Shared_name doc header about this topic.  Explain here how we get to the
-   * limit ultimately chosen.  The current value is a guess; real research is needed.
+   * @see class doc header section: "Rationale for max length handling."
    */
   static constexpr size_t S_MAX_LENGTH = 75;
 
@@ -307,7 +312,7 @@ public:
    * necessarily -- other conventions may exist) generated strings shall be `1`, `2`, ..., of which
    * the former is #S_1ST_OR_ONLY.
    *
-   * So if #S_SENTINEL means "not a thing" or "special thing to be treated not like a normal thing",
+   * So if #S_SENTINEL means "not a thing" or "special thing to be treated not like a normal thing,"
    * then #S_1ST_OR_ONLY means "a normal thing, of which there may be only one, and this is the first one
    * so created."
    *
@@ -323,7 +328,7 @@ public:
    * Is this cheesy and reliant on the fact that this constant is, in fact, a string conversion of the number one?
    * Yes, but the above pattern works and is reasonably efficient.  I (ygoldfel) considered making this
    * a super-general API that keeps generating unique IDs, but it just seemed like overkill given the simplicity
-   * of the task.  Converting back from Shared_name, generating a new `++`ed one, then converting back -- while
+   * of the task.  Converting back from Shared_name, generating a new `++`ed one, then converting again -- while
    * providing a simple-enough API to ensure atomicity -- seemed inferior to just letting people
    * maintain a compatible `atomic<uint>`, when and if desired, and using #S_1ST_OR_ONLY until then.
    */
@@ -372,12 +377,14 @@ public:
   // `static` ctors.
 
   /**
-   * Copy-constructs from a `char`-sequence container (including `string`, util::String_view, `vector<char>`).
+   * Copy-constructs from a `char`-sequence container such as `string` or util::String_view.
    * This overload shall be used on a non-`&&` arg if `ct(const char*)` does not apply.
    *
    * Specifically the returned object's internal `std::string` is constructed as: `std::string s(raw_name)`.
    * As a result, whatever most-performant available single-arg ctor `basic_string` makes available is forwarded-to.
    * (E.g., C++17 has a `String_view_like` ctor which is overload-resolved-to only when it most makes sense.)
+   * Hence `Source` must be something `std::string` can be constructed from in that way; e.g., `vector<char>`
+   * is not: use the 2-iterator ctor for that.
    *
    * ### Rationale ###
    * See class doc header for rationale as-to why this is a `static` ctor as opposed to a regular ctor.
@@ -397,8 +404,6 @@ public:
    * ### Rationale ###
    * See class doc header for rationale as-to why this is a `static` ctor as opposed to a regular ctor.
    *
-   * @tparam Source
-   *         See above.
    * @param src
    *        String to copy.
    * @return The new object.
@@ -418,8 +423,8 @@ public:
   static Shared_name ct(std::string&& src_moved);
 
   /**
-   * Constructs from a value of an integer type, efficiently converting to a string representation of the number's
-   * in base 10.
+   * Constructs from a value of an integer type, efficiently converting to a string representation of the number
+   * in base 10.  Note that a negative value yields a leading `-`, so the result is then not sanitized().
    *
    * @tparam Integer
    *         Signed or unsigned integer type of bit width 8, 16, 32, or 64.
@@ -468,7 +473,7 @@ public:
   /**
    * Returns (sans copying) pointer to NUL-terminated wrapped name string, suitable to pass into sys calls when naming
    * supported shared resources assuming `absolute() == true`.  If you require an `std::string` (such as for some fancy
-   * boost.interprocess call) See also str().
+   * boost.interprocess call), use str().
    *
    * ### Why isn't it named `c_str()`? ###
    * It was, but `capnp::StringPtr` (and similar/derived classes such as `capnp::Text::Reader`) has a "clever"
@@ -537,7 +542,7 @@ public:
    * used "just in case" or "prophylactically" but only with full knowledge of where the current value of str() might
    * originate.  For example, it might come from some user input.  Another example involves, perhaps, concatenating
    * two path fragments in such a way as to potentially yield a double-#S_SEPARATOR situation: sanitize() after this
-   * would get collapse the separators into just 1 separator.  Yet another example is simply that if one combines
+   * would collapse the separators into just 1 separator.  Yet another example is simply that if one combines
    * two paths which don't exceed #S_MAX_LENGTH, but the result might exceed it: running sanitize() and ensuring it
    * returns `true` guaranteed one didn't accidentally exceed #S_MAX_LENGTH.
    *
@@ -546,7 +551,7 @@ public:
    *   - After any character replacements above: Any sequence of 2 or more #S_SEPARATOR characters is collapsed into
    *     one #S_SEPARATOR.
    *
-   * Things it does *not* do, except the above:
+   * Things it does *not* do, modulo the above:
    *   - No legal or illegal character is changed (except '/' and separator collapsing).
    *   - It doesn't truncate to try to bring length to #S_MAX_LENGTH or less.
    *
@@ -557,9 +562,7 @@ public:
    * won't sanitize "halfway."
    *
    * ### Performance ###
-   * There is at most one linear scan through str().  In addition, though only if actual sanitizing (by changing
-   * str()) might be necessary: an allocation, copy of str(), and deallocation may be performed.
-   * Overall, it is linear-time regardless, plus those potential alloc/dealloc ops.
+   * There is at most one linear scan through str(), an allocation of `size()`d buffer, and a dealloc of ~similar.
    *
    * @return What sanitized() would return just before returning from the present function.
    */
@@ -567,9 +570,11 @@ public:
 
   /**
    * Appends a folder separator followed by the given other Shared_name.
-   * Functionally equivalent to `return *this += (string(1, S_SEPARATOR) + src_to_append.str());`.
+   * Functionally equivalent to `return *this += ((string(1, S_SEPARATOR) + src_to_append.str()));`.
    * If there's any reason to suspect `this->str()` already ends in #S_SEPARATOR, and/or that the resulting name
    * might be too long, execute sanitize() afterwards and ensure that returns `true`.
+   *
+   * @note The corner case, wherein `&src_to_append == this`, is handled properly.
    *
    * It is stylistically (and possibly for performance) better to use this rather than manually appending
    * a separator and then `src_to_append` (with `+=`).
@@ -584,6 +589,7 @@ public:
    * @return `*this`.
    *
    * @internal
+   *
    * ### Rationale for having this `/=` as opposed to only the version taking `Source`, or vice versa ###
    * If we had only the one taking Shared_name, then tried to use `+= X`, where `X` is `std::string` or `const char*`
    * or util::String_view, it'd have to (implicitly) construct a Shared_name first, and that is a bit slower.
@@ -610,6 +616,11 @@ public:
    *
    * See Rationale(s) for the other operator/=(), as they apply here.
    *
+   * ### Caveat (handled) ###
+   * If `raw_name_to_append` represents a range of characters that overlaps that of pre-call str() -- including
+   * their being equal -- this API will act functionally as-if one made a `string` copy of `raw_name_to_append`
+   * first and appended (a separator and) that copy.  (This is similar to the guarantees made by `string` append APIs.)
+   *
    * @tparam Source
    *         See above.
    * @param raw_name_to_append
@@ -620,17 +631,8 @@ public:
   Shared_name& operator/=(const Source& raw_name_to_append);
 
   /**
-   * Similar to the overload that takes `const Source&`, but takes NUL-terminated string instead.  See that doc header.
-   *
-   * @param raw_name_to_append
-   *        Thing to append after appending separator.
-   * @return `*this`.
-   */
-  Shared_name& operator/=(const char* raw_name_to_append);
-
-  /**
    * Appends the given other Shared_name.
-   * Functionally equivalent to `return *this += src_to_append.str());`.
+   * Functionally equivalent to `return *this += src_to_append.str();`.
    * If there's any reason to suspect the resulting name might be too long, execute sanitize() afterwards and ensure
    * that returns `true`.
    *
@@ -668,20 +670,23 @@ public:
   template<typename Source>
   Shared_name& operator+=(const Source& raw_name_to_append);
 
-  /**
-   * Similar to the overload that takes `const Source&`, but takes NUL-terminated string instead.  See that doc header.
-   *
-   * @param raw_name_to_append
-   *        Thing to append.
-   * @return `*this`.
-   */
-  Shared_name& operator+=(const char* raw_name_to_append);
-
 private:
   // Friends.
 
   // Friend for access to Shared_name.
   friend void swap(Shared_name& val1, Shared_name& val2);
+
+  // Methods.
+
+  /**
+   * Helper that returns `true` if and only if: `ch` is a valid character for purposes of `.sanitized() == true`
+   * but is not #S_SEPARATOR.
+   *
+   * @param ch
+   *        Character.
+   * @return See above.
+   */
+  static bool sanitized_non_sep(char ch);
 
   // Data.
 
@@ -740,13 +745,18 @@ Shared_name Shared_name::ct_from_int(Integer src) // Static.
 
   /* Subtlety: is_same_v<> can yield surprising results such as `long` (or `int64_t`) and `long long` being
    * "not the same type," even though they're both signed 64-bit types that behave identically in terms
-   * or arithmetic, storage, etc.  So, e.g., different overloads/specializations might apply.  That's why
+   * of arithmetic, storage, etc.  So, e.g., different overloads/specializations might apply.  That's why
    * here we use sizeof() comparisons instead of is_same_v<>. */
   static_assert(sizeof(unsigned_t) <= (64 / 8),
                 "Please use one of the integer types of bit width in [8, 64].");
-  if constexpr(sizeof(unsigned_t) == sizeof(uint8_t)) { name.resize(4); } // Include space for minus sign.
-  else if constexpr(sizeof(unsigned_t) == sizeof(uint16_t)) { name.resize(6); } // Ditto for all.
-  else if constexpr(sizeof(unsigned_t) == sizeof(uint32_t)) { name.resize(11); }
+  /* Reserve space sufficient for signed and unsigned versions of each type-width.
+   * For the 1st 3: `2^n - 1` and `2^(n - 1)` have the same # of digits.  Add for the possible minus sign. */
+  if constexpr(sizeof(unsigned_t) == sizeof(uint8_t)) { name.resize(sizeof("-128") - 1); }
+  else if constexpr(sizeof(unsigned_t) == sizeof(uint16_t)) { name.resize(sizeof("-32768") - 1); }
+  else if constexpr(sizeof(unsigned_t) == sizeof(uint32_t)) { name.resize(sizeof("-2147483648") - 1); }
+  /* Then 64-bit integers are extra fun (64th bit changes # of decimal digits):
+   * unsigned => `2^64 - 1` has 20 digits (and no minus sign).
+   * signed => -2^63 has 19 digits not including 1 char for the minus sign => 20.  So the answer is 20. */
   else if constexpr(sizeof(unsigned_t) == sizeof(uint64_t)) { name.resize(20); }
 
   const auto start_ptr = &(name.front());
@@ -765,19 +775,106 @@ Shared_name& Shared_name::operator+=(const Source& raw_name_to_append)
 
   m_raw_name += raw_name_to_append;
   return *this;
+
+  /* Subtlety (avoided): All the plus-y APIs should invoke us here eventually, or do the same thing, but that's not
+   * the point.  The point is:
+   *
+   * If raw_name_to_append happens to represent a range overlapping that of this->m_raw_name (such as
+   * `s += s`, but there are weirder possibilities like `const char*` inside .str()), it's all still fine, simply
+   * because std::string `+=` is officially guaranteed to work, and we forward directly to it without adding any
+   * more stuff.  (In practice std::string would check for overlap and, if detected, judiciously do a proper thing.
+   * Point there being: it has to specifically handle the overlap case.  So we don't have to.)
+   *
+   * The slash-y (/, /=) family is a different story however....  We deal with that over there. */
 }
 
 template<typename Source>
 Shared_name& Shared_name::operator/=(const Source& raw_name_to_append)
 {
+  using std::is_convertible_v;
+  using std::less;
+  using std::string;
+  using std::string_view;
+
   // Existence/impl rationale: This is faster than if they had to: `/= Shared_name::ct(raw_name_to_append)`.
 
-  /* m_raw_name.reserve(m_raw_name.size() + 1 + raw_name_to_append.size()); // Tiny optimization, as 2 appends follow.
-   * Oops; can't do that; `Source` could be, e.g., `char`.  @todo Reconsider. */
+  /* We really promised, and all else being equal (which it's not) would prefer to just do, the following:
+   *   m_raw_name += S_SEPARATOR; return *this += raw_name_to_append;
+   * Note, incidentally, that all the / and /= APIs eventually use us, so this is the core impl as of now.
+   * If we get it right, then those APIs are good to go (though, potentially, some unnecessary computing might
+   * happen too; we'll get into that below).
+   *
+   * The above impl would work great in all cases, except when (and this case is mentioned in our public
+   * contract/doc header) raw_name_to_append represents a range that overlaps m_raw_name's.
+   *   - A: If Source=string, and raw_name_to_append *is* m_raw_name, then `m_raw_name += SEP` modifies
+   *        raw_name_to_append; then `m_raw_name += <itself>` adds an unwanted SEP at the end.
+   *   - B: If Source=std::string_view or String_view (convertible to string_view) or other similar
+   *        convertible-to-string_view type: `m_raw_name += SEP`, if string+= decides to realloc (we do not
+   *        try to depend on whether it does so only when required; by standard in any case it can do it even if not),
+   *        can invalidate raw_name_to_append (it would point at garbage).  If not, it might still change the
+   *        contents of that range.
+   *   - C: Otherwise (Source=char, initializer_list<char>, ...): No problem; no overlap is possible.
+   *
+   * We promised not to mess this up.  So:
+   *   - A: Really this is just a case of B; string is convertible to string_view.  With some other (than what we're
+   *        doing as of this writing) impl tactics contexts it could be its own thing, so we listed it separately,
+   *        for clarity/posterity/completeness.
+   *   - C: To handle it: just do the simple thing we'd prefer to do.  To detect it: it's not B, so detect B
+   *        and handle B properly; otherwise do the simple thing.
+   *
+   * That leaves B.  To detect: use the traits-thing is_convertible_v + explicitly check for the range-overlap
+   * case.  If detected: To handle it: We just make a copy of raw_name_to_append first,
+   * append SEP, then append the copy (instead of raw_name_to_append range as in the naive impl).
+   * (This would do some unnecessary copying.  Could instead copy directly within m_raw_name; but this adds
+   * cognitive difficulties/worries about overlap shape/longer code.  That's too annoying given, at least, the
+   * rarity of the corner case.  If really desired can tweak that part, alone, later.)
+   *
+   * So that's what we'll do.
+   *
+   * @todo We could do a tiny bit better by handling the ostensibly more-common sub-cases of (the already uncommon)
+   * B.  The present function is fine; but: Case A above (Source=string) can get its own overload which would only
+   * need to check for `&m_raw_name.begin() == &raw_name_to_append` rather than the more-complex overlap check.
+   * /=(const Shared_name&) can forward to that overload also.  The rest would be handled by the present function. */
 
-  m_raw_name += S_SEPARATOR;
-  return operator+=(raw_name_to_append);
-}
+  if constexpr(is_convertible_v<const Source&, string_view>)
+  {
+    /* This is case B (currently including case A) above.  Overlap is possible.  Check for raw_name_to_append[0]
+     * sitting inside m_raw_name.  (raw_name_to_append range containing areas outside m_raw_name *and* also inside
+     * would be possible in some lower-level memmove()ish situation, but in our context it's illegal shenanigans we
+     * need not cover.)
+     *
+     * less<> (instead of < et al): gets formally well-defined ordering even for pointers into unrelated objects.
+     * In practice it would've been fine, but this is better/free. */
+    const string_view view_to_append{raw_name_to_append};
+    const less<const char*> lt;
+
+    if (view_to_append.empty())
+    {
+      m_raw_name += S_SEPARATOR;
+    }
+    else if (lt(view_to_append.data(), m_raw_name.data() + m_raw_name.size())
+             && lt(m_raw_name.data(), view_to_append.data() + view_to_append.size()))
+    {
+      const string copy_to_append{view_to_append}; // Overlap: append a copy.
+      m_raw_name.reserve(m_raw_name.size() + 1 + copy_to_append.size()); // Tiny optimization.
+      m_raw_name += S_SEPARATOR;
+      m_raw_name += copy_to_append;
+    }
+    else // if (the simple case after all)
+    {
+      // As a bonus can do the tiny .reserve() optimization.
+      m_raw_name.reserve(m_raw_name.size() + 1 + view_to_append.size());
+      m_raw_name += S_SEPARATOR;
+      m_raw_name += view_to_append;
+    }
+    return *this;
+  } // if constexpr(case B above: Source is string_view-like)
+  else // if constexpr(case C above: raw_name_to_append is char, initializer_list<char>, ... => cannot overlap)
+  {
+    m_raw_name += S_SEPARATOR;
+    return operator+=(raw_name_to_append);
+  }
+} // Shared_name::operator/=()
 
 template<typename Source>
 Shared_name operator+(const Shared_name& src1, const Source& raw_src2)
@@ -821,7 +918,7 @@ unsigned int remove_each_persistent_if(flow::log::Logger* logger_ptr, const Filt
 
   Persistent_object::for_each_persistent([&](const Shared_name& name)
   {
-    if (filter_func(name))
+    if (filter_func(name)) // filter_func() throws => for_each_persistent() stops iterating, throws (as promised).
     {
       Persistent_object::remove_persistent(logger_ptr, name, &err_code);
       if (!err_code)

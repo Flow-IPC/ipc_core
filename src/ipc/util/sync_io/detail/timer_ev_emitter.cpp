@@ -21,6 +21,11 @@
 #include "ipc/util/detail/util_fwd.hpp"
 #include <flow/error/error.hpp>
 #include <boost/move/make_unique.hpp>
+#include <boost/asio/connect_pipe.hpp>
+#include <cassert>
+#include <cstdlib>
+#include <ostream>
+#include <utility>
 
 namespace ipc::util::sync_io
 {
@@ -38,6 +43,14 @@ Timer_event_emitter::Timer_event_emitter(flow::log::Logger* logger_ptr, String_v
 {
   FLOW_LOG_TRACE("Timer_event_emitter [" << *this << "]: Created; worker thread not yet started (lazily started "
                  "by first timer async-wait, if any).");
+}
+
+Timer_event_emitter::~Timer_event_emitter()
+{
+  /* Stop/join thread here, so past this statement no handlers of ours can run, and therefore the boost.asio
+   * pipe-guys can be destroyed in peace without something trying to access them -- while *(m_worker.task_engine())
+   * (which they reference, including potentially in their dtors) -- still exists due to our member decl order. */
+  m_worker.stop();
 }
 
 flow::util::Timer Timer_event_emitter::create_timer()
@@ -64,7 +77,7 @@ Timer_event_emitter::Timer_fired_read_end* Timer_event_emitter::create_timer_sig
     // @todo Someday we should report this as an error, etc.  Low-priority, as at this stage everything is kaput.
     FLOW_LOG_FATAL("connect_pipe() failed; this should never happen.  Details follow.");
     FLOW_ERROR_SYS_ERROR_LOG_FATAL();
-    assert(false && "connect_pipe() failed; this should never happen.  Details follow."); std::abort();
+    assert(false && "connect_pipe() failed; this should never happen."); std::abort();
     return nullptr;
   }
   // else

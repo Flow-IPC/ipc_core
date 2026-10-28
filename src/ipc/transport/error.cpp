@@ -19,6 +19,10 @@
 #include "ipc/transport/error.hpp"
 #include "ipc/util/util_fwd.hpp"
 #include <flow/util/util.hpp>
+#include <cassert>
+#include <istream>
+#include <ostream>
+#include <string>
 
 namespace ipc::transport::error
 {

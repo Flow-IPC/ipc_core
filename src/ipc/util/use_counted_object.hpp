@@ -23,7 +23,7 @@
 namespace ipc::util
 {
 
-/// Simple counter that manually tracks utilization. It is not thread-safe.
+/// Simple counter that manually tracks utilization.  It is not thread-safe.
 class Use_counted_object
 {
 public:

@@ -18,6 +18,8 @@
 /// @file
 
 #include "ipc/transport/channel.hpp"
+#include <cassert>
+#include <ostream>
 
 namespace ipc::transport
 {

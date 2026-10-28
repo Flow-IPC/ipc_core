@@ -24,8 +24,11 @@
 #include "ipc/transport/asio_local_stream_socket_fwd.hpp"
 #include "ipc/util/shared_name.hpp"
 #include <flow/async/single_thread_task_loop.hpp>
+#include <boost/move/unique_ptr.hpp>
+#include <boost/noncopyable.hpp>
 #include <queue>
 #include <utility>
+#include <variant>
 
 namespace ipc::transport
 {

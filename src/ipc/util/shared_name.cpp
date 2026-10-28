@@ -18,7 +18,12 @@
 /// @file
 #include "ipc/util/shared_name.hpp"
 #include <boost/functional/hash/hash.hpp>
-#include <cctype>
+#include <cassert>
+#include <istream>
+#include <ostream>
+#include <string>
+#include <utility>
+#include <algorithm>
 
 namespace ipc::util
 {
@@ -58,26 +63,10 @@ Shared_name Shared_name::ct(std::string&& src_moved) // Static.
 Shared_name& Shared_name::operator=(const Shared_name&) = default;
 Shared_name& Shared_name::operator=(Shared_name&&) = default;
 
-Shared_name& Shared_name::operator+=(const char* raw_name_to_append)
-{
-  // Existence/impl rationale: This is faster than if they had to: `+= Shared_name::ct(raw_name_to_append)`.
-
-  m_raw_name += raw_name_to_append;
-  return *this;
-}
-
 Shared_name& Shared_name::operator+=(const Shared_name& to_append)
 {
   using util::String_view;
   return operator+=(String_view{to_append.str()});
-}
-
-Shared_name& Shared_name::operator/=(const char* raw_name_to_append)
-{
-  // Existence/impl rationale: This is faster than if they had to: `/= Shared_name::ct(raw_name_to_append)`.
-
-  using util::String_view;
-  return operator/=(String_view{raw_name_to_append}); // Requires a strlen() internally but gets .reserve() in return.
 }
 
 Shared_name& Shared_name::operator/=(const Shared_name& to_append)
@@ -86,42 +75,10 @@ Shared_name& Shared_name::operator/=(const Shared_name& to_append)
   return operator/=(String_view{to_append.str()});
 }
 
-Shared_name operator+(const Shared_name& src1, const char* raw_src2)
-{
-  // Existence/impl rationale: This is faster than if they had to: `src1 + Shared_name::ct(raw_src2)`.
-
-  using util::String_view;
-  return operator+(src1, String_view{raw_src2}); // Requires a strlen() internally but gets .reserve() in return.
-}
-
-Shared_name operator+(const char* raw_src1, const Shared_name& src2)
-{
-  // Existence rationale: For symmetry with overload: (src1, raw_src2).
-
-  using util::String_view;
-  return operator+(String_view{raw_src1}, src2);
-}
-
 Shared_name operator+(const Shared_name& src1, const Shared_name& src2)
 {
   using util::String_view;
   return src1 + String_view{src2.str()};
-}
-
-Shared_name operator/(const Shared_name& src1, const char* raw_src2)
-{
-  // Existence/impl rationale: This is faster than if they had to: `src1 / Shared_name::ct(raw_src2)`.
-
-  using util::String_view;
-  return operator/(src1, String_view{raw_src2});
-}
-
-Shared_name operator/(const char* raw_src1, const Shared_name& src2)
-{
-  // Existence rationale: For symmetry with overload: (src1, raw_src2).
-
-  using util::String_view;
-  return operator/(String_view{raw_src1}, src2);
 }
 
 Shared_name operator/(const Shared_name& src1, const Shared_name& src2)
@@ -167,7 +124,6 @@ void Shared_name::clear()
 bool Shared_name::sanitized() const
 {
   using flow::util::in_closed_range;
-  using std::isalnum;
 
   // Keep in sync with sanitize()!
 
@@ -178,15 +134,15 @@ bool Shared_name::sanitized() const
   // else
 
   /* Following is self-explanatory given the contract.  It could be made much briefer, probably, by using built-in
-   * string functions and/or string_algo.  However, for max perf, we'd rather do only one linear-time scan.
+   * string functions and/or string_algo/regex/....  However, for nicer perf, we'd rather do only one linear-time scan.
    * Finally, could other characters be potentially allowed by the various sys calls?  Maybe, but we'd rather be safe
-   * and sorry in terms of portability, and also these chars should be aesthetically good as a convention. */
+   * than sorry in terms of portability, and also these chars should be aesthetically good as a convention. */
 
   bool prev_is_sep = false;
   for (const auto ch : m_raw_name)
   {
     bool is_sep = ch == S_SEPARATOR;
-    if ((!is_sep) && (!isalnum(ch))) // Note: isalnum() explicitly checks for [A-Za-z0-9]; no internationalized stuff.
+    if ((!is_sep) && (!sanitized_non_sep(ch)))
     {
       return false;
     }
@@ -213,6 +169,7 @@ bool Shared_name::sanitized() const
 bool Shared_name::sanitize()
 {
   using std::string;
+  using std::swap;
 
   // SEPS are the 2 allowed input separator characters.  They must be different.  Try to keep this compile-time.
   constexpr char SEPARATOR_ALT = '/';
@@ -220,11 +177,8 @@ bool Shared_name::sanitize()
                 "The real separator and the alt must be different characters.");
   constexpr const char SEPS[] = { SEPARATOR_ALT, S_SEPARATOR, '\0' };
 
-  /* The following implementation, while self-explanatory, foregoes briefer approaches in favor of ~max perf.
-   * This includes (but isn't limited to) re-implementing sanitized() functionality instead of just returning
-   * actual sanitized() at the end, all so we can limit to just one linear scan of m_raw_name. */
-
-  // Keep in sync with sanitized()!
+  /* The following implementation, while self-explanatory, foregoes briefer approaches in favor of better perf.
+   * Keep in sync with sanitized()! */
 
   if (empty()) // Get rid of degenerate case for simplicity of below.
   {
@@ -232,99 +186,71 @@ bool Shared_name::sanitize()
   }
   // else at least one character to read and (unless it's illegal) write.
 
-  string orig_backup_or_empty_if_unchanged; // Unused until !empty().
+  const auto n = size();
+  const auto start_ptr = m_raw_name.cbegin();
+  const auto end_ptr = m_raw_name.cend();
+  string sanitized_str;
+  sanitized_str.reserve(size());
 
-  // Convenience function (should get inlined).  At worst, it's constant time + a dealloc of m_raw_name.
-  const auto undo_changes_pre_return_false_func = [&]()
-  {
-    if (!orig_backup_or_empty_if_unchanged.empty())
-    {
-      // Sanitizations had been done to m_raw_name.  So undo all of it (constant-time move; dealloc).
-      m_raw_name = std::move(orig_backup_or_empty_if_unchanged);
-    }
-    // else { No sanitizations had been done so far to m_raw_name, so nothing to undo. }
-  };
-
-  const size_t n = size();
-  size_t out_pos = 0;
-  for (size_t in_pos = 0; in_pos != n;
-       ++in_pos, ++out_pos)
+  for (auto ptr = start_ptr; ptr != end_ptr; ++ptr)
   {
     /* We cannot predict, at the start, whether we'll ultimately result in a too-long string, because repeating
      * separators can actually lower the length.  However, if we get to this iteration, then we *will* be writing a
      * character (unless ch is illegal, but then we'd return false anyway); hence we can detect ASAP whether the
      * output is too long for sure. */
-    if (out_pos >= S_MAX_LENGTH)
+    if (sanitized_str.size() >= S_MAX_LENGTH)
     {
-      undo_changes_pre_return_false_func();
       return false;
     }
     // else not too long yet.
 
-    auto ch = m_raw_name[in_pos];
-    bool is_last = in_pos == n - 1; // Attn: intentionally not `const` (in_pos may change below).
+    auto ch = *ptr;
     const bool is_sep = (ch == S_SEPARATOR) || (ch == SEPARATOR_ALT);
 
     // Perform nearly identical check to sanitized() (reminder: the 2 functions must remain in sync).
-    if ((!is_sep) && (!isalnum(ch))) // Note: isalnum() explicitly checks for [A-Za-z0-9]; no i18n stuff going on.
+    if ((!is_sep) && (!sanitized_non_sep(ch)))
     {
-      undo_changes_pre_return_false_func();
       return false;
     }
-    // else { Legal character ch, though it may be sanitized by replacing with a different value. }
+    // else: Legal character ch; though it may be sanitized by replacing with a different value.
 
     if (is_sep)
     {
       ch = S_SEPARATOR; // Namely, all separator possibilities are normalized to this one.
 
-      /* Since we found a separator, immediately skip past any more adjacent separators by moving in_pos
-       * inside this { body }.  Set it to the position just before the first non-separator.  That ranges between
-       * not touching in_pos at all (i.e., only one separator after all); and setting it to (n - 1) (meaning either
-       * we're at end of input string, or the rest of it is all separators).  Note for() will ++in_pos right after this.
-       *
-       * out_pos doesn't change; we are scanning string and writing it out at the same time. */
-      if (!is_last)
+      /* Since we found a separator, immediately skip past any more adjacent separators by moving ptr
+       * inside this { body }.  Set it to the position just before the first non-separator.  That ranges between:
+       * not touching ptr at all (i.e., only one separator after all); and setting it to &*(n - 1) (meaning either
+       * we're at end of m_raw_name, or the rest of it is all separators).  Note for() will ++ptr right after this. */
+      auto pos = size_t(ptr - start_ptr);
+      if (pos != (n - 1))
       {
-        in_pos = m_raw_name.find_first_not_of(SEPS, in_pos + 1);
-        if (in_pos == string::npos)
+        pos = m_raw_name.find_first_not_of(SEPS, pos + 1);
+        if (pos == string::npos)
         {
-          in_pos = n - 1;
-          is_last = true; // We updated in_pos; so update this accordingly.
+          pos = n;
         }
-        else
-        {
-          --in_pos;
-          assert(in_pos != (n - 1));
-          assert(!is_last);
-        }
+        --pos;
+
+        ptr = start_ptr + pos;
       }
     } // if (is_sep)
-    // in_pos and is_last are finalized.
 
-    // Actually write out the character (though no need if it would result in no change).
-    if (m_raw_name[out_pos] != ch)
-    {
-      /* Make backup if this is the very first modification we're going to make.
-       * As a little optimization, skip that, if there are no characters left to scan (and thus write); as then
-       * there is no chance left of `return false`, hence no undo would occur. */
-      if (orig_backup_or_empty_if_unchanged.empty() && (!is_last))
-      {
-        // Alloc + linear-time copy; as advertised in contract this is a possible perf cost.
-        orig_backup_or_empty_if_unchanged = m_raw_name;
-      }
-      m_raw_name[out_pos] = ch;
-    }
-  } // for ({in|out}_pos in [0, size())) - But note in_pos can skip more, inside { body }.
+    sanitized_str += ch;
+  } // for (ptr in [start_ptr, end_ptr))
 
   // Passed gauntlet in terms of whether we can `return true` (we can and must).  Finish up.
-  m_raw_name.erase(out_pos); // Constant-time.  Possible no-op.
+  swap(m_raw_name, sanitized_str); // Constant-time.  Then sanitized_str is deallocated.
   return true;
-  /* If !orig_backup_or_empty_if_unchanged.empty(), it is now deallocated.
-   * If we'd returned false with !orig_backup_or_empty_if_unchanged.empty(), then orig_backup_or_empty_if_unchanged
-   * would've been swapped with m_raw_name, and the latter's buffer would be deallocated instead.  Either way,
-   * as we'd promised in contract, overall it's 1 alloc, 1 copy of m_raw_name, 1 dealloc, and some constant-time
-   * stuff.  (And if orig_backup_or_empty_if_unchanged.empty(), then even those are skipped.) */
 } // Shared_name::sanitize()
+
+bool Shared_name::sanitized_non_sep(char ch) // Static.
+{
+  /* std::isalpha/isalnum(s_c<uchar>(ch)) is tempting, but it's affected by the locale; we want none of that.
+   * std::isdigit(s_c<uchar>(ch)) should be fine... but just screw it, man. */
+  return ((ch >= 'A') && (ch <= 'Z')) || ((ch >= 'a') && (ch <= 'z'))
+         || ((ch >= '0') && (ch <= '9'));
+}
 
 Shared_name build_conventional_non_session_based_shared_name(const Shared_name& resource_type)
 {
@@ -340,7 +266,7 @@ Shared_name build_conventional_non_session_based_shared_name(const Shared_name& 
   name /= SENTINEL;
   name /= SENTINEL;
   return name;
-} // Shared_name::build_conventional_non_session_based_shared_name()
+} // build_conventional_non_session_based_shared_name()
 
 std::ostream& operator<<(std::ostream& os, const Shared_name& val)
 {
@@ -358,7 +284,11 @@ std::istream& operator>>(std::istream& is, Shared_name& val)
   // @todo Can be made a tiny bit faster by writing directly into val.m_raw_name.  Requires `friend` or something.
   std::string str;
   is >> str;
-  val = Shared_name::ct(std::move(str));
+  if (is)
+  {
+    val = Shared_name::ct(std::move(str));
+  }
+  // else { We'd write an empty string; technically that is against our contract. }
   return is;
 }
 

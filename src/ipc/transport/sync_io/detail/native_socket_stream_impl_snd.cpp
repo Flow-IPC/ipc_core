@@ -20,6 +20,9 @@
 #include "ipc/transport/native_socket_stream_cfg.hpp"
 #include "ipc/transport/error.hpp"
 #include <boost/move/make_unique.hpp>
+#include <boost/array.hpp>
+#include <cassert>
+#include <utility>
 
 namespace ipc::transport::sync_io
 {

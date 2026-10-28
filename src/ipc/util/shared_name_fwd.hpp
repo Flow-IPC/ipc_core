@@ -19,6 +19,7 @@
 #pragma once
 
 #include "ipc/util/util_fwd.hpp"
+#include <iosfwd>
 
 namespace ipc::util
 {
@@ -61,19 +62,6 @@ template<typename Source>
 Shared_name operator/(const Shared_name& src1, const Source& raw_src2);
 
 /**
- * Returns new object equal to `Shared_name(src1) /= raw_src2`.
- *
- * @relatesalso Shared_name
- *
- * @param src1
- *        Object to precede the appended separator and `raw_src2`.
- * @param raw_src2
- *        String to append after separator.
- * @return See above.
- */
-Shared_name operator/(const Shared_name& src1, const char* raw_src2);
-
-/**
  * Returns new object equal to `Shared_name(raw_src1) /= src2`.
  *
  * @relatesalso Shared_name
@@ -88,19 +76,6 @@ Shared_name operator/(const Shared_name& src1, const char* raw_src2);
  */
 template<typename Source>
 Shared_name operator/(const Source& raw_src1, const Shared_name& src2);
-
-/**
- * Returns new object equal to `Shared_name(raw_src1) /= src2`.
- *
- * @relatesalso Shared_name
- *
- * @param raw_src1
- *        String to precede the appended separator and `src2`.
- * @param src2
- *        Object to append after separator.
- * @return See above.
- */
-Shared_name operator/(const char* raw_src1, const Shared_name& src2);
 
 /**
  * Returns new object equal to `Shared_name(src1) += src2`.
@@ -132,19 +107,6 @@ template<typename Source>
 Shared_name operator+(const Shared_name& src1, const Source& raw_src2);
 
 /**
- * Returns new object equal to `Shared_name(src1) += raw_src2`.
- *
- * @relatesalso Shared_name
- *
- * @param src1
- *        Object to precede the appended `raw_src2`.
- * @param raw_src2
- *        String to append.
- * @return See above.
- */
-Shared_name operator+(const Shared_name& src1, const char* raw_src2);
-
-/**
  * Returns new object equal to `Shared_name(src2)` with `raw_src1` pre-pended to it.
  *
  * @relatesalso Shared_name
@@ -161,24 +123,11 @@ template<typename Source>
 Shared_name operator+(const Source& raw_src1, const Shared_name& src2);
 
 /**
- * Returns new object equal to `Shared_name(src2)` with `raw_src1` pre-pended to it.
- *
- * @relatesalso Shared_name
- *
- * @param raw_src1
- *        String to precede the appended `src2`.
- * @param src2
- *        Object to append.
- * @return See above.
- */
-Shared_name operator+(const char* raw_src1, const Shared_name& src2);
-
-/**
  * Prints embellished string representation of the given Shared_name to the given `ostream`.
  * @warning This is *not* equivalent to writing Shared_name::str(); as of this writing it includes not just
  *          `str()` but also the number of characters in it as a decimal and a separator, for convenience in
- *          test/debug, to visually detect names approaching certain length limits.  If you wish
- *          to output `val.str()`, then output... well... `val.str()`.
+ *          test/debug, to visually detect names approaching certain length limits.  (An empty() name prints as
+ *          `null`.)  If you wish to output `val.str()`, then output... well... `val.str()`.
  *
  * @todo Does Shared_name `operator>>` and `operator<<` being asymmetrical get one into trouble when using
  * Shared_name with boost.program_options (or `flow::cfg` which is built on top of it)?  Look into it.  It may be
@@ -212,6 +161,8 @@ std::istream& operator>>(std::istream& is, Shared_name& val);
  * Returns `true` if and only if `val1.str() == val2.str()`.  Caution: this does not execute normalize() or anything
  * like that.
  *
+ * @relatesalso Shared_name
+ *
  * @param val1
  *        Object to compare.
  * @param val2
@@ -222,6 +173,8 @@ bool operator==(const Shared_name& val1, const Shared_name& val2);
 
 /**
  * Negation of similar `==`.
+ *
+ * @relatesalso Shared_name
  *
  * @param val1
  *        See `==`.
@@ -235,6 +188,8 @@ bool operator!=(const Shared_name& val1, const Shared_name& val2);
  * Returns `true` if and only if `val1.str() == string(val2)`.  Caution: this does not execute normalize() or anything
  * like that.
  *
+ * @relatesalso Shared_name
+ *
  * @param val1
  *        Object to compare.
  * @param val2
@@ -245,6 +200,8 @@ bool operator==(const Shared_name& val1, util::String_view val2);
 
 /**
  * Negation of similar `==`.
+ *
+ * @relatesalso Shared_name
  *
  * @param val1
  *        See `==`.
@@ -258,6 +215,8 @@ bool operator!=(const Shared_name& val1, util::String_view val2);
  * Returns `true` if and only if `string(val1) == val2.str()`.  Caution: this does not execute normalize() or anything
  * like that.
  *
+ * @relatesalso Shared_name
+ *
  * @param val1
  *        String to compare.
  * @param val2
@@ -268,6 +227,8 @@ bool operator==(util::String_view val1, const Shared_name& val2);
 
 /**
  * Negation of similar `==`.
+ *
+ * @relatesalso Shared_name
  *
  * @param val1
  *        See `==`.
@@ -280,6 +241,8 @@ bool operator!=(util::String_view val1, const Shared_name& val2);
 /**
  * Returns `true` if and only if `val1.str() < val2.str()`.  Enables use of Shared_name in an `std::map` without
  * jumping through any special hoops.
+ *
+ * @relatesalso Shared_name
  *
  * @param val1
  *        Object to compare.
@@ -313,7 +276,7 @@ size_t hash_value(const Shared_name& val);
 void swap(Shared_name& val1, Shared_name& val2);
 
 /**
- * Utility that invokes `Persistent_object::for_each_persistent(name_prefix_or_empty)` and synchronously invokes
+ * Utility that invokes `Persistent_object::for_each_persistent()` and synchronously invokes
  * `Persistent_object::remove_persistent()` on each resulting item that passes the given filter,
  * where `Persistent_object` is a type that handles objects -- such as SHM pools or POSIX MQs -- with kernel-persistent
  * semantics.
@@ -325,6 +288,9 @@ void swap(Shared_name& val1, Shared_name& val2);
  * This "forgiving" error emission behavior is sufficient in many cases.  If you require finer control over
  * this please use `Persistent_object::for_each_persistent()` and `Persistent_object::remove_persistent()`
  * plus your own handling of the failure thereof in your custom `handle_name_func()`.
+ *
+ * If `filter_func()` throws, this function does not go through any remaining entries; the exception
+ * is not caught.
  *
  * @tparam Persistent_object
  *         See above.  It must have `static` methods `for_each_persistent()` and `remove_persistent()`
@@ -356,7 +322,7 @@ unsigned int remove_each_persistent_if(flow::log::Logger* logger_ptr, const Filt
  * @param logger_ptr
  *        See remove_each_persistent_if().
  * @param name_prefix_or_empty
- *        An object is removed only if its name starts with this value.  This filter is skipped if
+ *        An object is removed only if its name starts with this fragment.  This filter is skipped if
  *        the value is `.empty()`.
  * @return See remove_each_persistent_if().
  */

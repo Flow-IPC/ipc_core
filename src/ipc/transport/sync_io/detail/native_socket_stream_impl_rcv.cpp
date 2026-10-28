@@ -19,6 +19,10 @@
 #include "ipc/transport/sync_io/detail/native_socket_stream_impl.hpp"
 #include "ipc/transport/native_socket_stream.hpp"
 #include <boost/make_shared.hpp>
+#include <boost/array.hpp>
+#include <cassert>
+#include <cstdint>
+#include <utility>
 
 namespace ipc::transport::sync_io
 {

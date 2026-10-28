@@ -25,6 +25,7 @@
 #include "ipc/detail/common.hpp"
 #include <boost/interprocess/interprocess_fwd.hpp>
 #include <boost/filesystem.hpp>
+#include <string>
 
 /* We build in C++17 mode ourselves (as of this writing), but linking user shouldn't care about that so much.
  * The APIs and header-inlined stuff (templates, constexprs, possibly explicitly-inlined functions [though we avoid

@@ -34,19 +34,19 @@
  * @note At times, generally in ipc::session and class template ipc::transport::struc::Channel specifically, async
  *       ops don't necessarily use `async_*` naming, but the point remains that: an operation occurs in some
  *       sense in the background, and then a *handler* function, given as an arg, is called when the operation is
- *       completed.  Neverthelss for this discussion we will often take the case of, indeed, an operation
+ *       completed.  Nevertheless for this discussion we will often take the case of, indeed, an operation
  *       named `X::async_*(..., F)`, with `F()` a one-off completion handler.  It's the basic, most mainstream pattern.
  *
  * Long story short, all else being equal, we would recommend the use of `X`
  * over `sync_io::X`: it is easier (in most cases), less error-prone, and delivers
  * similar performance -- quite possibly even better (due to automatic parallelization albeit at the cost
  * of mandatory context-switching).  However `sync_io::X` does exist for a good reason, at least for some important
- * `X`es, and in an advanced, highly peformance-sensitive application it may be worth considering switching
+ * `X`es, and in an advanced, highly performance-sensitive application it may be worth considering switching
  * to the *direct* use of `sync_io::X`.  For what it is worth, internally `X` is usually written
  * in terms of `sync_io::X`; the latter is essentially the core logic, while the former provides
  * auto-parallelization and a simpler interface.
  *
- * @note For this reason comments sometimes refer to a `sync_io::X` *core*: where the basic `X`-ish capabalities and
+ * @note For this reason comments sometimes refer to a `sync_io::X` *core*: where the basic `X`-ish capabilities and
  *       data live.  The *async-I/O* `X` is then often built around a `sync_io::X` core.  Because of this it is
  *       usually easy, and fast, to convert a `sync_io::X` into an `X` -- via a move-like ctor called
  *       `sync_io`-core *adopting ctor*.  Additionally, ipc::transport::Channel template -- which bundles local peer
@@ -74,7 +74,7 @@
  * When `x.async_receive_blob(..., F)` is invoked, `F()` is the user-specified completion handler, while ...
  * specifies details about the operation, in this case the target buffer where to write data.  It works as follows:
  * `x` attempts to perform the operation (in this case receive a single in-message as soon as it becomes available
- * which may or may not be instant); and once it has suceeded, it invokes `F(...)` (where ... indicates
+ * which may or may not be instant); and once it has succeeded, it invokes `F(...)` (where ... indicates
  * results, usually at least an `Error_code`) from *an unspecified thread* that is not the user's calling thread
  * (call it thread U, where `x.async_*()` was called).  Even if the op completes immediately, `x.async_*()` will
  * never invoke `F()` synchronously; always from the *unspecified thread*.
@@ -97,7 +97,7 @@
  * conditions internally -- and this again occurs in thread W -- but there is no completion handler to invoke.)
  *
  * What is the user supposed to do with an async-op like this?  In practice we tend to think of this in terms
- * of 2 basic possiblities for how the user's own event loop might be organized.
+ * of 2 basic possibilities for how the user's own event loop might be organized.
  *   - Proactor pattern: This is what boost.asio uses, what flow.async facilitates further, and what we generally
  *     recommend all else being equal.  We won't describe it here in detail, but integrating such a loop with
  *     this async-I/O pattern in Flow-IPC is quite simple:
@@ -108,7 +108,7 @@
  *
  *   ~~~
  *     ...
- *     m_my_asio_loop.post([t]() { start_async_op(); }
+ *     m_my_asio_loop.post([this]() { start_async_op(); });
  *     ...
  *   void start_async_op()
  *   {
@@ -116,8 +116,8 @@
  *     x.async_receive_blob(..., [this](const Error_code& err_code, size_t sz)
  *     {
  *       // We are in "unspecified thread" W.
- *       m_my_asio_loop.post([this, err_code, sz]() { on_async_op_done(err_code, sz); }
- *     }
+ *       m_my_asio_loop.post([this, err_code, sz]() { on_async_op_done(err_code, sz); });
+ *     });
  *   }
  *   void on_async_op_done(const Error_code& err_code, size_t sz)
  *   {
@@ -217,7 +217,7 @@
  * ### Using the `sync_io` pattern: design rationale ###
  * Though it will look different and perhaps complex, it is actually at its core similar to other third-party
  * APIs that require the user to perform async-waits on their behalf.  The most well known example of such an API
- * is perhaps OpenSSL.  Take `SSL_read()` -- quite similar in spirit to `sync_io`-pattern `x.async_read_blob()`.
+ * is perhaps OpenSSL.  Take `SSL_read()` -- quite similar in spirit to `sync_io`-pattern `x.async_receive_blob()`.
  * When invoked, barring connection-hosing errors, one of 2 things will happen:
  *   - It will succeed and read 1 or more bytes and return this fact ("no error, I have read N bytes").
  *   - It will fail due to would-block, because it either needs the underlying stream socket to be
@@ -242,8 +242,8 @@
  * reasons for it.  Namely there are some differences as to our requirements compared to OpenSSL's.  To wit:
  *   - For a given operation -- whether it's `Native_socket_stream::async_receive_blob()` or the even more
  *     internally complex transport::struc::Channel::expect_msg() -- there will usually be more than 1
- *     event of interest a time, in fact spread out over more than 1 handle (FD) at a time at that.  Namely
- *     in addition to readability/writability of the underlying low-level trqnsport, there are timer(s)
+ *     event of interest at a time, in fact spread out over more than 1 handle (FD) at a time at that.  Namely
+ *     in addition to readability/writability of the underlying low-level transport, there are timer(s)
  *     (such as the idle timer -- `idle_timer_run()`); and `struc::Channel` can be configured to have
  *     2 in-pipes and thus will be async-waiting on 2 FDs' read events.
  *     - Hence we need to be able to express the desired async-waits to the user in a more flexible way than
@@ -252,7 +252,7 @@
  *   - OpenSSL is targeted at old-school event loops -- ~all written in the reactor-pattern style.
  *     Flow-IPC is meant to be usable by modern proactor-pattern applications *and* old-school reactor-pattern
  *     ones as well.  It would be unfortunate, in particular, if a given `X` is written in the modern handler-based way,
- *     while `X::sync_io` counterpart is just entirely different.  In fact, suppose `sync_io::X` is available;
+ *     while `sync_io::X` counterpart is just entirely different.  In fact, suppose `sync_io::X` is available;
  *     *our* `X` internally "wants" to be written around a boost.asio loop *and* reuse `sync_io::X` internally
  *     as well.  So in other words, both aesthetically and practically, an OpenSSL-style old-school API would be
  *     a pain to use in a boost.asio-based application (our own async-I/O-pattern classes being a good test case).
@@ -307,7 +307,7 @@
  *       `err_code` truthy on error, `sz == 0`; or `err_code` falsy on success, `sz > 0` indicating size of
  *       received blob.
  *       - Since `x.async_receive_blob()` has one-off completion handler semantics, at this point it'll forget `F`.
- *       - However, with `sync_io` pattern, `x` shall *never* issue an operation-aborted call to `F()` or
+ *       - However, with `sync_io` pattern, `x` shall *never* issue an operation-aborted call to `F()` on
  *         `x` destruction or anything like that.  That's an async-I/O thing.
  *
  * The "later, when your loop" step is analogous to: your loop awaiting an event as asked by the would-block
@@ -316,7 +316,7 @@
  * you're doing the same thing -- you're saying, "the event you wanted is ready; if you can get what I wanted
  * then do it now" -- but you're doing it by using a separate API.
  *
- * That leaves the other other major piece of the API: how to in fact be informed of a desired event-of-interest
+ * That leaves the other major piece of the API: how to in fact be informed of a desired event-of-interest
  * and subsequently indicate that event-of-interest is indeed active.  In terms of the API, this procedure is
  * decoupled from the actual `x.async_receive_blob()` API.  Moreover it is not expressed as some kind of big
  * set-of-handles-and-events-in-which-`x`-has-interest-at-a-given-time either.  Instead, conceptually, it is
@@ -334,7 +334,7 @@
  *       ops.)
  *       No need to worry about that for now though; we continue with our `receive_blob` example use case.
  *   - *If* (and only if!) your event loop is boost.asio-based, then precede this call with one that supplies
- *     the boost.asio `Task_engine` (or strand or...) where you do your async work: `.replace_event_wait_handles()`.
+ *     the boost.asio `Task_engine` (or `strand` or...) where you do your async work: `.replace_event_wait_handles()`.
  *
  *   ~~~
  *   using ipc::util::sync_io::Task_ptr;
@@ -380,7 +380,7 @@
  *
  * That's it.  Note well: `(*on_active_ev_func)()` is (a) informing `sync_io`-pattern-implementing `x` of the
  * event it (`x`) wanted; and (b) possibly getting the result *you* wanted in the original `async_receive_*()` call.
- * Thus it is the equivalent of the 2nd `SSL_read()` call, after satisying the `SSL_ERROR_WANT_READ` or
+ * Thus it is the equivalent of the 2nd `SSL_read()` call, after satisfying the `SSL_ERROR_WANT_READ` or
  * `SSL_ERROR_WANT_WRITE` result.  The only difference, really, is the mechanic of getting the result is through
  * a *synchronous* call to your completion handler.
  *
@@ -396,7 +396,7 @@
  *   - If you perform some of your work on `x` (perhaps the `.async_*()` calls) in one thread but
  *     the async-wait handling -- and the potentially resulting *synchronous* invocation of your own completion
  *     handlers -- in another...
- *     - ...then you, at a minimum, need a mutex-lock (or use of a strand, or ...) around the call sites into
+ *     - ...then you, at a minimum, need a mutex-lock (or use of a strand, or...) around the call sites into
  *       `x.method(...)`, for all related `method`s of `x`...
  *     - ...*including* the call to `(*on_active_ev_func)()`.
  *
@@ -423,19 +423,20 @@
  *                          [this](const ipc::Error_code& err_code, size_t sz) { on_msg_in(err_code, sz); });
  *     if (sync_err_code != ipc::transport::error::Code::S_SYNC_IO_WOULD_BLOCK)
  *     {
- *       // ...Handle contents of m_target_msg, or sync_err_code indicating error ion -- perhaps ~like on_msg_in()!
+ *       // ...Handle contents of m_target_msg, or sync_err_code indicating error -- perhaps ~like on_msg_in()!
  *       // Note m_my_rcv_mutex is locked... as it would be in on_msg_in() (which won't run in this case)!
  *     }
- *     // else { on_msg_in() will run later.  x.receive_...() probably invoked my_rcv_blob_sync_io_ev_wait(). }
+ *     // else { on_msg_in() will run later.  x.async_receive_blob() probably invoked my_rcv_blob_sync_io_ev_wait(). }
  *   ...
  *
  *   void my_rcv_blob_sync_io_ev_wait(Asio_waitable_native_handle* hndl_of_interest,
  *                                    bool ev_of_interest_snd_else_rcv,
  *                                    Task_ptr&& on_active_ev_func)
  *   {
- *     // In your thread U:
+ *     // In your thread U (via x.async_receive_blob()) or W (via (*on_active_ev_func)() -- see below).
+ *     // Either way the caller has locked m_my_rcv_mutex.
  *
- *     // sync_io wants us to async-wait.  Oblige.  (Do not lock m_my_rcv_mutex!)
+ *     // sync_io wants us to async-wait.  Oblige.  (Do not lock m_my_rcv_mutex!  It is already locked.)
  *     hndl_of_interest->async_wait(ev_of_interest_snd_else_rcv
  *                                    ? Asio_waitable_native_handle::Base::wait_write
  *                                    : Asio_waitable_native_handle::Base::wait_read,
@@ -446,7 +447,7 @@
  *
  *       // In your thread W:
  *
- *       // Event is active.  sync_io wants to inform it of this.  Oblige.
+ *       // Event is active.  sync_io wants us to inform it of this.  Oblige.
  *
  *       flow::util::Lock_guard<decltype(m_my_rcv_mutex)> lock{m_my_rcv_mutex}; // <-- ATTN!
  *
@@ -519,7 +520,7 @@
  *     That is, e.g., you can interleave an async-receive-blob op and its eventual completion with
  *     invoking something send-related and its eventual completion (if applicable).
  *   - Moreover you can use the API of op-type "receive" *actually concurrently* with the API of op-type "send."
- *     It *is* thread-safe, even though you're ostensily mutating the same object `x`.
+ *     It *is* thread-safe, even though you're ostensibly mutating the same object `x`.
  *     This is analogous to being able to concurrently `read(fd, ...)` and `write(fd, ...)` on the same OS handle
  *     `fd` for many socket types including TCP and Unix-domain-socket.  This may, all in all, lead to significant
  *     perf savings in your application, if you have multiple threads available to handle sending and receiving.
@@ -527,7 +528,7 @@
  *     your algorithm doesn't involve the 2 directions' algorithms concurrently mutating the same outside-`x` data).
  *
  * Do keep in mind: This applies to `sync_io::X` only -- not its async-I/O counterpart `X`.  E.g., you cannot do
- * `x.async_receive_blob()` and `x.send_blob()` concurrently, in the latter case, but you can too do so in the former. 
+ * `x.async_receive_blob()` and `x.send_blob()` concurrently, in the latter case, but you can too do so in the former.
  * With plain `X` you'd need to mutex-protect (or use strands or ...) `x`.  However you can of course still have 2+
  * async operations outstanding simultaneously (e.g., initiating a send while an `.async_receive_*(..., F)` has not yet
  * finished as signified by `F()`): you just cannot literally call mutating parts of `x` API concurrently.
@@ -568,18 +569,19 @@ class Asio_waitable_native_handle;
  *
  * Why wrap it in a smart pointer at all as opposed to passing around `Function<>`s as objects (particularly
  * as arg to #Event_wait_func)?  Answer: Performance.  Our `sync_io` pattern is intended for the highly
- * perf-conscious user, to the extent they'd forego the significantly easier to use async-I/O pattern
+ * perf-conscious user, to the extent they'd forego the often easier to use async-I/O pattern
  * just because that would involve involuntary (from the user's point of view) thread creation and context
  * switching; copying or moving polymorphic functors, including all their captures, is an unnecessary expense.
  *
  * In that case why `shared_ptr`, not `unique_ptr`, given that it adds potential ref-counting behind the scenes?
  * Answer: `unique_ptr` would have been nice; however it is likely the user (and/or internal Flow-IPC code)
- * will want to lambda-capture the wrapped `Task`, and capturing movable-but-not-copyable types like `unique_ptr`
- * does not compile (as of C++17), even if one never copies the capturing lambda.  One would need to upgrade
- * to `shared_ptr` to capture, and that is annoying.
+ * will want to lambda-capture the wrapped `Task`; and capturing a movable-but-not-copyable type like `unique_ptr`
+ * makes the lambda itself move-only, so it cannot be stored in a `Function<>` (a/k/a `std::function`, which requires
+ * a copyable callable), even if one never copies it.  Storing such lambdas in `Function<>`s (e.g., as a `Task`) is
+ * routine.  One would need to upgrade to `shared_ptr` to capture, and that is annoying.
  *
  * @note That said it is recommended that one `std::move()` any #Task_ptr whenever possible, such as when
- *       capturing it in a lambda (e.g., `[task_ptr = std::move(task_ptr)`).  This advice applies generally
+ *       capturing it in a lambda (e.g., `[task_ptr = std::move(task_ptr)]`).  This advice applies generally
  *       to all `shared_ptr` captures ("whenever possible" being important), but this is just a reminder.
  */
 using Task_ptr = boost::shared_ptr<Task>;
@@ -603,7 +605,7 @@ using Task_ptr = boost::shared_ptr<Task>;
  * From that point on, the `T` might at times be unable to complete an operation (for example
  * transport::sync_io::Native_socket_stream::send_blob()) synchronously due to a would-block condition on some
  * internal Native_handle (for example, internally, the Unix domain stream socket in this case encountering
- * would-block on a `"::writemsg()"` attempt).  It shall then -- synchronously, inside
+ * would-block on a `"::sendmsg()"` attempt).  It shall then -- synchronously, inside
  * `Native_socket_stream::send_blob()` -- invoke the saved #Event_wait_func and pass to it the following arguments:
  *   - `hndl_of_interest`: The native handle on which the user's own event loop must wait for an I/O event.
  *      In-depth tips on how to do so are below; but for now:
@@ -642,7 +644,7 @@ using Task_ptr = boost::shared_ptr<Task>;
  *      responsively `T` will behave.
  *      -# *Deregister* the specified event.  Each `Event_wait_func` invocation indicates a **one-off** wait.
  *      -# Call `(*on_active_ev_func)()`.  (It is best, for a little perf bump, for the user
- *         to save `std::move(on_active_ev_func))` as opposed to a smart-pointer copy.)
+ *         to save `std::move(on_active_ev_func)` as opposed to a smart-pointer copy.)
  *
  * @warning Do not forget to deregister the event before `(*on_active_ev_func)()`.  Failure to do so can easily
  *          result in processor pegging at best; or undefined behavior/assertion tripping.
@@ -675,7 +677,7 @@ using Task_ptr = boost::shared_ptr<Task>;
  *      with no events of interest (which will change in the next step).
  *      If not necessary (already inserted, hence with a (different) event of interest already), continue to next step.
  *   -# Depending on `snd_else_rcv`, change the events-of-interest `enum` NONE->RD, NONE->WR, WR->RD_WR, or
- *      RD->RD_WR.  (If operating on an `fd[].events` directly, that's: `fd.events = fd.events | POLLIN` or
+ *      RD->RD_WR.  (If operating on an `fds[].events` directly, that's: `fd.events = fd.events | POLLIN` or
  *      `fd.events = fd.events | POLLOUT`.)
  *   -# In some data structure keyed on, conceptually, the pair `(raw_hndl, bool snd_else_rcv)`,
  *      record `std::move(on_ev_func)`.  Call it, say, `ipc_events_map`.
@@ -691,7 +693,7 @@ using Task_ptr = boost::shared_ptr<Task>;
  *      -# Remove it from there.
  *      -# Deregister the event w/r/t next `poll()`:
  *         -# Depending on `snd_else_rcv`: Change the events-of-interest `enum` RD->NONE, WR->NONE, RD_WR->WR, or
- *            RD_WR->RD.  (If operating on an `fd[].events` directly, that's `fd.events = fd.events & ~POLLIN)` or
+ *            RD_WR->RD.  (If operating on an `fds[].events` directly, that's `fd.events = fd.events & ~POLLIN` or
  *            `fd.events = fd.events & ~POLLOUT`.)
  *         -# If the events-of-interest for the FD have become NONE (or `fd.events == 0` if tracking it directly),
  *            delete the handle's entry from the `events`-mirroring structure (or `events` itself if tracking it
@@ -767,10 +769,10 @@ using Task_ptr = boost::shared_ptr<Task>;
  * Because of that you have to code essentially none of the stuff above (pertaining to a reactor-style `[e]poll*()`
  * loop): no manual registering/deregistering, wondering how to handle error-event, etc. etc.
  *
- * So what to do, specifically?  It is quite straightforward.  Suppose you're got `Task_engine E` doing
+ * So what to do, specifically?  It is quite straightforward.  Suppose you've got `Task_engine E` doing
  * `E.run()` as your event loop.  (Any `flow::async::*_loop` does that too, just internally once you do
  * `loop.start()`.)  E.g., if you've got TCP sockets attached to `E`, you might be doing
- * `m_tcp_sock.async_read_some(..., [](const Error_code& err_code) { ... };` and so on.
+ * `m_tcp_sock.async_read_some(..., [](const Error_code& err_code, size_t n) { ... });` and so on.
  *
  * When `Event_wait_func F(hndl, snd_else_rcv, on_ev_func)` is invoked, you will simply do:
  *
@@ -801,11 +803,11 @@ using Task_ptr = boost::shared_ptr<Task>;
  *
  *   ~~~
  *   flow::async::Single_thread_task_loop m_your_single_threaded_event_loop;
- *   ipc::transport::Native_socket_stream m_sock_stream;
+ *   ipc::transport::sync_io::Native_socket_stream m_sock_stream;
  *   // ...
  *   m_sock_stream.replace_event_wait_handles([this]() -> auto
  *   {
- *     return ipc::util::async_io::Asio_waitable_native_handle
+ *     return ipc::util::sync_io::Asio_waitable_native_handle
  *              {*(m_your_single_threaded_event_loop.task_engine())};
  *   });
  *   m_sock_stream.start_send_blob_ops(F); // F is your Event_wait_func.

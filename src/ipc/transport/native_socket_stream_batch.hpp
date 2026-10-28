@@ -30,6 +30,10 @@
 #include <type_traits>
 #include <boost/array.hpp>
 #include <boost/move/unique_ptr.hpp>
+#include <boost/noncopyable.hpp>
+#include <cassert>
+#include <ostream>
+#include <utility>
 
 namespace ipc::transport
 {

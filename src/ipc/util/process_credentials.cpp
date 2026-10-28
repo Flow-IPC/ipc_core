@@ -19,6 +19,11 @@
 #include "ipc/util/process_credentials.hpp"
 #include <flow/error/error.hpp>
 #include <flow/common.hpp>
+#include <boost/lexical_cast.hpp>
+#include <cassert>
+#include <cerrno>
+#include <ostream>
+#include <string>
 
 namespace ipc::util
 {
@@ -39,7 +44,7 @@ Process_credentials::Process_credentials(process_id_t process_id_init, user_id_t
 {
   /* I don't really want to rely on the ordering of this annoying little Linux/whatever structure,
    * so just assign it manually instead of in the initializer above.
-   * @todo In C++20 can use the { .x = ..., .y = ... } syntax. */
+   * @todo In C++20 can use the { .x = ..., .y = ... } syntax.  In C++17 clang/gcc allow it anyway... but... etc. */
   m_val.pid = process_id_init;
   m_val.uid = user_id_init;
   m_val.gid = group_id_init;

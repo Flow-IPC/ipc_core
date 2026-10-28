@@ -18,6 +18,8 @@
 /// @file
 #include "ipc/util/sync_io/asio_waitable_native_hndl.hpp"
 #include "ipc/common.hpp"
+#include <cassert>
+#include <cstdlib>
 
 namespace ipc::util::sync_io
 {
@@ -47,9 +49,10 @@ Asio_waitable_native_handle::~Asio_waitable_native_handle()
 {
   /* boost.asio documentation is slightly ambiguous -- well, terse as usual -- as to whether `Base::~Base()`
    * (posix::basic_descriptor dtor), which is `protected` by the way, will act as-if .close() was called,
-   * in the way that certainly (e.g.) ipc::tcp::socket::~socket() does.  Of course we could test it; but
-   * various signs and common sense indicate that it would in fact ::close() the FD.  Even if not, the following
-   * would do no harm though.  To be clear: We do *not* want to close it.  We exist for watchability only. */
+   * in the way that certainly (e.g.) boost::asio::ip::tcp::socket::~socket() does.  Of course we could test it; but
+   * various signs and common sense indicate that it would in fact Native_handle::close() the FD.  Even if not,
+   * the following would do no harm though.  To be clear: We do *not* want to close it.  We exist for watchability
+   * only. */
   release();
 
   // Probably any async_wait() would get operation_aborted because of that.  They should be ready for that anyway.

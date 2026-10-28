@@ -21,6 +21,8 @@
 #include "ipc/transport/sync_io/detail/batch.hpp"
 #include "ipc/transport/error.hpp"
 #include <flow/log/log.hpp>
+#include <cassert>
+#include <utility>
 
 namespace ipc::transport::sync_io
 {

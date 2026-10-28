@@ -19,6 +19,7 @@
 #pragma once
 
 #include "ipc/transport/transport_fwd.hpp"
+#include <iosfwd>
 
 namespace ipc::transport
 {

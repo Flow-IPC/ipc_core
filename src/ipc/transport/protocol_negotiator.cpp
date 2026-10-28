@@ -20,6 +20,8 @@
 #include "ipc/transport/protocol_negotiator.hpp"
 #include "ipc/transport/error.hpp"
 #include <flow/error/error.hpp>
+#include <cassert>
+#include <utility>
 
 namespace ipc::transport
 {

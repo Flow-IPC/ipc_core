@@ -23,7 +23,12 @@
 #include <flow/util/stat/stat_set.hpp>
 #include <flow/util/util_fwd.hpp>
 #include <boost/move/make_unique.hpp>
+#include <boost/thread/future.hpp>
 #include <cstddef>
+#include <cassert>
+#include <cstdlib>
+#include <ostream>
+#include <string>
 
 namespace ipc::transport::sync_io
 {

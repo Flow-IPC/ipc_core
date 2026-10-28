@@ -22,6 +22,10 @@
 #include <flow/common.hpp>
 #include <boost/interprocess/managed_shared_memory.hpp>
 #include <boost/array.hpp>
+#include <cassert>
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
 
 namespace ipc::util
 {
@@ -34,8 +38,8 @@ const boost::array<Permissions, size_t(Permissions_level::S_END_SENTINEL)>
     = {
         Permissions{0}, // <= NO_ACCESS
         Permissions{0b110000000}, // <= USER_ACCESS.  Value a/k/a 0600.
-        Permissions{0b110110000}, // <= GROUP_ACCESS.  Value a/k/a 660.
-        Permissions{0b110110110} // <= UNRESTRICTED.  Value a/k/a 666.
+        Permissions{0b110110000}, // <= GROUP_ACCESS.  Value a/k/a 0660.
+        Permissions{0b110110110} // <= UNRESTRICTED.  Value a/k/a 0666.
       };
 const boost::array<Permissions, size_t(Permissions_level::S_END_SENTINEL)>
   PRODUCER_CONSUMER_RESOURCE_PERMISSIONS_LVL_MAP
@@ -48,17 +52,6 @@ const boost::array<Permissions, size_t(Permissions_level::S_END_SENTINEL)>
         Permissions{0b110100000}, // <= GROUP_ACCESS.  Value a/k/a 0640.
         Permissions{0b110100100} // <= UNRESTRICTED.  Value a/k/a 0644.
       };
-
-/**
- * Maps general Permissions_level specifier to low-level #Permissions value, when the underlying resource
- * is in the file-system (e.g., a file) and is *produced* (and therefore always writable) by the owning (creating,
- * updating) user; but *consumed* (and therefore at most readable, never writable) by potentially other processes,
- * and therefore possibly other users (e.g., group access or unrestricted access -- but only for reading either way).
- * For example a PID file is typically only writable by the daemon's user but may be readable or inaccessible by
- * other users.
- */
-extern const boost::array<Permissions, size_t(Permissions_level::S_END_SENTINEL)>
-  PRODUCER_CONSUMER_RESOURCE_PERMISSIONS_LVL_MAP;
 
 const fs::path IPC_KERNEL_PERSISTENT_RUN_DIR = "/var/run";
 

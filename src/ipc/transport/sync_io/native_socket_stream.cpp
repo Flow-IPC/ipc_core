@@ -19,6 +19,9 @@
 
 #include "ipc/transport/sync_io/native_socket_stream.hpp"
 #include <boost/move/make_unique.hpp>
+#include <ostream>
+#include <string>
+#include <utility>
 
 namespace ipc::transport::sync_io
 {

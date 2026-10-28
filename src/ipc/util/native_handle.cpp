@@ -20,6 +20,7 @@
 #include "ipc/transport/error.hpp"
 #include <flow/error/error.hpp>
 #include <boost/functional/hash/hash.hpp>
+#include <cerrno>
 #include <fcntl.h>
 #include <unistd.h>
 

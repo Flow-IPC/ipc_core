@@ -33,9 +33,15 @@
 #include "ipc/util/util_fwd.hpp"
 #include <flow/error/error.hpp>
 #include <flow/util/blob.hpp>
+#include <boost/move/unique_ptr.hpp>
+#include <boost/noncopyable.hpp>
 #include <cstddef>
 #include <queue>
 #include <utility>
+#include <cassert>
+#include <optional>
+#include <string>
+#include <type_traits>
 
 namespace ipc::transport::sync_io
 {

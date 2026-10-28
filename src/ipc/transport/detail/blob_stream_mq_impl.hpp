@@ -26,6 +26,9 @@
 #include <flow/log/config.hpp>
 #include <boost/interprocess/shared_memory_object.hpp>
 #include <boost/move/make_unique.hpp>
+#include <cassert>
+#include <cstdint>
+#include <utility>
 
 namespace ipc::transport
 {

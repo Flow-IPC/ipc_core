@@ -29,7 +29,15 @@
 #include <flow/util/blob.hpp>
 #include <flow/error/error.hpp>
 #include <boost/move/make_unique.hpp>
+#include <boost/asio/connect_pipe.hpp>
+#include <boost/noncopyable.hpp>
 #include <queue>
+#include <cassert>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <type_traits>
+#include <utility>
 
 namespace ipc::transport::sync_io
 {
@@ -1661,7 +1669,7 @@ void Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_write_q_head_payloa
                      "transmissibility; success; now pinging user-land via IPC-pipe.");
 
       util::pipe_produce(get_logger(), &(*m_mq_ready_writer));
-      // m_mq_read_reader now has a byte to read!  m_ev_wait_hndl_mq will be event-active.
+      // m_mq_ready_reader now has a byte to read!  m_ev_wait_hndl_mq will be event-active.
     }); // m_blocking_worker->post()
   } // if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
   // else if (Mq::S_HAS_NATIVE_HANDLE) { m_ev_wait_hndl_mq has the MQ's kernel-waitable handle!  Sw33t! }
