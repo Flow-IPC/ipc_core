@@ -41,10 +41,10 @@ namespace ipc::transport::sync_io
  * @see transport::Native_socket_stream_acceptor -- generally all notes, other than the mechanism of how
  *      async_accept() reports readiness, in that doc header apply here.
  *
- * As is generally the case when choosing `sync_io::X` versus `X`, we recommend using `X` due to it being easier.
- * In this particular case (see below) there is no perf benefit to using `sync_io::X`, either, so the only reason
- * to use `sync_io::X` in this case would be because you've got an old-school reactor event loop with
- * a `poll()` or `epoll_wait()`, in which case the `sync_io` API may be easier to integrate.
+ * In this particular case (see below) `sync_io::X` is internally built on `X`, so it does not avoid background
+ * threads and offers no perf benefit.  So the reason to use `sync_io::X` here would be that you've got an
+ * old-school reactor event loop with a `poll()` or `epoll_wait()`, in which case the `sync_io` API may be easier
+ * to integrate.  Otherwise `X` does the same job with a smaller API.
  *
  * ### Internal implementation ###
  * Normally this would not be in the public docs for this public-use class, but indulge us.

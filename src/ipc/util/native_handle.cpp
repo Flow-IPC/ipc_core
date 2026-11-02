@@ -57,7 +57,7 @@ void Native_handle::close() noexcept
    * and calling S.close() would likely do the job.  However, posix::descriptor's dtor is protected, so one cannot
    * really instantiate a posix::descriptor; must instantiate a sub-class: perhaps stream::descriptor which
    * adds generic read/write ops like write_some() and read_some().  One might be tempted to try
-   * Peer_socket<Protocol_byte_stream> (stream_protocol::socket) or Peer_socket<Protocol_byte_stream>
+   * Peer_socket<Protocol_byte_stream> (stream_protocol::socket) or Peer_socket<Protocol_pkt_stream>
    * (seq_packet_protocol::socket).  Does it matter that m_native_handle might not refer to a stream-style
    * protocol at all (if using stream_protocol::socket or stream::descriptor) or a SEQPACKET-style one (if using
    * seq_packet_protocol::socket)?  One might guess, "no, it's just close it anyway, whatever."  Turns out, actually,

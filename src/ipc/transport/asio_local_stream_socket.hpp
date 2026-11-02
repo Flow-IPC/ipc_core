@@ -57,7 +57,7 @@ static_assert(false, "asio_local_stream_socket::Msg_batch_in is based on Linux-s
 #endif
 
 /**
- * Similarly (but formally speaking not identically) to the `Msg_batch_in` concept (as taken by API
+ * Similarly to the transport::Msg_batch_in concept (as taken by API
  * `{Blob|Native_handle}_receiver::async_receive_*_batch()` concept) implements persistent-across-reads
  * batched-receipt of messages over an `asio_local_stream_socket::Peer_socket<Protocol_pkt_stream>`.
  * There is a heavy focus on performance, including across multiple batched receives (nb_read()) on the same

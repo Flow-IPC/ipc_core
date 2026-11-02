@@ -42,7 +42,7 @@
  * in ipc::shm and in ipc::session when connecting to conversation partner process(es).
  *
  * ipc::util::Native_handle is a commonly used native-handle (FD in POSIX parlance) wrapper (so thin it doesn't add
- * a single bit on top of the actul FD).  These are ~always passed around by value (copied), as they are very small
+ * a single bit on top of the actual FD).  These are ~always passed around by value (copied), as they are very small
  * in practice.
  *
  * There are of course various other things; just check them out as they are referenced, or just look around.
@@ -52,10 +52,6 @@ namespace ipc::util
 {
 
 // Types.
-
-// Find doc headers near the bodies of these compound types.
-
-class Use_counted_object;
 
 /* Normally we'd try to forward-declare the following only, but doing so means (1) having to specify `: size_t`
  * in two places, here and the definition; and (2) ::S_END_SENTINEL cannot be used in _fwd.hpp to, say,
@@ -74,9 +70,9 @@ static_assert(false, "Design of Permissions_level assumes a POSIX-y security mod
  * from a Permissions_level to a #Permissions value in an
  * `array<Permissions, size_t(Permissions_level::S_END_SENTINEL)>`.
  *
- * While, unlike #Permissions, this `enum` intends not be overtly based on a POSIX RWXRWXRWX model, it does
+ * While, unlike #Permissions, this `enum` intends not to be overtly based on a POSIX RWXRWXRWX model, it does
  * still assume the 3 user groupings are "user themselves," "user's group," and "everyone."  The 1st and 3rd
- * are likely universal, but the 2nd may not apply to all OS -- through probably all POSIX/Unix ones --
+ * are likely universal, but the 2nd may not apply to all OS -- though probably all POSIX/Unix ones --
  * and even for something like Linux there could be different groupings such as ones based on OS ACL.
  * As of this writing it's fine, as this is a POSIX-targeted library at least (in fact Linux as of this writing,
  * but that could change to include, say, macOS/similar).
@@ -127,7 +123,7 @@ using Task = flow::async::Task;
  *
  * ### How to use ###
  * We provide this alias as a stylistic short-hand, as it better suits various interfaces especially in
- * ipc::transport.  Nevertheless it's not meant to more than that; it's an attempt to abstract it away.
+ * ipc::transport.  Nevertheless it's not meant to be more than that; it's not an attempt to abstract it away.
  *
  * That is to say, to work with these (create them, access them, etc.), do use the highly convenient
  * boost.asio buffer APIs which are well documented in boost.asio's docs.
@@ -135,7 +131,7 @@ using Task = flow::async::Task;
 using Blob_const = boost::asio::const_buffer;
 
 /**
- * Short-hand for an mutable blob somewhere in memory, stored as exactly a `void*` and a `size_t`.
+ * Short-hand for a mutable blob somewhere in memory, stored as exactly a `void*` and a `size_t`.
  * @see ipc::util::Blob_const; usability notes in that doc header apply similarly here.
  */
 using Blob_mutable = boost::asio::mutable_buffer;
@@ -196,16 +192,16 @@ Permissions shared_resource_permissions(Permissions_level permissions_lvl);
 
 /**
  * Utility that sets the permissions of the given resource (at the supplied file system path) to specified
- * POSIX value.  If the resource cannot be accessed (not found, permissions...) that system Error_code shall be
+ * POSIX value.  If the resource cannot be accessed (not found, permissions...), that system Error_code shall be
  * emitted.
  *
  * ### Rationale ###
  * It may seem unnecessary, particularly given that it sometimes (in our internal code, but I mention it
- * publicly for exposition purposes) is placed right after the
- * creation of the resource (file, SHM pool, POSIX MQ, shared mutex, etc.) -- where the same `perms` is supplied
- * to the creation-API, whichever is applicable.  The reason is that those APIs tend to make the corresponding OS
- * call (e.g., `open()`) which is bound by the "process umask" in POSIX/Linux; so for example if it's set to
- * the typical 022 (octal), then it's impossible to make the resource group- or all-writable, regardless of
+ * publicly for exposition purposes) is placed right after the creation of the resource (file, SHM pool,
+ * POSIX MQ, shared mutex, etc.) -- where the same `perms` is supplied to the creation-API, whichever is
+ * applicable.  The reason is that those APIs tend to make the corresponding OS call (e.g., `open()`)
+ * which is bound by the "process umask" in POSIX/Linux; so for example if it's set to the typical
+ * 022 (octal), then it's impossible to make the resource group- or all-writable, regardless of
  * `perms`.  set_resource_permissions() uses a technique that bypasses the umask thing.  Note that it does not make
  * any calls to change the umask to accomplish this.
  *
@@ -216,12 +212,17 @@ Permissions shared_resource_permissions(Permissions_level permissions_lvl);
  * (what we do here) themselves (via `fchmod()` and such)... so we don't need to; in fact I (ygoldfel) treated
  * it as valuable confirmation of the correctness of this maneuver.
  *
+ * @note The resource must be readable by the calling process: this overload opens it (read-only) to obtain a
+ *       descriptor and then acts as the other overload.  So, e.g., an owner cannot use it to loosen the permissions of
+ *       a resource it has made unreadable to itself; in that case open it yourself by other means (if possible) and
+ *       use the other overload.
+ *
  * @param logger_ptr
  *        Logger to use for logging (WARNING, on error only).  Caller can themselves log further info if desired.
  * @param path
  *        Path to resource.  Symlinks are followed, and the target is the resource in question (not the symlink).
  * @param perms
- *        See other overload.
+ *        The permissions to set.
  * @param err_code
  *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
  *        see other overload; note that in addition file-not-found and the like are possible errors (in fact
@@ -253,13 +254,17 @@ void set_resource_permissions(flow::log::Logger* logger_ptr, Native_handle handl
  * Caution: It may be running, but it may be a zombie; and/or it may be running now but dead shortly after
  * this function returns.  Use defensively.
  *
+ * @note PID recycling is also possible.  In most contexts this happens on a much larger time scale than is
+ *       practically relevant, but we advise verifying your exact situation.
+ *
  * Implementation (normally avoided in contract docs, but we'd like to be as useful as we can here):
  * It invokes POSIX `kill()` with the fake zero "signal"; success or failure-due-to-identity/permissions indicates
  * the process *can* be signaled (by someone with proper identity/permissions anyway) and therefore exists.  Otherwise
  * it does not exist.
  *
  * @param process_id
- *        The process ID of the process in question.
+ *        The process ID of the process in question.  If it is not positive, then `false` is returned (no single
+ *        process can have such a PID).
  * @return See above.
  */
 bool process_running(process_id_t process_id);

@@ -45,9 +45,8 @@ namespace ipc::transport
  * is unique in Flow-IPC, in that it is able to transmit not only blobs but also native handles.
  *
  * @see sync_io::Native_socket_stream and util::sync_io doc headers.  The latter describes a general pattern which
- *      the former implements.  In general we recommend you use a `*this` rather than a sync_io::Native_socket_stream --
- *      but you may have particular needs (summarized in util::sync_io doc header) that would make you decide
- *      otherwise.
+ *      the former implements.  Which of the two to use depends on your needs, as summarized in the util::sync_io
+ *      doc header.
  *
  * ### Quick note on naming ###
  * It appears somewhat inconsistent to name it `Native_socket_stream[_acceptor]`
@@ -94,11 +93,13 @@ namespace ipc::transport
  * being for max length being in the 10s-of-KiB range.  With a modern Linux kernel on server hardware from about 2014
  * to 2020, our performance tests show that its raw speed for messages of aforementioned size is comparable to
  * zero-copy mechanisms based on POSIX message queues and Boost SHM-based message queues.  Technically we found it
- * to be somewhat faster than the latter and somewhat slower than the former.  However, for best perf, it is recommended
- * to send handles to SHM areas containing arbitrarily long structured messages (such as ones [de]serialized using
- * zero-copy builders: capnp and the like).  This further reduces the importance of relative perf compared to
- * other low-level transports (which, as noted, is pretty close regardless -- though this is bound to stop being true
- * for much longer messages, if the send-SHM-handles technique were to *not* be used).
+ * to be somewhat faster than the latter and somewhat slower than the former.  However, to transmit messages of
+ * arbitrary length without copying, one can send handles to SHM areas containing them (such as structured messages
+ * [de]serialized using zero-copy builders: capnp and the like).  This further reduces the importance of relative perf
+ * compared to other low-level transports (which, as noted, is pretty close regardless -- though this is bound to
+ * stop being true for much longer messages, if the send-SHM-handles technique were to *not* be used).
+ *
+ * @see potentially perf-relevant notes in doc header for Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT.
  *
  * ### Cleanup ###
  * Some core transports rely on SHM or SHM-style semantics, wherein the transport has kernel persistence, meaning
@@ -222,7 +223,7 @@ namespace ipc::transport
  *   - Because the implementation is 100% encapsulated inside the `Impl` #m_impl, move-assignment and move-construction
  *     are acquired for "free":
  *     - Coding-ease "free": Default-generated move-ctor and move-assignment simply move the `unique_ptr` #m_impl.
- *     - Perf "free": `unique_ptr` move is lightning-quick (nullify the source pointer after copying the pointer value
+ *     - Perf "free": `unique_ptr` move is cheap (nullify the source pointer after copying the pointer value
  *       into the target pointer).  Though, there is an extra use of the heap per `*this`.
  *
  * Okay, if one is familiar with pImpl, none of this is surprising in terms of how it works.  *Why* though?  Answer:

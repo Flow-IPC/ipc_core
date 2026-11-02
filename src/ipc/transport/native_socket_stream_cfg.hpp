@@ -89,10 +89,23 @@ static_assert(false, "Native_socket_stream uses AF_LOCAL/SOCK_SEQPACKET and reli
    *
    * For Linux of any reasonably recent vintage this is `true`.
    *
+   * A non-obvious Linux note: While, with this at `true`, we're able to internally yield some nice perf and
+   * simplicity gains -- as message boundaries no longer need to be implemented in user-land -- a new (versus
+   * `false`/`SOCK_STREAM`) OS limitation exists.  While there is a byte-wise send buffer maximum either way,
+   * with `true`/`SOCK_SEQPACKET` there's also this: Linux caps the number of kernel-queued (unread) messages
+   * on such a socket at the value of the `net.unix.max_dgram_qlen` sysctl (per network namespace) when the socket is
+   * created.  The kernel default is 10; systemd raises it to 512 at boot; a container with its own network
+   * namespace may have the kernel default.  Beyond that limit (or the send-buffer limit, whichever applies first) a
+   * send would-block, whereupon we queue internally (see Native_handle_sender concept doc header).  Functionally
+   * this is invisible to you; but if bursts of unread messages routinely exceed the limit, it may affect
+   * performance (not, as of this writing, empirically tested).  If this does occur: consider raising the sysctl.
+   * Informally: 512 seems fairly generous; 10, less so.
+   *
    * @todo Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT and Native_socket_stream_cfg::S_USE_OS_DGRAM_BATCH_SUPPORT
    * is each currently determined based on availability in the *compiling* host OS; but for various
    * reasons (both flexibility/testing and compatibility with other target platforms
-   * and versions) it might be helpful to make each configurable via the Flow-IPC build script(s).
+   * and versions) it might be helpful to make each configurable via the Flow-IPC build script(s).  It could also
+   * be configured per individual Native_socket_stream at compile-time (a template parameter).
    */
   static constexpr bool S_USE_OS_DGRAM_SUPPORT = true;
 

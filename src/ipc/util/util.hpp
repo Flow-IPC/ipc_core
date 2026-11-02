@@ -62,7 +62,7 @@ struct Info_dump_format
    * Default: `true`.
    *
    * If #m_multiline comes in conflict with #m_verbose then `m_multiline` wins.  That is: Observing
-   * `m_multiline == false` if first-priority, whereas observing `m_verbose == true` is secondary/best-effort.
+   * `m_multiline == false` is first-priority, whereas observing `m_verbose == true` is secondary/best-effort.
    *
    * ### Example of conflict scenario ###
    * In the SHM-jemalloc module (ipc::shm::arena_lend::jemalloc), #m_verbose = `true` means including jemalloc

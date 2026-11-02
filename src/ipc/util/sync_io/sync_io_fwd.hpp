@@ -26,6 +26,8 @@
  * pattern used in ipc::transport and ipc::session to provide fine-tuned control over integrating
  * asynchronous Flow-IPC activities into the user's event loop.
  *
+ * @see The guided Manual chapter @ref async_loop covers these topics.
+ *
  * ### What's all this, then? ###
  * You may notice that for ~every class/class template `X` in this library that provides 1+ `X::async_*(..., F)`
  * method(s), where `F()` is a completion handler for an async operation, there exists also -- in a sub-namespace
@@ -37,14 +39,13 @@
  *       completed.  Nevertheless for this discussion we will often take the case of, indeed, an operation
  *       named `X::async_*(..., F)`, with `F()` a one-off completion handler.  It's the basic, most mainstream pattern.
  *
- * Long story short, all else being equal, we would recommend the use of `X`
- * over `sync_io::X`: it is easier (in most cases), less error-prone, and delivers
- * similar performance -- quite possibly even better (due to automatic parallelization albeit at the cost
- * of mandatory context-switching).  However `sync_io::X` does exist for a good reason, at least for some important
- * `X`es, and in an advanced, highly performance-sensitive application it may be worth considering switching
- * to the *direct* use of `sync_io::X`.  For what it is worth, internally `X` is usually written
- * in terms of `sync_io::X`; the latter is essentially the core logic, while the former provides
- * auto-parallelization and a simpler interface.
+ * Long story short: `X` does its background work in its own thread(s) and invokes your handlers from there;
+ * `sync_io::X` does its work only in your thread(s), when you call into it, invoking your handlers synchronously
+ * from within those calls.  So `sync_io::X` gives you control over what runs in what thread (and spares you
+ * cross-thread hand-off of results); the price is a somewhat larger API (some setup per object; and async-ops
+ * that may complete either synchronously or later).  Which is preferable depends on your application; see below.
+ * For what it is worth, internally `X` is usually written in terms of `sync_io::X`; the latter is essentially
+ * the core logic, while the former adds the background thread(s) and does the waiting for you.
  *
  * @note For this reason comments sometimes refer to a `sync_io::X` *core*: where the basic `X`-ish capabilities and
  *       data live.  The *async-I/O* `X` is then often built around a `sync_io::X` core.  Because of this it is
@@ -67,7 +68,7 @@
  *     with its `async_accept()`);
  *     - all their session::shm counterparts.
  *
- * ### The async-I/O (default) pattern ###
+ * ### The async-I/O pattern ###
  * Consider `X` -- take for example transport::Native_socket_stream -- and a particular async operation -- take,
  * e.g., transport::Native_socket_stream::async_receive_blob().
  *
@@ -98,9 +99,8 @@
  *
  * What is the user supposed to do with an async-op like this?  In practice we tend to think of this in terms
  * of 2 basic possibilities for how the user's own event loop might be organized.
- *   - Proactor pattern: This is what boost.asio uses, what flow.async facilitates further, and what we generally
- *     recommend all else being equal.  We won't describe it here in detail, but integrating such a loop with
- *     this async-I/O pattern in Flow-IPC is quite simple:
+ *   - Proactor pattern: This is what boost.asio uses and what flow.async facilitates further.  We won't describe
+ *     it here in detail, but integrating such a loop with this async-I/O pattern in Flow-IPC is quite simple:
  *     -# Call `x.async_*(..., F)` as explained above.
  *     -# As `F()` supply a short wrapper that will place the true handling of the event onto the same event loop --
  *        thread U (though multiple such threads might be in use alternatively) -- where you invoked `x.async_*(F)`.
@@ -147,25 +147,22 @@
  *       inform the thread-U poll-wait that it must wake up and handle events, among any others that the poll-wait
  *       covers.
  *
- * So that's the async-I/O (default) pattern in Flow-IPC.  Generally it is easy to work with -- especially
- * in a proactor-pattern event loop, but otherwise also not hard.  It cleanly separates Flow-IPC's internal needs
- * from the rest of the application's: Flow-IPC needs to do background work?  It takes care of its own needs:
- * it starts and ends threads without your participation.  Moreover this may
- * well help performance of the user's own event loop: Flow-IPC's
- * cycles are mostly spent in separate threads, reducing the length of your loop's single iteration and thus
- * helping reduce your latency.  The processors' context-switching is automatic and usually efficient; and it
- * automatically makes use of multiple hardware cores.
+ * So that's the async-I/O pattern in Flow-IPC.  It cleanly separates Flow-IPC's internal needs from the rest of
+ * the application's: Flow-IPC needs to do background work?  It takes care of its own needs: it starts and ends
+ * threads without your participation.  Flow-IPC's cycles are then mostly spent in separate threads, which can
+ * shorten your loop's single iteration and automatically makes use of multiple hardware cores -- at the cost of
+ * context switching between those threads and yours.
  *
  * ### Rationale for the `sync_io` pattern ###
- * So why might the default pattern described above be insufficient?  A detailed study of this is outside our scope
+ * So why might the pattern described above be insufficient?  A detailed study of this is outside our scope
  * here; but basically it is a matter of control.  The way it starts threads, in a way that cannot be specified
- * by you (the user), and switches between them may be helpful in 95% of cases; but some applications want complete
- * control of any such thing.  For instance suppose I'd like to start with doing all that background work
- * of `Native_socket_stream::async_receive_blob()` directly in thread U.  It should be possible, right?  Whatever
- * events it waits on -- in reality, internally, principally it waits for readability of a Unix domain socket --
- * I could just wait-on in my own thread-U `epoll_wait()`.  When an active event is detected, I could do the
- * resulting non-blocking-reads -- that normally would be done in the background thread W -- directly after
- * the poll-wait.
+ * by you (the user), and switches between them may be fine (or even helpful) for many applications; but some
+ * applications want complete control of any such thing.  For instance suppose I'd like to start with doing all
+ * that background work of `Native_socket_stream::async_receive_blob()` directly in thread U.  It should be possible,
+ * right?  Whatever events it waits on -- in reality, internally, principally it waits for readability of a Unix
+ * domain socket -- I could just wait-on in my own thread-U `epoll_wait()`.  When an active event is detected, I
+ * could do the resulting non-blocking-reads -- that normally would be done in the background thread W -- directly
+ * after the poll-wait.
  *
  * Maybe that would be good, reducing context-switching overhead.  Or maybe it wouldn't be good, as a big fat
  * loop iteration could cause latency in serving the next batch of work.  If so, and I *did* want
@@ -568,9 +565,8 @@ class Asio_waitable_native_handle;
  * This is defined here because of its central role in sync_io::Event_wait_func (see that doc header).
  *
  * Why wrap it in a smart pointer at all as opposed to passing around `Function<>`s as objects (particularly
- * as arg to #Event_wait_func)?  Answer: Performance.  Our `sync_io` pattern is intended for the highly
- * perf-conscious user, to the extent they'd forego the often easier to use async-I/O pattern
- * just because that would involve involuntary (from the user's point of view) thread creation and context
+ * as arg to #Event_wait_func)?  Answer: Performance.  Our `sync_io` pattern is meant, in part, for the
+ * perf-conscious user who wants to avoid involuntary (from the user's point of view) thread creation and context
  * switching; copying or moving polymorphic functors, including all their captures, is an unnecessary expense.
  *
  * In that case why `shared_ptr`, not `unique_ptr`, given that it adds potential ref-counting behind the scenes?
@@ -748,7 +744,6 @@ using Task_ptr = boost::shared_ptr<Task>;
  * ### Integrating with boost.asio ###
  * Suppose your application is using boost.asio (possibly with flow.async to manage threads),
  * with a `flow::util::Task_engine::run()` embodying the event loop, in proactor pattern fashion.
- * (We would recommend just that, preferring it to an old-school reactor-pattern via `[e]poll*()` directly.)
  * *Your* loop is asynchronously expressed, but you can still use the `sync_io` pattern to graft
  * Flow-IPC operations into it, so that they are invoked synchronously, when you want, in the exact thread you
  * want.  In fact, doing so is *significantly* simpler than integrating with a reactor-style `[e]poll*()`.

@@ -198,6 +198,10 @@ namespace ipc::transport::sync_io
  * (determined at compile-time, universally); in code you'll find `if const()` and similar constructions to that
  * effect.
  *
+ * @see potentially perf-relevant notes in doc header for Native_socket_stream_cfg::S_USE_OS_DGRAM_SUPPORT.
+ *      Spoiler alert: `SOCK_SEQPACKET`, in Linux, will apply an additional potentially-would-block-yielding
+ *      limit on unread kernel-held messages (plus the kernel send-buffer total size limit either way).
+ *
  * Important update: We now support batch-receipt via Linux's `recvmmsg()`.  This is referenced in the preceding
  * paragraph as an informal to-do; well, now that to-do is done on the receive side.  (That leaves the send side,
  * but the arguments for adding that are significantly less convincing.  Discussion omitted here though.)

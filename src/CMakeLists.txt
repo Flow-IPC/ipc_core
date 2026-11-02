@@ -63,7 +63,6 @@ set(SRCS
     ipc/util/shared_name.cpp
     ipc/util/sync_io/asio_waitable_native_hndl.cpp
     ipc/util/sync_io/detail/timer_ev_emitter.cpp
-    ipc/util/use_counted_object.cpp
     ipc/util/util.cpp)
 set(HDRS
     ipc/common.hpp
@@ -116,7 +115,6 @@ set(HDRS
     ipc/util/sync_io/asio_waitable_native_hndl.hpp
     ipc/util/sync_io/detail/timer_ev_emitter.hpp
     ipc/util/sync_io/sync_io_fwd.hpp
-    ipc/util/use_counted_object.hpp
     ipc/util/util_fwd.hpp
     ipc/util/util.hpp)
 # Not actual source files (concept/docs only); deliberately not exported (see FlowLikeLib.cmake doc header).

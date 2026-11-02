@@ -42,7 +42,7 @@ static_assert(false, "Flow-IPC supports transmitting native handles in Linux onl
  * It would have been acceptable to simply use an alias to the native handle type (in POSIX, `int`),
  * but this way is better stylistically with exactly zero performance overhead.  Initialize it, e.g.,
  * `Native_handle hndl{some_fd};`, where `some_fd` might be some POSIX-y FD (network socket, Unix domain socket,
- * file descriptor, etc.).  Or initialize via no-arg construction which results in an `null() == true` object.
+ * file descriptor, etc.).  Or initialize via no-arg construction which results in a `null() == true` object.
  * Copy construction, assignment, equality, total ordering, and hashing all work as one would expect and
  * essentially the same as on the underlying native handles.
  *
@@ -367,6 +367,8 @@ size_t hash_value(Native_handle val) noexcept;
  * ### Rationale for existence ###
  * `std::swap()` would perform 3 move-assigns; Native_handle move-assignment/construction involves nullifying
  * the source Native_handle::m_native_handle; that's not necessary in a swap and wastes cycles.
+ *
+ * @relatesalso Native_handle
  *
  * @param val1
  *        Object to swap.

@@ -28,6 +28,9 @@
  * between pairs of processes.  See namespace ::ipc doc header for an overview of Flow-IPC modules including
  * how ipc::transport relates to the others.  Then return here.  A synopsis follows:
  *
+ * @see The guided Manual chapters @ref chan_open (obtaining channels), @ref chan_struct and @ref chan_struct_advanced
+ *      (structured transport), and @ref transport_core (unstructured transport) cover these topics.
+ *
  * The main transport features of ipc::transport are: class template struc::Channel (for structured message and
  * native handle transport) and various lower-level utilities (Channel; blob/handle streams; message queue
  * (MQ) streams).  Structured transmission facilities (struc::Channel being the main guy) are segregated in

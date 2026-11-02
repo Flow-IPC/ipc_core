@@ -32,6 +32,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 // In this file: NSS = Native_socket_stream.
 
@@ -192,7 +193,7 @@ void send_native_handle_msgs(Snd_t& snd, size_t n, size_t meta_sz)
   const util::Blob_const meta_blob{buf.data(), buf.size()};
   for (size_t i = 0; i < n; ++i)
   {
-    Native_handle hndl{::dup(STDOUT_FILENO)};
+    auto hndl = Native_handle{STDOUT_FILENO}.dup();
     ASSERT_FALSE(hndl.null());
     Error_code err;
     const bool ok = snd.send_native_handle(hndl, meta_blob, &err);

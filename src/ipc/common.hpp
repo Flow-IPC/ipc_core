@@ -28,8 +28,8 @@
 #include <string>
 
 /* We build in C++17 mode ourselves (as of this writing), but linking user shouldn't care about that so much.
- * The APIs and header-inlined stuff (templates, constexprs, possibly explicitly-inlined functions [though we avoid
- * those]), however, also requires C++17 or newer; and that applies to the linking user's `#include`ing .cpp file(s)!
+ * The APIs and header-inlined stuff (templates, constexprs, some explicitly-inlined functions), however, also
+ * require C++17 or newer; and that applies to the linking user's `#include`ing .cpp file(s)!
  * Therefore enforce it by failing compile unless compiler's C++17 or newer mode is in use.
  *
  * Note this isn't academic; as of this writing there's at least a C++14-requiring constexpr feature in use in one
@@ -47,6 +47,8 @@
  * particular support for passing references to such *bulk* objects through the aforementioned messaging transport
  * system.
  *
+ * @see The guided Manual, starting at @ref about, is a tutorial-style introduction to Flow-IPC.
+ *
  * @note Nomenclature: The project is called Flow-IPC.
  *
  * From the user's perspective, one should view this namespace as the "root," meaning it consists of two parts:
@@ -54,36 +56,40 @@
  *     ipc::Error_code).  There should be only a handful of these, and they are likely to be small.
  *     - In particular this includes `enum class` ipc::Log_component which defines the set of possible
  *       `flow::log::Component` values logged from within all modules of Flow-IPC.  See end of common.hpp.
- *   - Sub-namespaces (like ipc::transport, ipc::util), each of which represents an Flow-IPC *module* providing
+ *   - Sub-namespaces (like ipc::transport, ipc::util), each of which represents a Flow-IPC *module* providing
  *     certain grouped functionality.  The modules are discussed just below.
  *
  * Flow-IPC modules overview
  * ---------------------------
  * Unlike with, say, Boost or Flow, the user of Flow-IPC should be familiar with the totality of its modules.  They're
- * interrelated and to be used together in a typical application.  Contrast with how one might use
+ * interrelated -- albeit layered -- and to be used together in a typical application.  Contrast with how one might use
  * `flow::log` but not `flow::async`, or boost.asio but not boost.random.  Summary of modules follows:
  *
  *   - *ipc::transport*:
  *     It allows for low-level (unstructured) and structured message passing between each given pair of
- *     processes A and B.  This is really *the point* of Flow-IPC, meaning wanting to use ipc::transport is the reason
+ *     processes A and B.  This is really a key aim of Flow-IPC, meaning wanting to use ipc::transport is a key reason
  *     one links/includes Flow-IPC in their application in the first place.
  *     - *ipc::transport::struc* contains the structured-message facilities.  To define a structured message,
  *       the user is expected to write a *schema* for it.  As of this writing schemas
  *       are to be written in the Cap'n Proto (capnp) domain-specific language (DSL).  Hence ipc::transport::struc has
  *       capnp as a dependency.
- *       - *ipc::transport::struc::shm* contains some important items, albeit not ones *typically* directly mentioned
+ *       - *ipc::transport::struc::shm* contains some important items, albeit not ones typically directly mentioned
  *         by user code, that power the ability to place structured messages directly in SHM, thus enabling end-to-end
  *         *zero-copy* of all messages passed through transport::struc::Channel.
+ *         - *ipc::transport::struc::shm::rpc* integrates Flow-IPC with capnp's Remote Procedure Call layer
+ *           (capnp-RPC): one uses capnp-RPC (interfaces, promise pipelining, etc.) as normal, but with end-to-end
+ *           zero-copy via SHM.  It is an alternative to transport::struc::Channel, for those who prefer the RPC
+ *           paradigm to message passing.
  *   - *ipc::session*:
  *     Before a given process pair A and B talks via ipc::transport, they (typically) will want to establish a
  *     broad conceptual connection (called a *session*) within the context of which all
  *     the talking occurs.  ipc::session is concerned with establishing
  *     such sessions, so that most user code can then mostly forget about that and use ipc::transport to communicate.
- *     It includes safety measures like authentication/tokens, but these should be mostly invisible in day-to-day coding
- *     of IPC logic via ipc::transport.  It *is* possible to establish ipc::transport pipes without sessions, and
- *     for smaller and/or legacy applications and/or prototyping that may be a reasonable approach.
+ *     It includes safety measures like peer-identity checks and tokens, but these should be mostly invisible in
+ *     day-to-day coding of IPC logic via ipc::transport.  It *is* possible to establish ipc::transport pipes without
+ *     sessions, and for smaller and/or legacy applications and/or prototyping that may be a reasonable approach.
  *     - *ipc::session::shm* conventionally contains SHM-enabled session functionality.  The location of a
- *       given set of classes will mirror the ipc::shm facilities to which those SHM-enabled sessions provides access.
+ *       given set of classes will mirror the ipc::shm facilities to which those SHM-enabled sessions provide access.
  *       For example ipc::session::shm::classic contains SHM-classic sessions which provide access to arenas
  *       supplied by ipc::shm::classic.  Similarly ipc::session::shm::arena_lend::jemalloc contains SHM-jemalloc
  *       sessions <=> core arena facilities in ipc::shm::arena_lend::jemalloc.  Note the 1-1 naming of namespaces in
@@ -93,8 +99,13 @@
  *     analogously to using the regular heap.  ipc::shm and ipc::transport are co-designed to support transmitting
  *     references to SHM-stored objects.  ipc::session treats setup of SHM arenas for (direct or background) use
  *     in a given session as an important, albeit optional, capability.  Unless the user wants to explicitly
- *     place data structures (such as `struct`s and STL containers) into SHM -- which is an advanced but sometimes
- *     desirable capability -- direct use of ipc::shm is not necessary.
+ *     place data structures (such as `struct`s and STL containers) into SHM -- which is often a
+ *     desirable capability in itself -- direct use of ipc::shm is not necessary.
+ *     - It is also entirely possible to use ipc::shm (such as to share `struct`s and STL containers) without
+ *       making calls to ipc::transport APIs.  Ultimately to share a data structure, that sits in SHM, from process
+ *       A to process B one must IPC-transmit a small piece of data (that encodes a handle to the SHM object)
+ *       between the two; any IPC technique -- not necessarily those offered in ipc::transport -- works for this.
+ *       In that sense ipc::shm is analogous to boost.interprocess's SHM facilities.
  *   - *ipc::util*: Miscellaneous items.  That said some of these are quite important and oft-used throughout other
  *     modules.  Here we single out, in particular, ipc::util::Shared_name and ipc::util::Native_handle.
  *
@@ -102,42 +113,45 @@
  *       in comments.
  *
  * The above text views Flow-IPC somewhat as a monolithic whole.  Indeed the present documentation generally treats
- * the entirety of Flow-IPC as available and usable, even though the are various sub-namespaces as shown that break
- * the monolith into cooperating modules.  When it comes to practical needs, this view is sufficient.  Really, most
+ * the entirety of Flow-IPC as available and usable, even though there are various sub-namespaces as shown that break
+ * the monolith into layered modules.  When it comes to practical needs, this view is sufficient.  Really, most
  * users will (1) start a session (using ipc::session::shm for max performance), (2) use the session to create
- * 1+ ipc::transport::Channel, (3) typically upgrade each to ipc::transport::struc::Channel immediately (a one-liner),
- * (3) use the `struc::Channel` API to send/receive messages with automatic end-to-end zero-copy performance.
- * (4) Optionally one can also access a SHM-arena for direct C++ object placement and access in SHM; the SHM arenas
- * are available from the session object.
+ * 1+ ipc::transport::Channel, (3) possibly upgrade each to ipc::transport::struc::Channel immediately (a one-liner),
+ * (4) possibly use the `struc::Channel` API to send/receive messages with automatic end-to-end zero-copy
+ * performance; or use the unstructured ipc::transport layer instead if desired.  (Alternatively to (2)-(4), one can
+ * use capnp-RPC with zero-copy via ipc::transport::struc::shm::rpc.)  (5) Optionally one can also
+ * access a SHM-arena for direct C++ object placement and access in SHM; the SHM arenas are available from
+ * the session object.
  *
- * That said, read on if you want to maintain or otherwise deeper understand Flow-IPC.  There's a deeper organization
- * of this monolith, in which one builds up the whole out of smaller parts, where we generally avoid circular
- * dependencies (A needs B, and B needs A).  Let's briefly go through the process of naming the most basic parts and
- * then showing what depends on them, and so on, until everything is listed in bottom-up order.  To wit:
+ * That said, read on if you want to maintain or otherwise more deeply understand Flow-IPC.  There's a deeper
+ * organization of this monolith, in which one builds up the whole out of smaller parts, where we generally avoid
+ * circular dependencies (A needs B, and B needs A).  Let's briefly go through the process of naming the most basic
+ * parts and then showing what depends on them, and so on, until everything is listed in bottom-up order.  To wit:
  *
  *   -# ipc::util: This contains basic, simple building blocks.  ipc::util::Shared_name is used to name various
- *      shared resource throughout Flow-IPC.  ipc::util::Native_handle is a trivial wrapper around a native handle
- *      (FD in POSIX/Linux/Unix parlance).  There are various other items which you'll note when they're mentioned.
+ *      shared resources throughout Flow-IPC.  ipc::util::Native_handle is a trivial wrapper around a native handle
+ *      (FD in POSIX/Linux/Unix parlance).  There are various other items.
  *      - Dependents: Essentially all other code routinely depends on ipc::util.
  *   -# ipc::transport, *excluding* ipc::transport::struc: This is the transport *core layer*.  Think of
- *      this as wrappers around legacy IPC transport APIs with which you may already be familiar: e.g., Unix domain
+ *      this as wrappers around native IPC transport APIs with which you may already be familiar: e.g., Unix domain
  *      sockets.  There are key concepts, including ipc::transport::Blob_sender and `Blob_receiver`
  *      (+ `Native_handle_{send|receiv}er`); and their implementations over the aforementioned specific low-level
- *      transports (Unix domain sockets, MQs as of this writing).
+ *      transports (Unix domain sockets, MQs as of this writing).  ipc::transport::Native_socket_stream, wrapping
+ *      Unix domain sockets, implements all four and has generally prominent use.
  *      - Dependents:
- *        - ipc::transport::struc.  The key point is `transport::struc::Channel`,
- *          the absolute most important object (possibly in all of Flow-IPC), adapts `transport::Channel`, including
- *          for example leveraging that an unstructured `Channel` might contain a blobs pipe *and* a native handles
- *          pipe.
+ *        - ipc::transport::struc.  The key part, `transport::struc::Channel` (the central object), adapts
+ *          `transport::Channel`, including for example leveraging the fact an unstructured `Channel` might contain
+ *          a blobs pipe *and* a native handles pipe.
  *        - ipc::session depends on ipc::transport, in that the most important function of an ipc::session::Session
  *          is to *painlessly create* (open) ipc::transport::Channel objects.  You start a session to the opposing
  *          process; and you use that session to create 1+ channels; then you speak over these channels as needed.
+ *          (It's typical to have N `Channel`s ready to go on session establishment; plus one can open more on-demand.)
  *          (*If* you want to speak using structured messages, you upgrade a `transport::Channel` to a
  *          `transport::struc::Channel`: a structured channel.)
  *   -# ipc::transport::struc: The transport *structured layer* builds on top of (1) the core layer and (2) capnp.
  *      `struc::Channel` adapts an unstructured `Channel`, allowing efficient transmission of structured messages
- *      filled-out according to user-provided capnp-generated schema(s).  At its simplest, wihout the (spoiler alert)
- *      `shm` sub-namespace, an out-message is backed by the regular heap (`new`, etc.); and a received in-message is
+ *      filled-out according to user-provided capnp-generated schema(s).  At its simplest, without the (spoiler alert)
+ *      `shm` sub-namespace, an out-message is backed by the regular heap (`new` et al); and a received in-message is
  *      a copy also backed by the regular heap of the recipient process.
  *      - Dependents: ipc::session and ipc::session::shm::arena_lend, for orthogonal reasons, use
  *        ipc::transport::struc::Channel for their internal purposes.  It's a useful guy!
@@ -145,11 +159,11 @@
  *      begins a conversation between your process and the opposing process.  Without it you'll need to worry about
  *      low-level resource naming and cleanup; with it, it's taken care-of -- just open channels and use them.
  *      Spoiler alert: the sub-namespace `shm` (see below) will add SHM capabilities.
- *      - Dependents: ipc::session::shm builds on top of this and hence depends on it.
+ *      - Dependents: ipc::session::shm builds on top of this.
  *   -# ipc::shm::stl: A couple of key facilities here enable storage of STL-compliant C++ data structures directly
- *      in SHM; e.g., a map from strings to vectors of strings and `struct`s and... etc.  You, the user, will *only*
- *      directly use this, if you need such functionality.  If you only need to send structured messages with max
- *      perf (which internally is achieved using SHM), then you need not directly mention this.
+ *      in SHM; e.g., a map from strings to vectors of strings and `struct`s and... etc.  You, the user, will only
+ *      directly use this, if you need such functionality.  If you only need to send structured messages with
+ *      zero-copy (which internally is achieved using SHM), then you need not directly mention this.
  *      - Dependents:
  *        - ipc::transport::struc::shm "eats our own dog food" by internally representing certain data
  *          structures using STL-compliant APIs, including `list<>` and `flow::util::Blob`.
@@ -158,10 +172,10 @@
  *      transmission of any capnp-schema-based message -- as long as one has certain key SHM-enabling objects, most
  *      notably a `Shm_arena`.
  *      - Dependents:
- *        - ipc::session::shm mentions `shm::Builder` and `shm::Reader` in a key convenience alias.
- *        - The bottom line is, if you use SHM-enabled sessions -- which is at least easily the most convenient way
- *          to obtain end-to-end zero-copy perf when transmitting structured messages along channels -- then
- *          ipc::transport::struc::shm shall be used, most likely without your needing to mention it or worry about it.
+ *        - ipc::session::shm mentions `shm::Builder` and `shm::Reader` in a convenience alias.
+ *        - The bottom line is, if you use SHM-enabled sessions, to obtain end-to-end zero-copy perf when
+ *          transmitting structured messages along channels, then ipc::transport::struc::shm shall be used,
+ *          without your needing to mention it or worry about it.
  *   -# ipc::shm::classic: This is a *SHM-provider* (of SHM-arenas); namely the *SHM-classic* provider.  The core item
  *      is ipc::shm::classic::Pool_arena, a "classic" single-segment (pool) SHM arena with a simple arena-allocation
  *      algorithm.
@@ -169,16 +183,19 @@
  *        required SHM engine.  Naturally in so doing it depends on ipc::shm::classic, especially `classic::Pool_arena`.
  *   -# ipc::shm::arena_lend (more specifically ipc::shm::arena_lend::jemalloc): This is the other *SHM-provider*
  *      (of SHM-arenas); namely the *SHM-jemalloc* provider.  The core item is `jemalloc::Ipc_arena`.
- *      is `Pool_arena`, a "classic" single-segment (pool) SHM arena with a simple arena-allocation algorithm.
  *      - Dependents: ipc::session::shm::arena_lend::jemalloc provides SHM-enabled sessions with this SHM-provider as
  *        the required SHM engine.  Naturally in so doing it depends on ipc::shm::arena_lend::jemalloc,
  *        especially `jemalloc::Ipc_arena`.
- *   -# ipc::session::shm: This namespace adds SHM-enabled sessions.  Namely that adds two capabilities; one, to
- *      easily get end-to-end zero-copy performance along `struc::Channel` objects opened via these sessions.  And,
- *      optionally, two: To have direct access to SHM-arena(s) in which to place and access C++ objects.
+ *   -# ipc::session::shm: This namespace adds SHM-enabled sessions.  Namely that adds two capabilities; one: to
+ *      easily get end-to-end zero-copy performance along `struc::Channel` objects opened via these sessions.  Two:
+ *      to have direct access to SHM-arena(s) in which to place and access C++ objects.
  *      - More specifically: ipc::session::shm::classic = SHM-classic-provider-enabled sessions;
  *        ipc::session::shm::arena_lend::jemalloc = SHM-jemalloc-provider-enabled sessions.
- *        - Dependents: none (inside Flow-IPC).
+ *        - Dependents: ipc::transport::struc::shm::rpc (optionally, for session establishment).
+ *   -# ipc::transport::struc::shm::rpc: capnp-RPC integration.  It builds on ipc::transport::struc::shm (notably
+ *      shm::Capnp_message_builder and shm::Capnp_message_reader); and optionally on ipc::session::shm, for
+ *      peer-process discovery and session establishment.
+ *      - Dependents: none (inside Flow-IPC).
  *
  * Again -- there's no need to understand all this, if you're just using Flow-IPC in the expected mainstream ways.
  * Nevertheless it could be a useful, if wordy, map to the building blocks of Flow-IPC and how they interact.
@@ -188,37 +205,39 @@
  * The above describes Flow-IPC as a whole.  Generally we recommend a distribution of Flow-IPC which includes all
  * the pieces, to be used at will.  That said, for reasons outside our scope here, this project is actually distributed
  * in a few parts, each of which is a library with a set of header files.  (The generated documentation is created
- * from all of them together, and therefore various comments aren't particularly shy about referring to items across
- * the boundaries between those parts.)  These parts (libraries) are:
+ * from all of them together, and therefore various comments aren't shy about referring to items across
+ * the boundaries between those parts, in any direction.)  These parts (libraries) are:
  *
  *   - `ipc_core`: Contains: ipc::util, ipc::transport (excluding ipc::transport::struc).
  *   - `ipc_transport_structured`: Contains: ipc::transport::struc (excluding ipc::transport::struc::shm).
  *   - `ipc_session`: Contains: ipc::session (excluding ipc::session::shm).
  *   - `ipc_shm`: Contains: ipc::shm::stl, ipc::transport::struc::shm
- *                          (including ipc::transport::struc::shm::classic but excluding all other
- *                          such sub-namespaces),
+ *                          (including ipc::transport::struc::shm::classic and ipc::transport::struc::shm::rpc
+ *                          but excluding all other such sub-namespaces),
  *                          ipc::shm::classic + ipc::session::shm::classic.
  *   - `ipc_shm_arena_lend`: Contains: ipc::transport::struc::shm::arena_lend,
  *                                     ipc::shm::arena_lend + ipc::session::shm::arena_lend.
  *
  * The dependencies between these are as follows:
- *   - `ipc_core` <- each of the others;
- *   - `ipc_transport_structured` <- `ipc_session` <- `ipc_shm` <- `ipc_shm_arena_lend`.
- *     - (There are are, e.g., direct dependencies redundant to the above, such as how `ipc_shm_arena_lend`
- *       depends on `ipc_transport_structured` in certain key internal impl details.  We are not pointing out every
- *       direct dependency here, leaving it out as long as it's implied by another indirect dependency such
- *       as `ipc_shm_arena_lend` indirectly depending on `ipc_transport_structured` via several others. )
+ *   - `ipc_core` <- `ipc_transport_structured` <- `ipc_session` <- `ipc_shm` <- `ipc_shm_arena_lend`.
+ *     - (There are, e.g., direct dependencies redundant to the above, such as how `ipc_shm_arena_lend`
+ *       depends on `ipc_transport_structured` in certain key internal impl details.)
  *
  * Each one, in the source code, is in a separate top-level directory; and generates a separate static library.
  * However, their directory structures -- and accordingly the namespace trees -- overlap in naming, which
  * manifests itself when 2 or more of the sub-components are installed together.  For example `ipc_session`
  * places `ipc/session` into the `#include` tree; and `ipc_shm` places `ipc/session/shm/classic` within that.
  *
+ * To reiterate: If, as recommended, one installs all of Flow-IPC, then everything is exported into one
+ * directory (and namespace) structure together; and to the user the origin of each thing w/r/t the aforementioned
+ * parts/libraries probably will not much matter.
+ *
  * Relationship with Flow and Boost
  * --------------------------------
  * Flow-IPC requires Flow and Boost, not only for internal implementation purposes but also in some of its APIs.
- * For example, `flow::log` is the assumed logging system, and `flow::Error_code` and related conventions are used
- * for error reporting; and `boost::interprocess` and `boost::thread` APIs may be exposed at times.
+ * For example, `flow::log` is the assumed logging system, and `flow::Error_code` -- which is
+ * `boost::system::error_code` -- and related conventions are used for error reporting; and `boost::interprocess`
+ * and `boost::thread` APIs may be exposed at times.
  *
  * Moreover, Flow-IPC shares Flow "DNA" in terms of coding style, error, logging, documentation, etc., conventions.
  * Flow-IPC and Flow itself are also more loosely inspired by Boost "DNA."  (For example: `snake_case` for identifier
@@ -228,14 +247,14 @@
  * Documentation / Doxygen
  * -----------------------
  * All code in the project proper follows a high standard of documentation, almost solely via comments therein
- * (plus a guided Manual in manual/....dox.txt files, also as Doxygen-read comments).
+ * (plus a guided Manual in manual/....dox.txt files, also encoded as Doxygen-read comments).
  * The standards and mechanics w/r/t documentation are entirely inherited from Flow.  Therefore, see the
  * `namespace flow` doc header's "Documentation / Doxygen" section.  It applies
  * verbatim here (within reason).  (Spoiler alert: Doc header comments on most entities (classes, functions, ...) are
  * friendly to doc web page generation by Doxygen.  Doxygen is a tool similar to Javadoc.)
  *
  * The only exception to this is the addition of the aforementioned guided Manual as well which Flow lacks as of
- * this writing (for the time being).
+ * this writing.
  *
  * Using Flow-IPC modules
  * ------------------------
@@ -243,16 +262,16 @@
  * definitely all existing ones as of this writing.
  *
  * ### Error reporting ###
- * The standards and mechanics w/r/t error reporting are entirely
- * inherited from Flow.  Therefore, see the `namespace flow` doc header's "Error reporting" section.  It applies
- * verbatim (within reason) here.
+ * The standards and mechanics w/r/t error reporting are entirely inherited from Flow.  Therefore, see the
+ * `namespace flow` doc header's "Error reporting" section.  It applies verbatim (within reason) here.
  *
  * ### Logging ###
  * We use the Flow log module, in `flow::log` namespace, for logging.  We are just a consumer, but this does mean
  * the Flow-IPC user must supply a `flow::log::Logger` into various APIs in order to enable logging.  (Worst-case,
- * passing `Logger == null` will make it log nowhere.)  See `flow::log` docs.  Spoiler alert: You can hook it up to
+ * passing a null `Logger*` will make it log nowhere.)  See `flow::log` docs.  Spoiler alert: You can hook it up to
  * whatever logging output/other logging API you desire, or it can log for you in certain common ways including console
- * and rotated files.
+ * and rotated files.  Again, though, many users will bypass logging entirely by supplying
+ * `Logger* logger_ptr = nullptr` to relevant APIs.
  *
  * @internal
  *
@@ -262,11 +281,6 @@
  * mechanics for all such aspects (including source tree org, code style, doc style) are entirely
  * inherited from Flow.  Therefore, see the `namespace flow` doc header: its analogous sections
  * apply verbatim here (within reason).
- *
- * To-dos and future features
- * --------------------------
- * Firstly see `namespace flow` doc header's similar section.  There's a good chance each of those to-dos applies
- * to Flow-IPC as well.  Further general to-dos should be added right here as needed over time.
  */
 namespace ipc
 {
@@ -337,7 +351,7 @@ enum class Log_component
  * string representation as used in log output and verbosity config.  Flow-IPC user specifies, albeit very rarely,
  * when configuring their program's logging via `flow::log::Config::init_component_names()`.
  *
- * As an Flow-IPC user, you can informally assume that if the component `enum` member is called `S_SOME_NAME`, then
+ * As a Flow-IPC user, you can informally assume that if the component `enum` member is called `S_SOME_NAME`, then
  * its string counterpart in this map will be auto-computed to be `"SOME_NAME"` (optionally prepended with a
  * prefix as supplied to `flow::log::Config::init_component_names()`).  This is achieved via `flow::log` macro magic.
  *

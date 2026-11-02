@@ -47,9 +47,7 @@ namespace ipc::transport::sync_io
  *
  * @see transport::Native_socket_stream and util::sync_io doc headers.  The latter describes the general pattern which
  *      we implement here; it also contrasts it with the async-I/O pattern, which the former implements.
- *      In general we recommend you use a transport::Native_socket_stream rather than a `*this` --
- *      but you may have particular needs (summarized in util::sync_io doc header) that would make you decide
- *      otherwise.
+ *      Which of the two to use depends on your needs, as summarized in the util::sync_io doc header.
  *
  * ### Quick note on naming ###
  * Notes for transport::Native_socket_stream apply.

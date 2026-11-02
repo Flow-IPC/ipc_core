@@ -19,11 +19,13 @@
 #include "ipc/util/process_credentials.hpp"
 #include <flow/error/error.hpp>
 #include <flow/common.hpp>
+#include <boost/filesystem/fstream.hpp>
 #include <boost/lexical_cast.hpp>
 #include <cassert>
 #include <cerrno>
 #include <ostream>
 #include <string>
+#include <unistd.h>
 
 namespace ipc::util
 {
@@ -88,6 +90,12 @@ std::string Process_credentials::process_invoked_as(Error_code* err_code) const
   path cmd_line_path{"/proc"};
   cmd_line_path /= lexical_cast<path>(process_id());
   cmd_line_path /= "cmdline";
+
+  /* @todo Below in a couple places we take errno as the reason for an ifstream failure.  That is not guaranteed by the
+   * standard; but in practice both libstdc++ and libc++ (whose filebuf uses fopen()/fread()) leave the libc errno
+   * in place.  If errno were somehow 0, we'd emit a success code alongside an empty result.  Nicer: set errno = 0
+   * before each op; if still 0 upon failure emit a dedicated util:: error code (cousin of
+   * transport::error::Code::S_MQ_BIPC_MISC_LIBRARY_ERROR) -- which requires a util:: error table. */
 
   /* This weird "file" (I believe it's really the kernel just pumping out these characters, as we read, as opposed
    * to anything actually being stored on a drive) is argv[0], argv[1], ..., right in a row, each one NUL-terminated.
