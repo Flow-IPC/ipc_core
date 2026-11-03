@@ -167,7 +167,7 @@ namespace ipc::transport
  * A moved-from Native_socket_stream is as-if default-constructed; therefore it enters NULL state.
  *
  * (*) There is, in fact, another way -- one could call it way 2a.  It is just like way 2; except that -- upon
- * obtaining a pre-connected `Native_handle` (one of a pair) -- one first constructs a "`sync_io` core,"
+ * obtaining a pre-connected `Native_handle` (one of a pair) -- one first constructs a `sync_io` "core,"
  * namely a sync_io::Native_socket_stream object, using the *exact* same signature (which takes a `Logger*`,
  * a nickname, and the pre-connected `Native_handle`).  Then, one constructs a `*this` by `move()`ing that
  * guy into the `sync_io`-core-adopting ctor.  The result is exactly the same.  (Internally, whether one uses way 1

@@ -467,7 +467,7 @@ public:
                size_t* total_rcvd_bytes_or_null = nullptr);
 
   /**
-   * Scans every in-message slot in range [`start_idx`, `this->n_used()); performantly rearranges this range
+   * Scans every in-message slot in range [`start_idx`, `this->n_used()`); performantly rearranges this range
    * so that all in-messages for which `is_unused_func(M) == false` (if any + without mutual order changing) are
    * at the start of the range, followed by the other ones (if any; no ordering guarantees); and adjusts
    * (no-op or decreases) n_used() by the # of the `is_unused_func(M) == true` slots detected.

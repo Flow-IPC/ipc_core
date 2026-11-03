@@ -1262,7 +1262,7 @@ public:
  *      with modern Linuxes.  Otherwise... Generic_msg_batch_in to the rescue.
  *
  * @tparam Msg_resource_t
- *         See the above section "How to use `Msg_resource`".
+ *         See the above section about using #Msg_resource.
  * @tparam NO_HNDLS
  *         To be set to `false` if and only if you shall be trafficking in `Native_handle`s (and blobs) as opposed to
  *         mere blobs.  In other words, `true` means the following method shall not be instantiated:

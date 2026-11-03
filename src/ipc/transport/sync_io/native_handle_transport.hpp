@@ -57,7 +57,7 @@ namespace ipc::transport::sync_io
  * ### Thread safety ###
  * For a given `*this`, it is not required to be safe for a non-`const` operation to be invoked concurrently with
  * another operation.  That's typical.  *In addition* -- and this is significant -- the following operation shall
- * count as a "non-`const` operation" (as opposed to the usual definition which is simply non-`const` methods and
+ * count as a non-`const` operation (as opposed to the usual definition which is simply non-`const` methods and
  * related free functions):
  *   - `(*on_active_ev_func)()`, where `on_active_ev_func` is the so-named argument passed into an invocation of
  *     the `Event_wait_func` the user registers via start_send_native_handle_ops().
