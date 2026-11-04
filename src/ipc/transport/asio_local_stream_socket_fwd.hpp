@@ -29,6 +29,9 @@
  * Additional (versus boost.asio) APIs for advanced work with local (Unix domain) stream and connected-datagram
  * sockets including transmission of native handles through them; and peer process credentials acquisition.
  *
+ * @note Naming: "stream" in `asio_local_stream_socket` means *connected* local socket -- both
+ *       #Protocol_byte_stream (`SOCK_STREAM`) and #Protocol_pkt_stream (`SOCK_SEQPACKET`) -- not the former only.
+ *
  * ### Rationale ###
  * These exist, in the first place, because internally such things as Native_socket_stream needed them for
  * impl purposes.  However they are of general usefulness publicly and hence are not tucked away under `detail/`.
