@@ -26,6 +26,9 @@
 #include <flow/log/config.hpp>
 #include <boost/interprocess/shared_memory_object.hpp>
 #include <boost/move/make_unique.hpp>
+#include <cassert>
+#include <cstdint>
+#include <utility>
 
 namespace ipc::transport
 {
@@ -50,6 +53,12 @@ public:
   /**
    * Persistent_mq_handle holder that takes a deleter lambda on construction, intended here to perform additional deinit
    * steps in addition to closing the #Mq by deleting it.  Used by ensure_unique_peer() machinery.
+   *
+   * ### Rationale: Why `unique_ptr` and not `boost::scope::unique_resource`? ###
+   * The latter (cf. its use as util::Own_native_handle) would store the #Mq inline (no heap alloc) and skip the
+   * type-erased deleter.  However: the alloc and erasure are one-time costs at stream-object construction -- nowhere
+   * near a hot path -- and `Blob_stream_mq_sender_impl`/`_receiver_impl` rely on the null-pointer idiom
+   * (null <=> pipe hosed/closed) which `unique_ptr` provides naturally.  So the simpler thing stays.
    */
   using Auto_closing_mq = boost::movelib::unique_ptr<Mq, Function<void (Mq*)>>;
 
@@ -94,7 +103,7 @@ public:
    * `mq` is untouched if null is returned.
    *
    * @param logger_ptr
-   *        Logger to use subsequently. Errors are logged as WARNING; otherwise nothing of INFO or higher verbosity
+   *        Logger to use subsequently.  Errors are logged as WARNING; otherwise nothing of INFO or higher verbosity
    *        is logged.
    * @param mq
    *        See above.
@@ -107,6 +116,24 @@ public:
    */
   static Auto_closing_mq ensure_unique_peer(flow::log::Logger* logger_ptr, Mq&& mq, bool snd_else_rcv,
                                             Error_code* err_code);
+
+  /**
+   * Name of sentinel SHM pool created by ensure_unique_peer() and potentially cleaned up by remove_persistent().
+   *
+   * ### Rationale: Why public? ###
+   * This class is internal-use (in detail/), so this is not a question of exposing something (potentially) undue
+   * to the user.  As for exposing it to our impl layer: Truthfully, the precipitating reason to have made this
+   * public was that it is convenient for certain unit-tests.  In and of itself that is not sufficient -- we
+   * prefer not to make style/design compromises for easier testing -- but in this case we feel it is reasonable
+   * to expose this informationally to the impl layer anyway, such as for logging or something.  So: it is fine.
+   *
+   * @param mq_name
+   *        `mq.absolute_name()`.  See ensure_unique_peer().
+   * @param snd_else_rcv
+   *        See ensure_unique_peer().
+   * @return Absolute name.
+   */
+  static Shared_name mq_sentinel_name(const Shared_name& mq_name, bool snd_else_rcv);
 
 protected:
   // Types.
@@ -142,20 +169,6 @@ protected:
     /// Sentinel: not a valid value.  May be used to, e.g., ensure validity of incoming value of allegedly this type.
     S_END_SENTINEL
   }; // enum class Control_cmd
-
-private:
-  // Methods.
-
-  /**
-   * Name of sentinel SHM pool created by ensure_unique_peer() and potentially cleaned up by remove_persistent().
-   *
-   * @param mq_name
-   *        `mq.absolute_name()`.  See ensure_unique_peer().
-   * @param snd_else_rcv
-   *        See ensure_unique_peer().
-   * @return Absolute name.
-   */
-  static Shared_name mq_sentinel_name(const Shared_name& mq_name, bool snd_else_rcv);
 }; // class Blob_stream_mq_base_impl
 
 // Template implementations.
@@ -221,7 +234,6 @@ typename Blob_stream_mq_base_impl<Persistent_mq_handle>::Auto_closing_mq
                                                                      Error_code* err_code)
 {
   using util::remove_persistent_shm_pool;
-  using flow::error::Runtime_error;
   using flow::log::Sev;
   using boost::system::system_category;
   using boost::movelib::make_unique;
@@ -276,11 +288,15 @@ typename Blob_stream_mq_base_impl<Persistent_mq_handle>::Auto_closing_mq
                      "[" << native_code_raw << "]; bipc error_code_t enum->int "
                      "[" << int(bipc_err_code_enum) << "]; latter==already-exists = [" << is_dupe_error << "]; "
                      "message = [" << exc.what() << "].");
-    *err_code = is_dupe_error ? Error_code(snd_else_rcv
+    *err_code = is_dupe_error ? Error_code{snd_else_rcv
                                              ? error::Code::S_BLOB_STREAM_MQ_SENDER_EXISTS
-                                             : error::Code::S_BLOB_STREAM_MQ_RECEIVER_EXISTS)
-                              : Error_code(errno, system_category());
-    return Auto_closing_mq();
+                                             : error::Code::S_BLOB_STREAM_MQ_RECEIVER_EXISTS}
+                                /* The following logic borrows from the op_with_possible_bipc_mq_exception()s
+                                 * of this world. */
+                              : ((native_code_raw == 0)
+                                   ? Error_code{error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR}
+                                   : Error_code{native_code_raw, system_category()});
+    return {};
   } // catch (bipc::interprocess_exception)
   // Got here: OK, no dupe, no other problem.
   err_code->clear();
@@ -288,7 +304,7 @@ typename Blob_stream_mq_base_impl<Persistent_mq_handle>::Auto_closing_mq
   /* Now take over their MQ handle.  As noted above set up the auto-closing extra behavior to keep above scheme working,
    * if they want to reuse the name to make another MQ later (although informally we don't recommend it -- much
    * like, conceptually, binding a TCP socket to the same port soon after closing another can bring problems). */
-  return Auto_closing_mq(new Mq(std::move(mq)), // Now we own the MQ handle.
+  return Auto_closing_mq{new Mq{std::move(mq)}, // Now we own the MQ handle.
                          [get_logger, get_log_component, snd_else_rcv, sentinel_name](Mq* mq_ptr)
   {
     const auto other_sentinel_name = mq_sentinel_name(mq_ptr->absolute_name(), !snd_else_rcv);
@@ -304,14 +320,14 @@ typename Blob_stream_mq_base_impl<Persistent_mq_handle>::Auto_closing_mq
      * and ignore any errors below. Nothing we can do anyway.) */
     Error_code sink;
 
-    // Blob_stream_mq_*er<Mq>(Mq(mq.absolute_name())) would fail until we do:
+    // Blob_stream_mq_*er<Mq>{Mq{mq.absolute_name()}} would fail until we do:
 
     remove_persistent_shm_pool(nullptr, sentinel_name, &sink);
     remove_persistent_shm_pool(nullptr, other_sentinel_name, &sink);
 
-    // Mq(Open_only, mq.absolute_name()) would now succeed.  Mq(Create_only, mq.absolute_name()) would now fail.
+    // Mq{Open_only, mq.absolute_name()} would now succeed.  Mq{Create_only, mq.absolute_name()} would now fail.
     Mq::remove_persistent(nullptr, mq_ptr->absolute_name(), &sink);
-    // Mq(Open_only, mq.absolute_name()) would now fail.  Mq(Create_only, mq.absolute_name()) would now succeed.
+    // Mq{Open_only, mq.absolute_name()} would now fail.  Mq{Create_only, mq.absolute_name()} would now succeed.
 
     /* Discussion:
      *   - The order (sentinels versus MQ itself) is ~reversed compared to the creation, where MQ is made first.
@@ -337,7 +353,7 @@ typename Blob_stream_mq_base_impl<Persistent_mq_handle>::Auto_closing_mq
     // Lastly... don't forget:
 
     delete mq_ptr;
-  }); // return make_unique<Mq>()
+  }};
 } // Blob_stream_mq_base_impl::ensure_unique_peer()
 
 template<typename Persistent_mq_handle>
@@ -351,7 +367,7 @@ Shared_name Blob_stream_mq_base_impl<Persistent_mq_handle>::mq_sentinel_name(con
   // That was the standard stuff.  Now the us-specific stuff:
   sentinel_name /= Mq::S_RESOURCE_TYPE_ID; // Differentiate between different MQ types.
   sentinel_name /= "sentinel";
-  sentinel_name += String_view(snd_else_rcv ? "Snd" : "Rcv");
+  sentinel_name += String_view{snd_else_rcv ? "Snd" : "Rcv"};
   assert(mq_name.absolute());
   sentinel_name += mq_name; // The MQ name -- ALL of it -- is completely in here (starting with separator).
 

@@ -25,6 +25,9 @@
 #include "ipc/util/sync_io/sync_io_fwd.hpp"
 #include "ipc/util/sync_io/asio_waitable_native_hndl.hpp"
 #include "ipc/transport/error.hpp"
+#include <boost/noncopyable.hpp>
+#include <cassert>
+#include <utility>
 
 namespace ipc::transport::sync_io
 {
@@ -38,10 +41,10 @@ namespace ipc::transport::sync_io
  * @see transport::Native_socket_stream_acceptor -- generally all notes, other than the mechanism of how
  *      async_accept() reports readiness, in that doc header apply here.
  *
- * As is generally the case when choosing `sync_io::X` versus `X`, we recommend using `X` due to it being easier.
- * In this particular case (see below) there is no perf benefit to using `sync_io::X`, either, so the only reason
- * to use `sync_io::X` in this case would be because you've got an old-school reactor event loop with
- * a `poll()` or `epoll_wait()`, in which case the `sync_io` API may be easier to integrate.
+ * In this particular case (see below) `sync_io::X` is internally built on `X`, so it does not avoid background
+ * threads and offers no perf benefit.  So the reason to use `sync_io::X` here would be that you've got an
+ * old-school reactor event loop with a `poll()` or `epoll_wait()`, in which case the `sync_io` API may be easier
+ * to integrate.  Otherwise `X` does the same job with a smaller API.
  *
  * ### Internal implementation ###
  * Normally this would not be in the public docs for this public-use class, but indulge us.
@@ -93,7 +96,7 @@ public:
    *        See #Async_io_obj API.
    */
   explicit Native_socket_stream_acceptor(flow::log::Logger* logger_ptr, const Shared_name& absolute_name,
-                                         Error_code* err_code = 0);
+                                         Error_code* err_code = nullptr);
 
   /**
    * All notes from #Async_io_obj API counterpart API apply, except that no completion handler(s) are fired,
@@ -166,7 +169,8 @@ public:
    *        See #Async_io_obj API.
    * @param on_done_func
    *        See #Async_io_obj API.
-   * @return `true` if op started; `false` if one is already in progress, and therefore this one is ignored (no-op).
+   * @return `true` if op started; `false` if one is already in progress, or start_accept_ops() has not yet been
+   *         invoked, and therefore this call is ignored (no-op).
    */
   template<typename Task_err>
   bool async_accept(Peer* target_peer, Task_err&& on_done_func);
@@ -198,7 +202,7 @@ private:
   flow::util::Task_engine m_ev_hndl_task_engine_unused;
 
   /**
-   * Read-end of IPC-pipe used by `*this` user do detect that an acceptability-wait has completed.  The signal byte
+   * Read-end of IPC-pipe used by `*this` user to detect that an acceptability-wait has completed.  The signal byte
    * is read out of #m_ready_reader, making it empty again (the steady-state before the next time acceptability-wait
    * begins, and a byte is written to it making it non-empty).
    *
@@ -247,6 +251,14 @@ template<typename Task_err>
 bool Native_socket_stream_acceptor::async_accept(Peer* target_peer, Task_err&& on_done_func)
 {
   using util::Task;
+
+  if (m_ev_wait_func.empty())
+  {
+    FLOW_LOG_WARNING("Acceptor [" << *this << "]: Async-accept requested, but start_accept_ops() has not been "
+                     "invoked.  Probably a user bug, but it is not for us to judge.  Ignoring.");
+    return false;
+  }
+  // else
 
   if (!m_on_done_func_or_empty.empty())
   {
@@ -318,15 +330,15 @@ bool Native_socket_stream_acceptor::replace_event_wait_handles(const Create_ev_w
   // else
 
   FLOW_LOG_INFO("Acceptor [" << *this << "]: Replacing event-wait handles (probably to replace underlying "
-                "execution context without outside event loop's boost.asio Task_engine or similar).");
+                "execution context with outside event loop's boost.asio Task_engine or similar).");
 
   assert(m_ev_wait_hndl.is_open());
 
-  Native_handle saved(m_ev_wait_hndl.release());
+  Native_handle saved{m_ev_wait_hndl.release()};
   m_ev_wait_hndl = create_ev_wait_hndl_func();
   m_ev_wait_hndl.assign(saved);
 
   return true;
-} // Native_socket_stream::Impl::replace_event_wait_handles()
+} // Native_socket_stream_acceptor::replace_event_wait_handles()
 
 } // namespace ipc::transport::sync_io

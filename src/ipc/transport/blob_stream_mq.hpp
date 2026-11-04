@@ -19,6 +19,7 @@
 #pragma once
 
 #include "ipc/transport/detail/blob_stream_mq_impl.hpp"
+#include "ipc/transport/batch.hpp"
 
 namespace ipc::transport
 {
@@ -70,7 +71,7 @@ public:
    *        various.
    */
   static void remove_persistent(flow::log::Logger* logger_ptr, const Shared_name& name,
-                                Error_code* err_code = 0);
+                                Error_code* err_code = nullptr);
 
   /**
    * Forwards to Persistent_mq_handle::for_each_persistent().  In practice this exists merely to enable
@@ -85,6 +86,27 @@ public:
   template<typename Handle_name_func>
   static void for_each_persistent(const Handle_name_func& handle_name_func);
 }; // class Blob_stream_mq_base
+
+/// Similar to Blob_stream_mq_base but contains non-class-template-parameter-dependent Blob_stream_mq_receiver items.
+class Blob_stream_mq_receiver_base
+{
+public:
+  // Types.
+
+  /**
+   * Implements Blob_receiver::Blob_batch_in and sync_io::Blob_receiver::Blob_batch_in concept API.
+   *
+   * @internal
+   * Impl-wise: As there is no native batch-receiving support for any of the Persistent_mq_handle concrete
+   * impls in any relevant OS, that we know of as of this writing, the proper/only choice for
+   * `Blob_batch_in` is Generic_msg_batch_in.  It is a Msg_batch_in concept impl as required but essentially
+   * just stores a `vector` of target-message slots into which a `*this` can place results message-by-message
+   * via a series of single-message receives.  E.g., sync_io::Native_socket_stream_impl does the same thing,
+   * when the OS does not provide native batch-receiving (or we choose to disable it at compile-time).
+   */
+  template<typename Msg_resource>
+  using Blob_batch_in = Generic_msg_batch_in<Msg_resource>;
+}; // class Blob_stream_mq_receiver_base
 
 // Template implementations.
 

@@ -19,6 +19,7 @@
 #pragma once
 
 #include "ipc/common.hpp"
+#include <iosfwd>
 
 /**
  * Namespace containing the ipc::transport module's extension of boost.system error conventions, so that that API
@@ -42,7 +43,7 @@
  * "factored out" into Flow.  Update: I (ygoldfel) took a look at it for another project, and so far no obvious
  * de-boiler-plate ideas come to mind.  Ideally the inputs are: (1) an `enum` with the codes, like error::Code;
  * (2) an `int`-to-`string` message table function, for log messages; and (3) a brief `const char*` identifying the
- * code set, for log messages.  The rest is the boiler-plate, but all of it seems to either already be accepably
+ * code set, for log messages.  The rest is the boiler-plate, but all of it seems to either already be acceptably
  * brief, and where something isn't quite so, I can't think of any obvious way to factor it out.
  * Of course a macro-based "meta-language" is always a possibility, as we did in `flow::log`, but in this case it
  * doesn't seem worth it at all.
@@ -64,19 +65,19 @@ constexpr int S_CODE_LOWEST_INT_VALUE = 1;
  * @internal
  *
  * When you add a value to this `enum`, also add its description to
- * error.cpp’s Category::message().  This description must be identical to the
+ * error.cpp's Category::message().  This description must be identical to the
  * description in the /// comment below, or at least as close as possible.  This mirrors Flow's convention.
  *
  * When you add a value to this `enum`, also add its symbolic representation to error.cpp's
- * error.cpp's Category::code_symbol().  This string must be identical to the symbol, minus the `S_`;
- * e.g., Code::S_INVALID_ARGUMENT => `"INVALID_ARGUMENT".  This enables the consistent and human-friendly
+ * Category::code_symbol().  This string must be identical to the symbol, minus the `S_`;
+ * e.g., Code::S_INVALID_ARGUMENT => `"INVALID_ARGUMENT"`.  This enables the consistent and human-friendly
  * serialization `<<` and deserialization `>>` of a Code w/r/t standard streams.
  *
  * If, when adding a new revision of the code, you add a value to this `enum`, add it to the end, but ahead of
  * Code::S_END_SENTINEL.
  * If, when adding a new revision of the code, you deprecate a value in this `enum`, do not delete
  * it from this `enum`.  Instead mark it as deprecated here and then remove it from
- * Ipc_transport_category::message().
+ * Category::message().
  *
  * Errors that indicate apparent logic bugs (in other words, assertions that we were too afraid
  * to write as actual `assert()`s) should be prefixed with `S_INTERNAL_ERROR_`, and their messages
@@ -87,7 +88,7 @@ enum class Code
   /// Will not send message: local user already ended sending via API marking this.
   S_SENDS_FINISHED_CANNOT_SEND = S_CODE_LOWEST_INT_VALUE,
 
-  /// Will not receive message: either opposing user sent graceful-close via API.
+  /// Will not receive message: opposing user sent graceful-close via API.
   S_RECEIVES_FINISHED_CANNOT_RECEIVE,
 
   /**
@@ -166,6 +167,18 @@ enum class Code
   /// A sync_io operation could not immediately complete; it will complete contingent on active async-wait event(s).
   S_SYNC_IO_WOULD_BLOCK,
 
+  /// Unable to receive incoming traffic: Opposing side sent invalid internal per-message header.
+  S_LOW_LVL_INTERNAL_PROTOCOL_INVALID_HEADER,
+
+  /// The opposing peer process involved in an IPC channel is currently reported by the OS as no longer running.
+  S_PEER_PROCESS_NO_LONGER_EXISTS,
+
+  /**
+   * Low-level boost.ipc.shm: boost.interprocess emitted miscellaneous library exception sans a system code;
+   * a WARNING message at throw-time should contain all possible details.
+   */
+  S_SHM_BIPC_MISC_LIBRARY_ERROR,
+
   /// SENTINEL: Not an error.  This Code must never be issued by an error/success-emitting API; I/O use only.
   S_END_SENTINEL
 }; // enum class Code
@@ -202,7 +215,7 @@ Error_code make_error_code(Code err_code);
  * @return `is`.
  */
 std::istream& operator>>(std::istream& is, Code& val);
-// @todo - `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
+// @todo `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
 
 /**
  * Serializes a transport::error::Code to a standard output stream.  The output string is compatible with the reverse
@@ -231,7 +244,7 @@ std::istream& operator>>(std::istream& is, Code& val);
  * @return `os`.
  */
 std::ostream& operator<<(std::ostream& os, Code val);
-// @todo - `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
+// @todo `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
 
 } // namespace ipc::transport::error
 
@@ -249,8 +262,8 @@ namespace boost::system
 /**
  * Ummm -- it specializes this `struct` to -- look -- the end result is boost.system uses this as
  * authorization to make `enum` `Code` convertible to `Error_code`.  The non-specialized
- * version of this sets `value` to `false`, so that random arbitary `enum`s can't just be used as
- * `Error_code`s.  Note that this is the offical way to accomplish that, as (confusingly but
+ * version of this sets `value` to `false`, so that random arbitrary `enum`s can't just be used as
+ * `Error_code`s.  Note that this is the official way to accomplish that, as (confusingly but
  * formally) documented in boost.system docs.
  */
 template<>

@@ -22,6 +22,9 @@
 #include "ipc/util/shared_name_fwd.hpp"
 #include <flow/common.hpp>
 #include <boost/array.hpp>
+#include <boost/asio/readable_pipe.hpp>
+#include <boost/asio/writable_pipe.hpp>
+#include <iosfwd>
 
 namespace ipc::util
 {
@@ -79,28 +82,30 @@ extern const fs::path IPC_KERNEL_PERSISTENT_RUN_DIR;
  * that is documented to throw `bipc::interprocess_exception` on failure; if indeed it throws the utility
  * emits an error in the Flow error-reporting style.  On error it logs WARNING with all available details.
  *
+ * Only `bipc::interprocess_exception` is caught.  Any other exception is not caught.
+ *
  * ### Background ###
  * boost.interprocess has a number of operations that are documented to throw the aforementioned exception
  * on error -- without any alternate way of reporting an error such as through an out-arg.  Moreover the
  * exception itself is not any standard runtime-exception type but rather a custom thing.  This is somewhat
  * annoying; and various parts of ::ipc want to emit errors in a consistent way.  That does *not* mean
- * we must only emit some `transport::error::Code::*` or whatever, but we should emit a native-based #Error_code
- * if applicable, either as an out-arg or as a `flow::error::Runtime_error` wrapping it, or indeed one of our
- * own codes otherwise (or if it is more applicable).
+ * we must only emit some `transport::error::Code::*` or whatever, but we should emit (either as an out-arg or
+ * as a `flow::error::Runtime_error` wrapping it) a native-based #Error_code if applicable, or indeed one of our
+ * own codes otherwise.
  *
  * So this helper standardizes that stuff.
  *
  * @tparam Func
  *         Functor that takes no args and returns nothing.
  * @param logger_ptr
- *        Logger to use for logging subsequently.
+ *        Logger to use for logging subsequently (null OK as usual).
  * @param err_code
  *        `err_code` as-if passed to our API.  `*err_code` shall be set if not null depending on success/failure;
  *        if null and no problem, won't throw; if null and problem will throw `Runtime_error` containing a truthy
- *        #Error_code.  That's the usual Flow-style error emission semantics.
+ *        `Error_code`.  Those are the usual Flow-style error emission semantics.
  * @param misc_bipc_lib_error
  *        If `func` throws, and we are unable to suss out the system error that caused it, then emit
- *        this value.  E.g.: transport::Code::S_MQ_BIPC_MISC_LIBRARY_ERROR makes sense if creating
+ *        this value.  E.g.: transport::error::Code::S_MQ_BIPC_MISC_LIBRARY_ERROR makes sense if creating
  *        a `bipc::message_queue`; or a similar one for SHM-related parts of `bipc`; etc.
  * @param context
  *        Description for logging of the op being attempted, in case there is an error.  Compile-time-known strings
@@ -165,6 +170,9 @@ Shared_name build_conventional_non_session_based_shared_name(const Shared_name& 
  * There is no error condition.  If `persistent_obj_dev_dir_path` does not exist, or we lack permissions to
  * look therein, it merely means it cannot contain any relevant items; hence `handle_name_func()` is not invoked.
  *
+ * If `handle_name_func()` throws, this function does not go through any remaining entries; the exception
+ * is not caught.
+ *
  * @tparam Handle_name_func
  *         See, e.g., shm::classic::Pool_arena::for_each_persistent().
  * @param persistent_obj_dev_dir_path
@@ -180,7 +188,7 @@ void for_each_persistent_impl(const fs::path& persistent_obj_dev_dir_path, const
  * writing) to avoid a little circular-inter-component-dependent problem: Posix_mq_handle::for_each_persistent()
  * needs us; but accessing `Pool_arena` would mean `ipc_core` Flow-IPC sub-component needing `ipc_shm`
  * sub-component as a dependency... but the reverse is already naturally the case.  See ::ipc namespace doc header
- * for discussion of the component hierarchy and how we prefer to avoid circular dependencies therein.
+ * for discussion of the component hierarchy, and how we prefer to avoid circular dependencies therein.
  *
  * @tparam Handle_name_func
  *         See above.

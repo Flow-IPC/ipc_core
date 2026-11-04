@@ -19,6 +19,7 @@
 #pragma once
 
 #include "ipc/transport/protocol_negotiator.hpp"
+#include "ipc/transport/blob_transport_stats.hpp"
 #include "ipc/transport/detail/blob_stream_mq_impl.hpp"
 #include "ipc/util/sync_io/asio_waitable_native_hndl.hpp"
 #include "ipc/util/sync_io/detail/timer_ev_emitter.hpp"
@@ -28,7 +29,15 @@
 #include <flow/util/blob.hpp>
 #include <flow/error/error.hpp>
 #include <boost/move/make_unique.hpp>
+#include <boost/asio/connect_pipe.hpp>
+#include <boost/noncopyable.hpp>
 #include <queue>
+#include <cassert>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <type_traits>
+#include <utility>
 
 namespace ipc::transport::sync_io
 {
@@ -46,8 +55,8 @@ namespace ipc::transport::sync_io
  *
  * ### Impl design ###
  * Here's the thing.  All the `_sender` and `_receiver` stuff historically was written first in
- * what is now sync_io::Native_socket_stream::Impl.  Next, this MQ stuff was written to implement (basically) the same
- * concepts.  So everything is explained, first, in sync_io::Native_socket_stream::Impl.  Next I (ygoldfel)
+ * what is now sync_io::Native_socket_stream_impl.  Next, this MQ stuff was written to implement (basically) the same
+ * concepts.  So everything is explained, first, in sync_io::Native_socket_stream_impl.  Next I (ygoldfel)
  * wrote each of `*this` and Blob_stream_mq_receiver_impl.  Therefore:
  *   - `*this` impl is similar to the outgoing-direction, PEER-state logic in that socket-stream `Impl` class.
  *   - And accordingly for incoming-direction and `Blob_stream_mq_receiver_impl`.
@@ -70,7 +79,7 @@ namespace ipc::transport::sync_io
  *
  * I (ygoldfel) could find no way to reuse code between the 2 counterparts despite similarities.  Some comments
  * and some code *are* repeated, but they are also different enough to where it couldn't really be avoided.  That said:
- * if you have a reason to understand `Native_socket_stream::Impl` specifically first, then coming back here
+ * if you have a reason to understand `Native_socket_stream_impl` specifically first, then coming back here
  * afterward should be a piece of cake.
  *
  * If not, due to the simplified/reduced purview of a `*this`, it should be quite doable to follow the logic.
@@ -222,6 +231,15 @@ public:
   bool auto_ping(util::Fine_duration period);
 
   /**
+   * See Blob_stream_mq_sender counterpart.
+   * @return See Blob_stream_mq_sender counterpart.
+   */
+  stat::Blob_snd_stats blob_send_stats() const;
+
+  /// See Blob_stream_mq_sender counterpart.
+  void blob_send_stats_reset();
+
+  /**
    * See Blob_stream_mq_sender counterpart, but assuming PEER state.
    * @return See Blob_stream_mq_sender counterpart.
    */
@@ -264,7 +282,7 @@ private:
      * and not a mere location/size of an existing blob somewhere.
      * ### Rationale ###
      * Why not just have `using Snd_low_lvl_payload = unique_ptr<Blob>`?  Answer: No huge reason.  Just
-     * consistency with sync_io::Native_socket_stream::Impl which has a quite similar outgoing-direction
+     * consistency with sync_io::Native_socket_stream_impl which has a quite similar outgoing-direction
      * algorithm and therefore type but with a more complex payload (they've got `Native_handle`s to worry about).
      */
     flow::util::Blob m_blob;
@@ -284,6 +302,15 @@ private:
    * @return See above.
    */
   bool op_started(util::String_view context) const;
+
+  /**
+   * INFO-logs current stats.  Same notes apply as for sync_io::Native_socket_stream_impl::log_stats() --
+   * see its doc header -- except we have only the one pipe (out-pipe).
+   *
+   * @param context
+   *        For logging: the algorithmic context (function name or whatever).
+   */
+  void log_stats(util::String_view context) const;
 
   /**
    * `*end_sending()` body.
@@ -314,7 +341,7 @@ private:
    * #m_pending_err_code (pre-condition: it is falsy) is set to the error to ultimately return; and if no such
    * outgoing-pipe-hosing is synchronously encountered it is left untouched.  In particular, if falsy upon return,
    * you may call this again to send the next low-level payload.  Otherwise #m_mq cannot be subsequently used
-   * (it is hosed).  Thus we maintain the invariant that #m_mq is null if and only if that guy is truthy.
+   * (it is hosed) -- though per its doc header it stays non-null until dtor regardless.
    *
    * ### `avoided_qing` mode for auto-ping ###
    * If `avoided_qing_or_null` is null, then see above.  If it points to a `bool`, though, then:
@@ -362,10 +389,14 @@ private:
    *
    * @param cmd
    *        See above.
+   * @param dropped_or_null
+   *        If not null, `*dropped_or_null` is set to whether the payloads were silently dropped
+   *        (possible for Control_cmd::S_PING only; `false` otherwise/always for other `cmd`s).
+   *        E.g., stats-keeping may hinge on this.
    * @return A-la sync_write_or_q_payload(): `false` if outgoing-direction pipe still has stuff in it; `true`
    *         otherwise.
    */
-  bool sync_write_or_q_ctl_cmd(Control_cmd cmd);
+  bool sync_write_or_q_ctl_cmd(Control_cmd cmd, bool* dropped_or_null = nullptr);
 
   /**
    * Equivalent to sync_write_or_q_ctl_cmd() but takes the raw representation of the command to send;
@@ -377,9 +408,11 @@ private:
    *        Either a non-negative value, which equals the cast of a `Control_cmd` to its underlying type;
    *        or a negative value, which equals the arithmetic negation of our highest (preferred) protocol
    *        version.  So in the latter case -1 means version 1, -2 means version 2, etc.
+   * @param dropped_or_null
+   *        See sync_write_or_q_ctl_cmd().
    * @return See sync_write_or_q_ctl_cmd().
    */
-  bool sync_write_or_q_ctl_cmd_impl(std::underlying_type_t<Control_cmd> raw_cmd);
+  bool sync_write_or_q_ctl_cmd_impl(std::underlying_type_t<Control_cmd> raw_cmd, bool* dropped_or_null = nullptr);
 
   /**
    * Initiates async-write over #m_mq of the low-level payload at the head of out-queue
@@ -399,7 +432,7 @@ private:
    * @see Protocol_negotiator doc header for key background on the topic.  In particular check out the discussion
    *      "Key tip: Coding for version-1 versus one version versus multiple versions."
    *
-   * ### Maintenace/future ###
+   * ### Maintenance/future ###
    * This version of the software talks only the initial version of the protocol: version 1 by Protocol_negotiator
    * convention.  (Deities willing, we won't need to create more, but possibly we will.)  As expained in the
    * above-mentioned doc header section, we have very little to worry about as the sender: Just send
@@ -612,6 +645,9 @@ private:
    */
   util::sync_io::Event_wait_func m_ev_wait_func;
 
+  /// Stats.  Updated only from thread U.
+  stat::Blob_snd_stats m_stats;
+
   /**
    * Worker thread W always in one of 2 states: idle; or (when #m_mq is in would-block condition) executing an
    * indefinite, interrupting blocking wait for transmissibility of #m_mq.  When thread U wants to send-out
@@ -662,7 +698,8 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
   // And this is its watchee mirror for outside event loop (sync_io pattern).
   m_ev_wait_hndl_auto_ping_timer_fired_peer
     (m_ev_hndl_task_engine_unused,
-     Native_handle(m_auto_ping_timer_fired_peer->native_handle()))
+     Native_handle{m_auto_ping_timer_fired_peer->native_handle()}),
+  m_stats(m_mq_max_msg_sz)
 {
   using flow::error::Runtime_error;
   using flow::util::ostream_op_string;
@@ -680,7 +717,7 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
   m_mq = Base::ensure_unique_peer(get_logger(),
                                   std::move(mq), true /* sender */, &sys_err_code); // Does not throw.
   assert(bool(m_mq) == (!sys_err_code));
-  // On error *err_code will be truthy, and it will have returned null.
+  // On error sys_err_code will be truthy, and it will have returned null.
 
   /* Home free w/r/t m_mq.  No longer need to worry about anything but *this and other-side single _receiver.
    * Not even dtor has to worry (due to that deleter up there). */
@@ -728,7 +765,7 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
       else
       {
         // Lastly load up the read-end FD into the watchee mirror.  See also replace_event_wait_handles().
-        m_ev_wait_hndl_mq.assign(Native_handle(m_mq_ready_reader->native_handle()));
+        m_ev_wait_hndl_mq.assign(Native_handle{m_mq_ready_reader->native_handle()});
       }
     } // if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
   } // if (!sys_err_code) (but it may have become truthy inside)
@@ -746,10 +783,11 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::Blob_stream_mq_sender_impl
       return;
     }
     // else
-    throw Runtime_error(sys_err_code, "Blob_stream_mq_sender(): ensure_unique_peer()");
+    throw Runtime_error{sys_err_code, "Blob_stream_mq_sender(): ensure_unique_peer()"};
   }
   // else: took over `mq` ownership.
   assert(!sys_err_code);
+  err_code && (*err_code = {});
 
   FLOW_LOG_INFO("Blob_stream_mq_sender [" << *this << "]: MQ-handle-watching apparatus ready including running "
                 "blocking worker thread for would-block situations if necessary "
@@ -781,6 +819,13 @@ Blob_stream_mq_sender_impl<Persistent_mq_handle>::~Blob_stream_mq_sender_impl()
      * order, ending/joining those threads, and then this dtor will return.  Oh, and then m_mq is safely destroyed
      * too. */
   } // if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
+
+  // See log_stats() doc header for basic background behind the logic here.
+  if (!m_pending_err_code)
+  {
+    log_stats("dtor/pipe healthy");
+  }
+  // else { Final stats logged when pipe died.  Don't spam dupe stats. }
 } // Blob_stream_mq_sender_impl::~Blob_stream_mq_sender_impl()
 
 template<typename Persistent_mq_handle>
@@ -811,12 +856,12 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::replace_event_wait_handle
   // else
 
   FLOW_LOG_INFO("Blob_stream_mq_sender [" << *this << "]: Replacing event-wait handles (probably to replace "
-                "underlying execution context without outside event loop's boost.asio Task_engine or similar).");
+                "underlying execution context with outside event loop's boost.asio Task_engine or similar).");
 
   assert(m_ev_wait_hndl_mq.is_open());
   assert(m_ev_wait_hndl_auto_ping_timer_fired_peer.is_open());
 
-  Native_handle saved(m_ev_wait_hndl_mq.release());
+  Native_handle saved{m_ev_wait_hndl_mq.release()};
   m_ev_wait_hndl_mq = create_ev_wait_hndl_func();
   m_ev_wait_hndl_mq.assign(saved);
 
@@ -846,21 +891,28 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::
   if (!m_pending_err_code)
   {
     const auto protocol_ver_to_send = m_protocol_negotiator.local_max_proto_ver_for_sending();
-    assert((protocol_ver_to_send != Protocol_negotiator::S_VER_UNKNOWN)
+    assert((protocol_ver_to_send != Protocol_negotiator::S_VER_ALREADY_SENT)
            && "How'd we get to this line twice?  Or Protocol_negotiator bug?");
-    assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_UNKNOWN)
+    assert((m_protocol_negotiator.local_max_proto_ver_for_sending() == Protocol_negotiator::S_VER_ALREADY_SENT)
            && "Protocol_negotiator not properly marking the once-only sending-out of protocol version?");
 
     /* As discussed in m_protocol_negotiator doc header and class doc header "Protocol negotiation" section:
      * send a special CONTROL message; opposing side expects it as the first in-message.
      * By the way m_protocol_negotiator logged about the fact we're about to send it, so we can be pretty quiet. */
     sync_write_or_q_ctl_cmd_impl(-protocol_ver_to_send);
+    m_stats.m_total_low_lvl_bytes += sizeof(Control_cmd); // Proto negotiation: escape (0 bytes) + enum-sized.
     /* m_pending_err_code may have become truthy; just means next send_blob()/whatever will emit that error.
      *
      * Otherwise: Either it inline-sent it (very likely), or it got queued.
      *            Either way: no error; let's get on with queuing-or-sending real stuff like send_blob() payloads.
      * P.S. There's only 1 protocol version as of this writing, so there's no ambiguity, and we can just get on with
      * sending stuff right away.  This could change in the future.  See m_protocol_negotiator doc header for more. */
+
+    // See log_stats() doc header for basic background behind the logic here.
+    if (m_pending_err_code) // Note we would've skipped this branch had it been already truthy at the start.
+    {
+      log_stats("start_send_blob_ops(): while sync-processing: proto-neg-send => pipe hosed");
+    }
   }
   // else { Ctor must have failed without throwing exception (non-null err_code). }
 
@@ -896,7 +948,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
 
   /* We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
    *
-   * There is a *lot* of similarity between this and sync_io::Native_socket_stream::Impl::send_native_handle().
+   * There is a *lot* of similarity between this and sync_io::Native_socket_stream_impl::send_native_handle().
    * In fact I (ygoldfel) wrote that guy's send stuff first, then I based this off it.
    * Yet there are enough differences to where code reuse isn't really obviously achievable.
    * @todo Look into it.  It would be nice to avoid 2x the maintenance and ~copy/pasted comments. */
@@ -907,6 +959,9 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
     return false;
   }
   // else
+
+  // See log_stats() doc header for basic background behind the logic here.
+  const bool was_hosed_already = bool(m_pending_err_code);
 
   FLOW_LOG_TRACE("Blob_stream_mq_sender [" << *this << "]: Will send blob of size [" << blob.size() << "].");
   // Verbose and slow (100% skipped unless log filter passes).
@@ -951,7 +1006,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
                      "Emitting error immediately; but pipe continues.  Note that if we don't do this, "
                      "then the low-level MQ will behave this way anyway.");
   }
-  else if (m_pending_err_code) // && (!m_finished) && (blob.size() OK)
+  else if (was_hosed_already) // && (!m_finished) && (blob.size() OK)
   {
     /* This --^ holds either the last inline-completed send_blob() (or protocol-negotiation-send in
      * start_send_blob_ops()) call's emitted Error_code, or (~rarely) one
@@ -965,7 +1020,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
                   "subsequent send attempts like this.  Will not proceed with send.  More info in WARNING below.");
     *err_code = m_pending_err_code;
   }
-  else // if (!m_finished) && (blob.size() OK) && (!m_pending_err_code)
+  else // if (!m_finished) && (blob.size() OK) && (!was_hosed_already)
   {
     /* As the name indicates this may synchronously finish it or queue it up instead to be done once
      * a would-block clears, when user informs of this past the present function's return.
@@ -976,13 +1031,22 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
      * se; I am just saying for context, to clarify what "send-or-queue" means. */
     sync_write_or_q_payload(blob, nullptr);
     /* That may have returned `true` indicating everything (up to and including our payload) was synchronously
-     * given to kernel successfuly; or this will never occur, because outgoing-pipe-ending error was encountered.
+     * given to kernel successfully; or this will never occur, because outgoing-pipe-ending error was encountered.
      * Since this is send_blob(), we do not care: there is no on-done
      * callback to invoke, as m_finished is false, as *end_sending() has not been called yet. */
 
     /* No new error: Emit to user that this op did not emit error (m_pending_err_code is still falsy).
      * New error: Any subsequent attempt will emit this truthy value; do not forget to emit it now via *err_code. */
     *err_code = m_pending_err_code;
+
+    if (!*err_code)
+    {
+      ++m_stats.m_total_msgs;
+      m_stats.m_total_bytes += blob.size();
+      m_stats.m_total_low_lvl_bytes += blob.size();
+      m_stats.m_histo_payload_sz.record_value(blob.size());
+      // m_msgs_with_hndls: MQ transport does not support native handles.
+    }
 
     // Did it generate a new error?
     if (*err_code)
@@ -1041,40 +1105,33 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob(const util::Blo
                      "[" << (*err_code == error::Code::S_SENDS_FINISHED_CANNOT_SEND) << "].");
   }
 
+  // See log_stats() doc header for basic background behind the logic here.
+  if (m_pending_err_code && (!was_hosed_already))
+  {
+    log_stats("send_blob(): while sync-processing pipe hosed");
+  }
+
   return true;
 } // Blob_stream_mq_sender_impl::send_blob()
 
 template<typename Persistent_mq_handle>
 bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::end_sending()
 {
-  return async_end_sending_impl(nullptr, flow::async::Task_asio_err());
+  return async_end_sending_impl(nullptr, {});
 }
 
 template<typename Persistent_mq_handle>
 template<typename Task_err>
-bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_end_sending(Error_code* sync_err_code_ptr,
+bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_end_sending(Error_code* err_code,
                                                                          Task_err&& on_done_func)
 {
-  Error_code sync_err_code;
+  using flow::async::Task_asio_err;
+
+  FLOW_ERROR_EXEC_AND_THROW_ON_ERROR(bool, async_end_sending<Task_err>, _1, std::move(on_done_func));
+  // ^-- Call ourselves and return if err_code is null.  If got to present line, err_code is not null.
+
   // This guy either takes null/.empty(), or non-null/non-.empty(): it doesn't do the Flow-style error emission itself.
-  const bool ok = async_end_sending_impl(&sync_err_code, flow::async::Task_asio_err(std::move(on_done_func)));
-
-  if (!ok)
-  {
-    return false; // False start.
-  }
-  // else
-
-  // Standard error-reporting semantics.
-  if ((!sync_err_code_ptr) && sync_err_code)
-  {
-    throw flow::error::Runtime_error(sync_err_code, "Blob_stream_mq_sender_impl::async_end_sending()");
-  }
-  // else
-  sync_err_code_ptr && (*sync_err_code_ptr = sync_err_code);
-  // And if (!sync_err_code_ptr) + no error => no throw.
-
-  return true;
+  return async_end_sending_impl(err_code, Task_asio_err{std::move(on_done_func)});
 } // Blob_stream_mq_sender_impl::async_end_sending()
 
 template<typename Persistent_mq_handle>
@@ -1088,7 +1145,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_end_sending_impl
 
   /* We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
    *
-   * There is a *lot* of similarity between this and sync_io::Native_socket_stream::Impl::async_end_sending[_impl]().
+   * There is a *lot* of similarity between this and sync_io::Native_socket_stream_impl::async_end_sending[_impl]().
    * In fact I (ygoldfel) wrote that guy's send stuff first, then I based this off it.
    * Yet there are enough differences to where code reuse isn't really obviously achievable.
    * @todo Look into it.  Don't forget async_end_sending() that calls us: also quite similar to their counterpart. */
@@ -1108,8 +1165,11 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_end_sending_impl
   // else
   m_finished = true; // Cause future send_blob() to emit S_SENDS_FINISHED_CANNOT_SEND and return.
 
+  // See log_stats() doc header for basic background behind the logic here.
+  const bool was_hosed_already = bool(m_pending_err_code);
+
   bool qd; // Set to false to report results *now*: basically true <=> stuff is still queued to send.
-  if (m_pending_err_code)
+  if (was_hosed_already)
   {
     qd = false; // There was outgoing-pipe-ending error detected before us; so should immediately report.
   }
@@ -1121,6 +1181,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_end_sending_impl
 
     // Queue has been entirely flushed (encountering error counts as: yes, flushed) <=> qd = false.
     qd = !sync_write_or_q_ctl_cmd(Control_cmd::S_END_SENDING);
+    m_stats.m_total_low_lvl_bytes += sizeof(Control_cmd); // Graceful-close: escape (0 bytes) + enum-sized.
     if (qd && sync_err_code_ptr_or_null)
     {
       /* It has not been flushed (we will return would-block).
@@ -1171,6 +1232,12 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_end_sending_impl
   }
   // else { Don't care about completion. }
 
+  // See log_stats() doc header for basic background behind the logic here.
+  if (m_pending_err_code && (!was_hosed_already))
+  {
+    log_stats("async_end_sending_impl(): while sync-processing pipe hosed");
+  }
+
   return true;
 } // Blob_stream_mq_sender_impl::async_end_sending_impl()
 
@@ -1184,7 +1251,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::auto_ping(util::Fine_dura
 
   /* We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
    *
-   * There is a *lot* of similarity between this and sync_io::Native_socket_stream::Impl::auto_ping().
+   * There is a *lot* of similarity between this and sync_io::Native_socket_stream_impl::auto_ping().
    * In fact I (ygoldfel) wrote that guy's send stuff first, then I based this off it.
    * Yet there are enough differences to where code reuse isn't really obviously achievable.  @todo Look into it. */
 
@@ -1237,7 +1304,16 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::auto_ping(util::Fine_dura
   }
   // else
 
-  sync_write_or_q_ctl_cmd(Control_cmd::S_PING);
+  ++m_stats.m_auto_pings; // Count even if dropped due to avoid_qing or error below.
+
+  bool dropped;
+  sync_write_or_q_ctl_cmd(Control_cmd::S_PING, &dropped);
+  if (!dropped)
+  {
+    /* Escape payload is 0 bytes; enum payload is sizeof.  (A dropped ping puts nothing on the wire; count
+     * nothing then, so snd-side and rcv-side low-level byte totals can reconcile.) */
+    m_stats.m_total_low_lvl_bytes += sizeof(Control_cmd);
+  }
   if (m_pending_err_code)
   {
     FLOW_LOG_WARNING("Blob_stream_mq_sender [" << *this << "]: Wanted to send initial auto-ping but "
@@ -1246,6 +1322,8 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::auto_ping(util::Fine_dura
                      "[" << m_pending_err_code.message() << "].  "
                      "Saved error code to return in next user send attempt if any; otherwise ignoring; "
                      "will not schedule periodic auto-pings.");
+    // See log_stats() doc header for basic background behind the logic here.
+    log_stats("auto_ping(): while sync-processing: initial auto-ping => pipe hosed");
     return true;
   }
   // else
@@ -1293,7 +1371,7 @@ void Blob_stream_mq_sender_impl<Persistent_mq_handle>::on_ev_auto_ping_now_timer
   {
     /* Concept does not require us to report any error via auto_ping() itself.  It's for receiver's benefit anyway.
      * The local user will discover it, assuming they have interest, via the next send_*() or *end_sending(). */
-    FLOW_LOG_WARNING("Blob_stream_mq_sender_impl [" << *this << "]: Auto-ping timer fired, but an error was "
+    FLOW_LOG_WARNING("Blob_stream_mq_sender [" << *this << "]: Auto-ping timer fired, but an error was "
                      "previously encountered in 2-way pipe; so will neither auto-ping nor schedule next auto-ping.  "
                      "Error code details follow: [" << m_pending_err_code << "] "
                      "[" << m_pending_err_code.message() << "].");
@@ -1304,28 +1382,38 @@ void Blob_stream_mq_sender_impl<Persistent_mq_handle>::on_ev_auto_ping_now_timer
   if (m_finished)
   {
     // This is liable to be quite common and not of much interest at the INFO level; though it's not that verbose.
-    FLOW_LOG_TRACE("Blob_stream_mq_sender_impl [" << *this << "]: "
+    FLOW_LOG_TRACE("Blob_stream_mq_sender [" << *this << "]: "
                    "Auto-ping timer fired; but graceful-close API earlier instructed us to no-op.  No-op.");
     return;
   }
   // else
 
   // This may be of some interest sufficient for INFO.  @todo Reconsider due to non-trivial verbosity possibly.
-  FLOW_LOG_INFO("Blob_stream_mq_sender_impl [" << *this << "]: "
+  FLOW_LOG_INFO("Blob_stream_mq_sender [" << *this << "]: "
                 "Auto-ping timer fired; sending/queueing auto-ping; scheduling for next time; it may be "
                 "rescheduled if more user traffic occurs before then.");
 
   // The next code is similar to the initial auto_ping().
 
-  sync_write_or_q_ctl_cmd(Control_cmd::S_PING);
+  ++m_stats.m_auto_pings; // Count even if dropped due to avoid_qing or error below.
+
+  bool dropped;
+  sync_write_or_q_ctl_cmd(Control_cmd::S_PING, &dropped);
+  if (!dropped)
+  {
+    // Escape payload is 0 bytes; enum payload is sizeof.  (Dropped ping => nothing on wire => count nothing.)
+    m_stats.m_total_low_lvl_bytes += sizeof(Control_cmd);
+  }
   if (m_pending_err_code)
   {
-    FLOW_LOG_WARNING("Blob_stream_mq_sender_impl [" << *this << "]: Wanted to send non-initial auto-ping "
+    FLOW_LOG_WARNING("Blob_stream_mq_sender [" << *this << "]: Wanted to send non-initial auto-ping "
                      "but detected error synchronously.  "
                      "Error code details follow: [" << m_pending_err_code << "] "
                      "[" << m_pending_err_code.message() << "].  "
                      "Saved error code to return in next user send attempt if any; otherwise ignoring; "
                      "will not continue scheduling periodic auto-pings.");
+    // See log_stats() doc header for basic background behind the logic here.
+    log_stats("on_ev_auto_ping_now_timer_fired(): while processing: auto-ping => pipe hosed");
     return;
   }
   // else
@@ -1346,7 +1434,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(c
   using util::Blob_const;
 
   /* We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
-   * This one is actually fairly different from sync_io::Native_socket_stream::Impl::snd_sync_write_or_q_payload(),
+   * This one is actually fairly different from sync_io::Native_socket_stream_impl::snd_sync_write_or_q_payload(),
    * as we are dealing with a message boundary-preserving low-level transport among other differences. */
 
   assert((!m_pending_err_code) && "After m_mq is hosed, no point in trying to do anything; pre-condition violated.");
@@ -1421,7 +1509,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(c
    * Now we have no choice.  As discussed in the class doc header, probabilistically speaking we should rarely (if
    * ever) get here (and do this annoying alloc, and copy, and later dealloc) under normal operation of both sides. */
 
-  auto& new_blob = new_low_lvl_payload->m_blob = Blob(get_logger());
+  auto& new_blob = new_low_lvl_payload->m_blob = Blob{get_logger()};
   if (orig_blob.size() != 0)
   {
     new_blob.assign_copy(orig_blob);
@@ -1434,6 +1522,11 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(c
                  "enqueued to out-queue which is now of size [" << (m_pending_payloads_q.size() + 1) << "].");
 
   m_pending_payloads_q.emplace(std::move(new_low_lvl_payload)); // Push a new Snd_low_lvl_payload::Ptr.
+
+  ++m_stats.m_would_block_count;
+  const auto q_size = m_pending_payloads_q.size();
+  m_stats.m_snd_q_depth = q_size;
+  flow::util::stat::update_hi_wmark(&m_stats.m_snd_q_hi_wmark, q_size);
 
   if (m_pending_payloads_q.size() == 1)
   {
@@ -1452,14 +1545,15 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_payload(c
 } // Blob_stream_mq_sender_impl::sync_write_or_q_payload()
 
 template<typename Persistent_mq_handle>
-bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd(Control_cmd cmd)
+bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd(Control_cmd cmd,
+                                                                               bool* dropped_or_null)
 {
-  return sync_write_or_q_ctl_cmd_impl(static_cast<std::underlying_type_t<Control_cmd>>(cmd));
+  return sync_write_or_q_ctl_cmd_impl(static_cast<std::underlying_type_t<Control_cmd>>(cmd), dropped_or_null);
 }
 
 template<typename Persistent_mq_handle>
 bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd_impl
-       (std::underlying_type_t<Control_cmd> raw_cmd)
+       (std::underlying_type_t<Control_cmd> raw_cmd, bool* dropped_or_null)
 {
   using util::Blob_const;
 
@@ -1474,7 +1568,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd_i
                                        ? &avoided_qing : nullptr;
 
   // Payload 1 first.
-  bool q_is_flushed = sync_write_or_q_payload(Blob_const(), avoided_qing_or_null);
+  bool q_is_flushed = sync_write_or_q_payload(Blob_const{}, avoided_qing_or_null);
 
   /* Returned true => out-queue flushed fully or dropped PING-payload-1 (avoided_qing)
    *                  or new error found (depending on m_pending_err_code).
@@ -1487,7 +1581,7 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd_i
     {
       // No error, not avoided_quing => flushed fully (so flush or queue payload 2); or queued (so queue payload 2).
       q_is_flushed
-        = sync_write_or_q_payload(Blob_const(&raw_cmd, sizeof(raw_cmd)), nullptr);
+        = sync_write_or_q_payload(Blob_const{&raw_cmd, sizeof(raw_cmd)}, nullptr);
       assert(!(m_pending_err_code && (!q_is_flushed)));
     }
     /* else if (avoided_qing)
@@ -1507,6 +1601,11 @@ bool Blob_stream_mq_sender_impl<Persistent_mq_handle>::sync_write_or_q_ctl_cmd_i
    *   - Dropped both payloads due to their comprising PING in a would-block situation when payload 1 was tried
    *     => depends on whether queue was (and thus remains) empty at the time payload 1 was tried. */
 
+  if (dropped_or_null)
+  {
+    *dropped_or_null = avoided_qing; // (Note: false unless S_PING.)
+  }
+
   return q_is_flushed;
 } // Blob_stream_mq_sender_impl::sync_write_or_q_ctl_cmd_impl()
 
@@ -1518,10 +1617,8 @@ void Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_write_q_head_payloa
   using boost::asio::async_write;
 
   /* We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
-   * This one is actually fairly different from sync_io::Native_socket_stream::Impl::async_write_q_head_payload(),
+   * This one is actually fairly different from sync_io::Native_socket_stream_impl::async_write_q_head_payload(),
    * as we are dealing with a message boundary-preserving low-level transport among other differences. */
-
-  // We comment liberally, but tactically, inline; but please read the strategy in the class doc header's impl section.
 
   assert((!m_pending_payloads_q.empty()) && "Contract is stuff is queued to be async-sent.  Bug?");
 
@@ -1572,7 +1669,7 @@ void Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_write_q_head_payloa
                      "transmissibility; success; now pinging user-land via IPC-pipe.");
 
       util::pipe_produce(get_logger(), &(*m_mq_ready_writer));
-      // m_mq_read_reader now has a byte to read!  m_ev_wait_hndl_mq will be event-active.
+      // m_mq_ready_reader now has a byte to read!  m_ev_wait_hndl_mq will be event-active.
     }); // m_blocking_worker->post()
   } // if constexpr(!Mq::S_HAS_NATIVE_HANDLE)
   // else if (Mq::S_HAS_NATIVE_HANDLE) { m_ev_wait_hndl_mq has the MQ's kernel-waitable handle!  Sw33t! }
@@ -1631,6 +1728,7 @@ void Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_write_q_head_payloa
       if (!would_block_or_error)
       {
         m_pending_payloads_q.pop(); // Nice; dealloc Blob into the aether.
+        m_stats.m_snd_q_depth = m_pending_payloads_q.size();
       }
       // else { That's it: party's over.  Exit loop. }
     }
@@ -1675,6 +1773,13 @@ void Blob_stream_mq_sender_impl<Persistent_mq_handle>::async_write_q_head_payloa
       // To be clear: queue can now only become empty in "async" handler, not synchronously here.
     }
 
+    /* See log_stats() doc header for basic background behind the logic here.
+     * Note we put this ahead of any handler-call to avoid reentrant hellishness. */
+    if (m_pending_err_code) // Note we've asserted it was not already truthy at the start.
+    {
+      log_stats("async_write_q_head_payload(): while processing ev-ready pipe hosed");
+    }
+
     if (invoke_on_done)
     {
       FLOW_LOG_TRACE("Blob_stream_mq_sender [" << *this << "]: Executing end-sending completion handler now.");
@@ -1694,6 +1799,18 @@ size_t Blob_stream_mq_sender_impl<Persistent_mq_handle>::send_blob_max_size() co
 }
 
 template<typename Persistent_mq_handle>
+stat::Blob_snd_stats Blob_stream_mq_sender_impl<Persistent_mq_handle>::blob_send_stats() const
+{
+  return m_stats;
+}
+
+template<typename Persistent_mq_handle>
+void Blob_stream_mq_sender_impl<Persistent_mq_handle>::blob_send_stats_reset()
+{
+  flow::util::stat::stats_reset(&m_stats, stat::Blob_snd_stats{m_mq_max_msg_sz});
+}
+
+template<typename Persistent_mq_handle>
 const Shared_name& Blob_stream_mq_sender_impl<Persistent_mq_handle>::absolute_name() const
 {
   return m_absolute_name;
@@ -1703,6 +1820,19 @@ template<typename Persistent_mq_handle>
 const std::string& Blob_stream_mq_sender_impl<Persistent_mq_handle>::nickname() const
 {
   return m_nickname;
+}
+
+template<typename Persistent_mq_handle>
+void Blob_stream_mq_sender_impl<Persistent_mq_handle>::log_stats(util::String_view context) const
+{
+  using flow::util::stat::print;
+
+  if (m_mq)
+  {
+    FLOW_LOG_INFO("Blob_stream_mq_sender [" << *this << "]: In context [" << context << "]: Stats: "
+                  "snd[" << print(m_stats) << "].");
+  }
+  // else { Ctor failed; nothing useful to log. }
 }
 
 template<typename Persistent_mq_handle>

@@ -24,6 +24,14 @@
 
 #include "ipc/util/util_fwd.hpp"
 #include "ipc/util/process_credentials_fwd.hpp"
+#include <flow/common.hpp>
+#include <string>
+#include <sys/socket.h>
+
+#ifndef FLOW_OS_LINUX
+static_assert(false,
+              "Not tested outside Linux; look into it when porting this module.  Might be fine in POSIXy OS at least.");
+#endif
 
 namespace ipc::util
 {
@@ -40,7 +48,7 @@ class Process_credentials
 public:
   // Constructors/destructor.
 
-  /// Default ctor: each value is initialized to zero or equivalent.
+  /// Default ctor: each value is initialized to zero/OS-appropriate equivalent.
   Process_credentials();
 
   /**
@@ -84,7 +92,7 @@ public:
   user_id_t user_id() const;
 
   /**
-   * The group user ID (GID).
+   * The group ID (GID).
    * @return See above.
    */
   group_id_t group_id() const;
@@ -95,7 +103,7 @@ public:
    * there are important properties to consider about this information:
    *   - The process must be currently executing.  If it is not, a no-such-file error is emitted.
    *   - The executable name is as-it-appeared on the command line; e.g., it might be a relative and/or
-   *     un-normalized and/or a symlink.  It is only the normalized, absolute path if that is how it was invoked.
+   *     un-normalized path and/or a symlink.  It is only the normalized, absolute path, if that is how it was invoked.
    *   - It is possible (not common but not non-existent either) for a process to change its own command line
    *     upon execution; in this case there's almost no limit to what string might result.
    *     Note!  Even an empty returned string is possible; and this is not emitted as an error.
@@ -118,10 +126,10 @@ public:
    * absolute or not, normalized or not, the symlink or not... and so on.  The tool `ps` uses the same technique.
    *
    * One technique was considered: read Linux's /proc/(pid)/exe symlink which points to the absolute, normalized
-   * executable path actually invoked.  That would have been perfect; however it appears to require
-   * admin privileges on our part, and we do not want to require this.  On balance, since the original use case
-   * prompting this feature (session::App::m_exec_path verification) is acceptably served by the less-demanding
-   * /proc/.../cmdline method, we chose that.
+   * executable path actually invoked.  That would have been perfect; however reading it requires ptrace-level access
+   * to the target process (in practice: same user, or admin privileges on our part), and we do not want to require
+   * this.  On balance, since the original use case prompting this feature (session::App::m_exec_path verification)
+   * is acceptably served by the less-demanding /proc/.../cmdline method, we chose that.
    *
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
@@ -132,7 +140,7 @@ public:
    *         empty string.  Caution: If error is *not* emitted, returned value *might* still be empty,
    *         if the process overrode its own command line (see above).
    */
-  std::string process_invoked_as(Error_code* err_code = 0) const;
+  std::string process_invoked_as(Error_code* err_code = nullptr) const;
 
   /**
    * Obtains the calling process's process_id().  This value will never change.
@@ -168,5 +176,10 @@ private:
 }; // class Process_credentials
 
 // Free functions: in *_fwd.hpp.
+
+// Constants.
+
+/// A (default-cted) Process_credentials.  May be useful for functions returning `const Process_credentials&`.
+extern const Process_credentials NULL_PROCESS_CREDENTIALS;
 
 } // namespace ipc::util
