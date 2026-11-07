@@ -194,7 +194,7 @@ public:
 
   /**
    * Implements Persistent_mq_handle API.  Impl note for exposition: we use the fact that, e.g., in Linux
-   * the POSIX MQ devices are listed in flat fashion in /dev/mqueue.
+   * the POSIX MQ devices are listed in flat fashion in `/dev/mqueue`.
    *
    * @tparam Handle_name_func
    *         See above.

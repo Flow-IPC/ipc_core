@@ -42,7 +42,7 @@ using Pipe_reader = boost::asio::readable_pipe;
 /**
  * Maps general Permissions_level specifier to low-level #Permissions value, when the underlying resource
  * is in the file-system and is either accessible (read-write in terms of file system) or inaccessible.
- * Examples of such resources are SHM pools (in Linux living in "/dev/shm") and POSIX MQs ("/dev/mqueue").
+ * Examples of such resources are SHM pools (in Linux living in `/dev/shm`) and POSIX MQs (`/dev/mqueue`).
  *
  * See any additional user-facing notes in shared_resource_permissions() doc header.
  */
@@ -68,7 +68,7 @@ static_assert(false, "IPC_KERNEL_PERSISTENT_RUN_DIR (/var/run) semantics require
  * Absolute path to the directory (without trailing separator) in the file system where kernel-persistent
  * runtime, but not temporary, information shall be placed.  Kernel-persistent means that it'll disappear
  * at reboot; runtime, but not temporary, means it's... not the designated temporary-data directory (informally:
- * not /tmp).  Informally: just know that it is /var/run, and that it stores things such as process-ID (PID)
+ * not `/tmp`).  Informally: just know that it is `/var/run`, and that it stores things such as process-ID (PID)
  * files.
  *
  * It is a Unix path, absolute (starts with forward-slash), and lexically normal (and lacks a root-name).

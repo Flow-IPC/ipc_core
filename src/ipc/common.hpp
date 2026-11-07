@@ -247,7 +247,7 @@
  * Documentation / Doxygen
  * -----------------------
  * All code in the project proper follows a high standard of documentation, almost solely via comments therein
- * (plus a guided Manual in manual/....dox.txt files, also encoded as Doxygen-read comments).
+ * (plus a guided Manual in `manual/....dox.txt` files, also encoded as Doxygen-read comments).
  * The standards and mechanics w/r/t documentation are entirely inherited from Flow.  Therefore, see the
  * `namespace flow` doc header's "Documentation / Doxygen" section.  It applies
  * verbatim here (within reason).  (Spoiler alert: Doc header comments on most entities (classes, functions, ...) are

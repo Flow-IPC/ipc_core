@@ -469,7 +469,7 @@ private:
   util::sync_io::Timer_event_emitter m_timer_worker;
 
   /**
-   * Null if no async_receive_blob()` is currently pending; else describes the arguments to that pending
+   * Null if no async_receive_blob() is currently pending; else describes the arguments to that pending
    * async_receive_blob().
    *
    * ### Rationale ###

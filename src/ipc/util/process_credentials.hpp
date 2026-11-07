@@ -120,16 +120,16 @@ public:
    * (Normally we omit impl details in public doc headers, but in this case the utility is low-level, and it may
    * benefit you to know it.)
    *
-   * This builds in Linux only; it reads /proc/(pid)/cmdline (if it exists) and obtains the first NUL-terminated
+   * This builds in Linux only; it reads `/proc/(pid)/cmdline` (if it exists) and obtains the first NUL-terminated
    * entry there.  This is `argv[0]`.  `argv` space may be overwritten by the process, so it could be something
    * other than the original invocation.  Ignoring that, it'll be whatever the command line included; could be
    * absolute or not, normalized or not, the symlink or not... and so on.  The tool `ps` uses the same technique.
    *
-   * One technique was considered: read Linux's /proc/(pid)/exe symlink which points to the absolute, normalized
+   * One technique was considered: read Linux's `/proc/(pid)/exe` symlink which points to the absolute, normalized
    * executable path actually invoked.  That would have been perfect; however reading it requires ptrace-level access
    * to the target process (in practice: same user, or admin privileges on our part), and we do not want to require
    * this.  On balance, since the original use case prompting this feature (session::App::m_exec_path verification)
-   * is acceptably served by the less-demanding /proc/.../cmdline method, we chose that.
+   * is acceptably served by the less-demanding `/proc/.../cmdline` method, we chose that.
    *
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:

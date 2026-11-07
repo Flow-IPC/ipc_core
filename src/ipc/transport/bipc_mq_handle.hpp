@@ -181,7 +181,7 @@ public:
 
   /**
    * Implements Persistent_mq_handle API.  Impl note for exposition: we use the fact that bipc stores each MQ
-   * in a same-named SHM pool; those are listed in flat fashion (e.g., in Linux in /dev/shm).
+   * in a same-named SHM pool; those are listed in flat fashion (e.g., in Linux in `/dev/shm`).
    *
    * @tparam Handle_name_func
    *         See above.
