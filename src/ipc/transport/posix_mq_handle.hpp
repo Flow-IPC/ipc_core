@@ -23,6 +23,7 @@
 #include "ipc/util/detail/util.hpp"
 #include "ipc/util/shared_name.hpp"
 #include "ipc/util/native_handle.hpp"
+#include "ipc/transport/transport_fwd.hpp"
 #include <flow/log/log.hpp>
 #include <flow/common.hpp>
 #include <mqueue.h>
@@ -79,8 +80,6 @@ public:
    * Implements Persistent_mq_handle API: Construct handle to non-existing named MQ, creating it first.  If it already
    * exists, it is an error.
    *
-   * @see Persistent_mq_handle::Persistent_mq_handle(): implemented concept.
-   *
    * `max_n_msg` and `max_msg_sz` are subject to certain OS limits, according to `man mq_overview`.  Watch out for
    * those: we have no control over them here.  The `man` page should give you the necessary information.
    *
@@ -103,13 +102,10 @@ public:
    */
   explicit Posix_mq_handle(flow::log::Logger* logger_ptr, const Shared_name& absolute_name,
                            util::Create_only mode_tag, size_t max_n_msg, size_t max_msg_sz,
-                           const util::Permissions& perms = util::Permissions(),
-                           Error_code* err_code = 0);
+                           const util::Permissions& perms = {}, Error_code* err_code = nullptr);
   /**
    * Implements Persistent_mq_handle API: Construct handle to existing named MQ, or else if it does not exist creates
    * it first and opens it (atomically).
-   *
-   * @see Persistent_mq_handle::Persistent_mq_handle(): implemented concept.
    *
    * @param logger_ptr
    *        See above.
@@ -130,8 +126,7 @@ public:
    */
   explicit Posix_mq_handle(flow::log::Logger* logger_ptr, const Shared_name& absolute_name,
                            util::Open_or_create mode_tag, size_t max_n_msg_on_create, size_t max_msg_sz_on_create,
-                           const util::Permissions& perms_on_create = util::Permissions(),
-                           Error_code* err_code = 0);
+                           const util::Permissions& perms_on_create = {}, Error_code* err_code = nullptr);
   /**
    * Implements Persistent_mq_handle API: Construct handle to existing named MQ.  If it does not exist, it is an error.
    *
@@ -145,13 +140,11 @@ public:
    *        See above.
    */
   explicit Posix_mq_handle(flow::log::Logger* logger_ptr, const Shared_name& absolute_name,
-                           util::Open_only mode_tag, Error_code* err_code = 0);
+                           util::Open_only mode_tag, Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API: Constructs handle from the source handle while making the latter as-if
    * default-cted.  Reminder, informally: This is a light-weight op.
-   *
-   * @see Persistent_mq_handle::Persistent_mq_handle(): implemented concept.
    *
    * @param src
    *        See above.
@@ -165,8 +158,6 @@ public:
    * Implements Persistent_mq_handle API: Destroys this handle (or no-op if no handle was successfully constructed, or
    * if it's a moved-from or default-cted handle).  Reminder: The underlying MQ (if any) is *not* destroyed and can
    * be attached-to by another handle.
-   *
-   * @see Persistent_mq_handle::~Persistent_mq_handle(): implemented concept.
    */
   ~Posix_mq_handle();
 
@@ -190,8 +181,6 @@ public:
    * (if present -- otherwise error), but underlying MQ continues to exist until all system-wide handles to it
    * are closed.
    *
-   * @see Persistent_mq_handle::remove_persistent(): implemented concept.
-   *
    * @see Reminder: see also `util::remove_each_persistent_*()`.
    *
    * @param logger_ptr
@@ -201,13 +190,11 @@ public:
    * @param err_code
    *        See above.
    */
-  static void remove_persistent(flow::log::Logger* logger_ptr, const Shared_name& name, Error_code* err_code = 0);
+  static void remove_persistent(flow::log::Logger* logger_ptr, const Shared_name& name, Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API.  Impl note for exposition: we use the fact that, e.g., in Linux
-   * the POSIX MQ devices are listed in flat fashion in /dev/mqueue.
-   *
-   * @see Persistent_mq_handle::for_each_persistent(): implemented concept.
+   * the POSIX MQ devices are listed in flat fashion in `/dev/mqueue`.
    *
    * @tparam Handle_name_func
    *         See above.
@@ -221,8 +208,6 @@ public:
    * Implements Persistent_mq_handle API: Non-blocking send: pushes copy of message to queue and returns `true`;
    * if queue is full then no-op and returns `false`.
    *
-   * @see Persistent_mq_handle::try_send(): implemented concept.
-   *
    * ### INFO+ logging ###
    * WARNING on error.  (You may use the `flow::log::Config::this_thread_verbosity_override_auto()` to
    * temporarily, in that thread only, disable/reduce logging.  This is quite easy and performant.)
@@ -233,13 +218,11 @@ public:
    *        See above.
    * @return See above.
    */
-  bool try_send(const util::Blob_const& blob, Error_code* err_code = 0);
+  bool try_send(const util::Blob_const& blob, Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API: Blocking send: pushes copy of message to queue; if queue is full blocks
    * until it is not.
-   *
-   * @see Persistent_mq_handle::send(): implemented concept.
    *
    * ### INFO+ logging ###
    * WARNING on error.  (You may use the `flow::log::Config::this_thread_verbosity_override_auto()`
@@ -250,13 +233,11 @@ public:
    * @param err_code
    *        See above.
    */
-  void send(const util::Blob_const& blob, Error_code* err_code = 0);
+  void send(const util::Blob_const& blob, Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API: Blocking timed send: pushes copy of message to queue; if queue is full
    * blocks until it is not, or the specified time passes, whichever happens first.
-   *
-   * @see Persistent_mq_handle::timed_send(): implemented concept.
    *
    * ### INFO+ logging ###
    * WARNING on error or timed out.
@@ -271,13 +252,11 @@ public:
    *        See above.
    * @return See above.
    */
-  bool timed_send(const util::Blob_const& blob, util::Fine_duration timeout_from_now, Error_code* err_code = 0);
+  bool timed_send(const util::Blob_const& blob, util::Fine_duration timeout_from_now, Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API: Like try_send() but without the actual pushing of a message.
    *
-   * @see Persistent_mq_handle::is_sendable(): implemented concept.
-   *
    * ### INFO+ logging ###
    * WARNING on error.
    *
@@ -285,43 +264,37 @@ public:
    *        See above.
    * @return See above.
    */
-  bool is_sendable(Error_code* err_code = 0);
+  bool is_sendable(Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API: Like send() but without the actual pushing of a message.
    *
-   * @see Persistent_mq_handle::wait_sendable(): implemented concept.
-   *
    * ### INFO+ logging ###
    * WARNING on error.
    *
    * @param err_code
    *        See above.
    */
-  void wait_sendable(Error_code* err_code = 0);
+  void wait_sendable(Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API: Like timed_send() but without the actual pushing of a message.
    *
-   * @see Persistent_mq_handle::timed_wait_sendable(): implemented concept.
-   *
    * ### INFO+ logging ###
    * WARNING on error.
    *
-   * @param err_code
-   *        See above.
    * @param timeout_from_now
+   *        See above.
+   * @param err_code
    *        See above.
    * @return See above.
    */
-  bool timed_wait_sendable(util::Fine_duration timeout_from_now, Error_code* err_code = 0);
+  bool timed_wait_sendable(util::Fine_duration timeout_from_now, Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API: Non-blocking receive: pops copy of message from queue into buffer and
    * returns `true`; if queue is empty then no-op and returns `false`.
    *
-   * @see Persistent_mq_handle::try_receive(): implemented concept.
-   *
    * ### INFO+ logging ###
    * WARNING on error.  (You may use the `flow::log::Config::this_thread_verbosity_override_auto()` to
    * temporarily, in that thread only, disable/reduce logging.  This is quite easy and performant.)
@@ -332,13 +305,11 @@ public:
    *        See above.
    * @return See above.
    */
-  bool try_receive(util::Blob_mutable* blob, Error_code* err_code = 0);
+  bool try_receive(util::Blob_mutable* blob, Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API: Blocking receive: pops copy of message from queue into buffer; if queue
    * is empty blocks until it is not.
-   *
-   * @see Persistent_mq_handle::receive(): implemented concept.
    *
    * ### INFO+ logging ###
    * WARNING on error.  (You may use the `flow::log::Config::this_thread_verbosity_override_auto()` to
@@ -349,13 +320,11 @@ public:
    * @param err_code
    *        See above.
    */
-  void receive(util::Blob_mutable* blob, Error_code* err_code = 0);
+  void receive(util::Blob_mutable* blob, Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API: Blocking timed receive: pops copy of message from queue into buffer;
    * if queue is empty blocks until it is not, or the specified time passes, whichever happens first.
-   *
-   * @see Persistent_mq_handle::timed_receive(): implemented concept.
    *
    * ### INFO+ logging ###
    * WARNING on error or timed out.  (You may use the `flow::log::Config::this_thread_verbosity_override_auto()` to
@@ -369,13 +338,11 @@ public:
    *        See above.
    * @return See above.
    */
-  bool timed_receive(util::Blob_mutable* blob, util::Fine_duration timeout_from_now, Error_code* err_code = 0);
+  bool timed_receive(util::Blob_mutable* blob, util::Fine_duration timeout_from_now, Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API: Like try_receive() but without the actual popping of a message.
    *
-   * @see Persistent_mq_handle::is_receivable(): implemented concept.
-   *
    * ### INFO+ logging ###
    * WARNING on error.
    *
@@ -383,42 +350,36 @@ public:
    *        See above.
    * @return See above.
    */
-  bool is_receivable(Error_code* err_code = 0);
+  bool is_receivable(Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API: Like receive() but without the actual popping of a message.
    *
-   * @see Persistent_mq_handle::wait_receivable(): implemented concept.
-   *
    * ### INFO+ logging ###
    * WARNING on error.
    *
    * @param err_code
    *        See above.
    */
-  void wait_receivable(Error_code* err_code = 0);
+  void wait_receivable(Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API: Like timed_receive() but without the actual popping of a message.
    *
-   * @see Persistent_mq_handle::timed_wait_receivable(): implemented concept.
-   *
    * ### INFO+ logging ###
    * WARNING on error.
    *
-   * @param err_code
-   *        See above.
    * @param timeout_from_now
+   *        See above.
+   * @param err_code
    *        See above.
    * @return See above.
    */
-  bool timed_wait_receivable(util::Fine_duration timeout_from_now, Error_code* err_code = 0);
+  bool timed_wait_receivable(util::Fine_duration timeout_from_now, Error_code* err_code = nullptr);
 
   /**
    * Implements Persistent_mq_handle API:
    * Turn on preemptive/concurrent interruption of blocking-sends and sendable-waits/polls.
-   *
-   * @see Persistent_mq_handle::interrupt_sends(): implemented concept.
    *
    * ### INFO+ logging ###
    * WARNING on duplicate use, INFO otherwise.
@@ -431,8 +392,6 @@ public:
    * Implements Persistent_mq_handle API:
    * Turn off preemptive/concurrent interruption of blocking-sends and sendable-waits/polls.
    *
-   * @see Persistent_mq_handle::allow_sends(): implemented concept.
-   *
    * ### INFO+ logging ###
    * WARNING on duplicate use, INFO otherwise.
    *
@@ -443,8 +402,6 @@ public:
   /**
    * Implements Persistent_mq_handle API:
    * Turn on preemptive/concurrent interruption of blocking-receives and receivable-waits/polls.
-   *
-   * @see Persistent_mq_handle::interrupt_receives(): implemented concept.
    *
    * ### INFO+ logging ###
    * WARNING on duplicate use, INFO otherwise.
@@ -457,8 +414,6 @@ public:
    * Implements Persistent_mq_handle API:
    * Turn off preemptive/concurrent interruption of blocking-receives and receivable-waits/polls.
    *
-   * @see Persistent_mq_handle::allow_receives(): implemented concept.
-   *
    * ### INFO+ logging ###
    * WARNING on duplicate use, INFO otherwise.
    *
@@ -469,25 +424,22 @@ public:
   /**
    * Implements Persistent_mq_handle API: Returns name equal to `absolute_name` passed to ctor.
    * @return See above.
-   * @see Persistent_mq_handle::absolute_name(): implemented concept.
    */
   const Shared_name& absolute_name() const;
 
   /**
    * Implements Persistent_mq_handle API: Returns the max message size of the underlying queue.  Reminder:
-   * This is not required to match was was passed to `Create_only` or `Open_or_create` ctor.
+   * This is not required to match what was passed to `Create_only` or `Open_or_create` ctor.
    *
    * @return See above.
-   * @see Persistent_mq_handle::max_msg_size(): implemented concept.
    */
   size_t max_msg_size() const;
 
   /**
    * Implements Persistent_mq_handle API: Returns the max message count of the underlying queue.  Reminder:
-   * This is not required to match was was passed to `Create_only` or `Open_or_create` ctor.
+   * This is not required to match what was passed to `Create_only` or `Open_or_create` ctor.
    *
    * @return See above.
-   * @see Persistent_mq_handle::max_n_msgs(): implemented concept.
    */
   size_t max_n_msgs() const;
 
@@ -495,7 +447,6 @@ public:
    * Implements Persistent_mq_handle API: Returns the stored native MQ handle; null if not open.
    *
    * @return See above.
-   * @see Persistent_mq_handle::native_handle(): implemented concept.
    */
   Native_handle native_handle() const;
 
@@ -544,16 +495,17 @@ private:
   // Methods.
 
   /**
-   * Ctor helper that sets up `m_interrupt*` pipe items.  If it fails it returns truthy code
-   * and cleans up what it did.  It ignores everything else like #m_mq.
+   * Ctor helper that sets up `m_interrupt*` pipe items.  If (and only if) it fails it returns truthy code but performs
+   * no cleanup of any resources including the ones it may have part-setup.  That is caller's responsibility.
    *
    * @return See above.
    */
   Error_code pipe_setup();
 
   /**
-   * Ctor helper that sets up #m_epoll_hndl_snd and #m_epoll_hndl_rcv.  If it fails it returns truthy code
-   * and puts everything back to as-if-ctor-failed state, including #m_mq being null.
+   * Ctor helper that sets up #m_epoll_hndl_snd and #m_epoll_hndl_rcv.  If (and only if) it fails it returns truthy
+   * code but performs no cleanup of any resources including the ones it may have part-setup.  That is caller's
+   * responsibility.
    *
    * @return See above.
    */
@@ -608,15 +560,16 @@ private:
   /**
    * Impl body for `*_sendable()` and `*_receivable()`.
    *
+   * @tparam SND_ELSE_RCV
+   *         True for `*_sendable()`, else `*_receivable()`.
    * @param timeout_from_now_or_none
    *        `timeout_from_now`; or 0 for `is_*()`, or `Fine_duration::max()` for non-timed-blocking variant.
-   * @param snd_else_rcv
-   *        True for `*_sendable()`, else `*_receivable()`.
    * @param err_code
    *        See callers.
    * @return See callers.
    */
-  bool wait_impl(util::Fine_duration timeout_from_now_or_none, bool snd_else_rcv, Error_code* err_code);
+  template<bool SND_ELSE_RCV>
+  bool wait_impl(util::Fine_duration timeout_from_now_or_none, Error_code* err_code);
 
   // Data.
 
@@ -646,7 +599,7 @@ private:
   /**
    * Starting at `false`, this is made `true` via interrupt_sends(), and back by allow_sends(); acts as a guard
    * against doing it when already in effect.  Note that that is its only purpose; as wait_impl() never checks it;
-   * instead it relies on `epoll_wait()` detecting a readable #m_interrupt_detector_rcv.
+   * instead it relies on `epoll_wait()` detecting a readable #m_interrupt_detector_snd.
    */
   bool m_interrupting_snd;
 

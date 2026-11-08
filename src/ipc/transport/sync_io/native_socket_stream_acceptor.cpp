@@ -18,6 +18,8 @@
 /// @file
 #include "ipc/transport/sync_io/native_socket_stream_acceptor.hpp"
 #include <flow/error/error.hpp>
+#include <boost/asio/connect_pipe.hpp>
+#include <ostream>
 
 namespace ipc::transport::sync_io
 {
@@ -62,13 +64,13 @@ Native_socket_stream_acceptor::Native_socket_stream_acceptor(flow::log::Logger* 
       return;
     }
     // else
-    throw Runtime_error(sys_err_code, "sync_io::Native_socket_stream_acceptor::ctor");
+    throw Runtime_error{sys_err_code, "sync_io::Native_socket_stream_acceptor::ctor"};
   }
-  // else: No futher errors.
+  // else: No further errors.
 
-  m_ev_wait_hndl.assign(Native_handle(m_ready_reader.native_handle()));
+  m_ev_wait_hndl.assign(Native_handle{m_ready_reader.native_handle()});
 
-  FLOW_LOG_WARNING("Acceptor [" << *this << "]: Constructed.  Async-IO core started above.");
+  FLOW_LOG_INFO("Acceptor [" << *this << "]: Constructed.  Async-IO core started above.");
 } // Native_socket_stream_acceptor::Native_socket_stream_acceptor()
 
 Native_socket_stream_acceptor::~Native_socket_stream_acceptor() = default; // @todo Maybe TRACE-log something?

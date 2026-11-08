@@ -20,25 +20,37 @@
 
 #include "ipc/util/util_fwd.hpp"
 #include <flow/async/single_thread_task_loop.hpp>
+#include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/asio/readable_pipe.hpp>
+#include <boost/asio/writable_pipe.hpp>
+#include <boost/move/unique_ptr.hpp>
+#include <boost/noncopyable.hpp>
+#include <string>
+#include <vector>
 
 namespace ipc::util::sync_io
 {
 
 /**
  * An object of this type, used internally to implement `sync_io`-pattern objects that require timer events,
- * starts a thread dedicated exclusively to running timer waits on the `sync_io` object's behalf, so that when
+ * runs a thread dedicated exclusively to running timer waits on the `sync_io` object's behalf, so that when
  * such a timer fires, it emits a pipe-readable event to be detected by the user's event loop, which it then reports to
  * `sync_io` object.
+ *
+ * The thread is started lazily: by the first timer_async_wait() call, if any; from then on it lives for the rest of
+ * `*this` lifetime.  This is an optimization that makes a `*this` particularly light for (potentially quite common)
+ * cases where the user `sync_io` object may not actually need to do any timer work; but a `*this` can still be
+ * constructed greedily and merely take some memory until/unless it's actually needed.
  *
  * @see ipc::util::sync_io for discussion of the `sync_io` pattern.  This is necessary background for the present
  *      class which is used in implementing objects within that pattern.
  *
  * ### Rationale ###
  * In the `sync_io` pattern, suppose there is ipc::transport or ipc::session object X (e.g.,
- * ipc::transport::sync_io::Native_socket_stream::Impl).  By definiton of the `sync_io` pattern, X itself
+ * ipc::transport::sync_io::Native_socket_stream_impl).  By definition of the `sync_io` pattern, X itself
  * endeavours to not async-wait on various events itself, in its own threads it might start, but rather
  * instructs the user to wait on Native_handle being readable or writable and to inform X of such an event
- * (see sync_io::Event_wait_func doc header).  For example `Native_socket_stream::Impl`, when awaiting in-traffic,
+ * (see sync_io::Event_wait_func doc header).  For example `Native_socket_stream_impl`, when awaiting in-traffic,
  * uses #Event_wait_func to inform itself when the Unix-domain socket has become readable -- the user uses
  * their own `[e]poll*()` or boost.asio loop or ... to detect the readability and then informs X when this happens.
  *
@@ -50,7 +62,7 @@ namespace ipc::util::sync_io
  * exit any such wait; and (2) X should be informed, in this case so the outstanding receive-op would complete
  * with the idle-timeout error, detectable by the user's event loop before the next `epoll_wait()`.
  *
- * But how to even accompish (1)?  ((2) is relatively simple in comparison.)  Possibilities:
+ * But how to even accomplish (1)?  ((2) is relatively simple in comparison.)  Possibilities:
  *   - The user can be told of the next-soonest timer's expiration time, so that the `epoll_wait()` (or `poll()` or
  *     ...) can be set to time out at that time, latest.
  *     - This is viable but presents a tricky API design problem for the `sync_io` pattern.  The next-soonest
@@ -62,7 +74,7 @@ namespace ipc::util::sync_io
  *   - The OS can be somehow told to tickle a dedicated-to-this-purpose FD (per timer) at a particular time,
  *     while #Event_wait_func is used (same as it is for Unix domain sockets, etc.) to wait for readability of
  *     that FD.  `epoll_wait()` (or ...) would wake up like on any other event and inform X, and X would even
- *     know which timer it is, by being informed via `Event_wait_func`'s' `on_active_ev_func` arg.
+ *     know which timer it is, by being informed via `Event_wait_func`'s `on_active_ev_func` arg.
  *
  * The latter option is much more attractive in terms of API simplicity from the user's point of view (at least).
  * So we go with that.  Having made this decision, how to actually make it work?  Possibilities:
@@ -103,13 +115,14 @@ namespace ipc::util::sync_io
  * Timer_event_emitter supplies those things.
  *
  * ### How to use ###
- * Construct Timer_event_emitter.  This will start an idle thread (and it will remain totally idle with the
- * sole exception of a pipe-write executing when a timer actually fires).
+ * Construct Timer_event_emitter.  This sets up -- but does not yet start -- the worker thread; the first
+ * timer_async_wait() starts it.  Once started it remains totally idle with the sole exception of a pipe-write
+ * executing when a timer actually fires.
  *
  * Call create_timer().  This just returns a totally normal `flow::util::Timer` to be saved in the
- * `sync_io`-pattern-implementing object.  create_timer() merely associates the `*this` thread with that
- * timer, so that when `Timer::async_wait(F)` eventually causes `F()` to execute, it will execute `F()`
- * in that thread.
+ * `sync_io`-pattern-implementing object.  create_timer() merely associates the `*this` worker thread (started
+ * or not yet) with that timer, so that when `Timer::async_wait(F)` eventually causes `F()` to execute, it will
+ * execute `F()` in that thread.
  *
  * Call create_timer_signal_pipe() (for each timer one plans to use).  This creates a pipe; saves both ends
  * inside `*this`; and returns a pointer to the read-end.  The `sync_io`-pattern object saves this,
@@ -129,7 +142,7 @@ namespace ipc::util::sync_io
  * the `Timer::async_wait()`, with the handler writing to the write-end.  It is nicer to keep that stuff
  * to `*this`.)
  *
- * Lastly, when #Event_wait_func `on_active_ev_func()` informs the `sync_op`-pattern-implementing object
+ * Lastly, when #Event_wait_func `on_active_ev_func()` informs the `sync_io`-pattern-implementing object
  * of a timer-associated FD being readable, it must read the byte off the pipe by calling
  * consume_timer_firing_signal().  (Again, it's just a convenience.  We could have had the user object
  * read the byte themselves.  It is nicer to keep the protocol inside `*this`.)
@@ -153,7 +166,7 @@ public:
    * Object representing the read end of IPC mechanism, where readable status indicates the associated
    * timer_async_wait() call has resulted in the timer firing.  Formally the `*this` user shall perform only
    * the following operations on such an object R, after obtaining it from create_timer_signal_pipe():
-   *   - Load your Asio_waitable_native_handle `E` via `E.assign(Native_handle(R.native_handle())`
+   *   - Load your Asio_waitable_native_handle `E` via `E.assign(Native_handle{R.native_handle()})`
    *     or equivalent.
    *   - Call `Event_wait_func`, passing in `&E`, just ahead of Timer_event_emitter::timer_async_wait().
    *   - Call `consume_timer_firing_signal(&R)` in the handler for the so-registered-via-`Event_wait_func`
@@ -164,7 +177,7 @@ public:
   // Constructors/destructor.
 
   /**
-   * Constructs emitter, creating idle thread managing no timers.
+   * Constructs emitter.  No thread is yet started; the first timer_async_wait() starts it lazily.
    *
    * @param logger_ptr
    *        Logger to use for subsequently logging.
@@ -174,11 +187,15 @@ public:
    */
   explicit Timer_event_emitter(flow::log::Logger* logger_ptr, String_view nickname_str);
 
+  /// Ends background thread, if any started; hence no timer-firings will execute after.
+  ~Timer_event_emitter();
+
   // Methods.
 
   /**
-   * Creates idle timer for use with timer_async_wait() subsequently.  It is associated with the thread
-   * started in the ctor, meaning completion handlers shall execute in that thread.
+   * Creates idle timer for use with timer_async_wait() subsequently.  It is associated with the `*this` worker
+   * thread (whether or not it has been lazily started yet), meaning completion handlers shall execute in that
+   * thread.
    *
    * Formally, behavior is undefined if T is the returned timer or one moved-from it, and one invokes
    * `T.async_wait()` on it; you must use `timer_async_wait(&T, ...)` instead.  You may call other `T`
@@ -232,12 +249,6 @@ public:
    */
   void consume_timer_firing_signal(Timer_fired_read_end* read_end);
 
-  /**
-   * Returns nickname as passed to ctor.
-   * @return See above.
-   */
-  const std::string& nickname() const;
-
   // Data.
 
   /// Nickname as passed to ctor.
@@ -246,7 +257,25 @@ public:
 private:
   // Data.
 
-  /// The thread where (only) timer-firing events (from create_timer()-created `Timer`s) execute.
+  /// Whether `m_worker.start()` has already been lazily called (first timer_async_wait()); initially `false`.
+  bool m_worker_started;
+
+  /**
+   * The thread where (only) timer-firing events (from create_timer()-created `Timer`s) execute.
+   *
+   * ### Order subtleties ###
+   * Members #m_signal_pipe_readers and #m_signal_pipe_writers hold boost.asio objects that store/use references to
+   * `*(m_worker.task_engine())` (a/k/a an `io_context`), which is owned by `m_worker`.  Specifically their
+   * destructors can and do access this; bottom line is the `Task_engine`, therefore `m_worker`, must outlive
+   * those data members -- or really the objects stored in those containers.  On the other hand, if `m_worker`
+   * background thread is still running, after `m_signal_pipe_writers` and `m_signal_pipe_readers` are destroyed,
+   * then briefly handlers posted onto `m_worker` could use-after-free.  So no default destruction order solves
+   * both dangers.
+   *
+   * This is not special; the situation arises in various places that deal with `Single_thread_task_loop` et al.
+   * We deal with it by declaring `m_worker` first, so the `Task_engine` lives longest; and use `.stop()` in dtor
+   * to avoid the other problem.
+   */
   flow::async::Single_thread_task_loop m_worker;
 
   /**
@@ -262,8 +291,8 @@ private:
    * pointer to their respective read-ends.  timer_async_wait() can therefore look-up a write-end
    * based on the read-end pointer it gave to the user, which the user must pass-to timer_async_wait().
    */
-  boost::unordered_map<Timer_fired_read_end*,
-                       boost::movelib::unique_ptr<boost::asio::writable_pipe>> m_signal_pipe_writers;
+  boost::unordered_flat_map<Timer_fired_read_end*,
+                            boost::movelib::unique_ptr<boost::asio::writable_pipe>> m_signal_pipe_writers;
 }; // class Timer_event_emitter
 
 // Free functions: in *_fwd.hpp.

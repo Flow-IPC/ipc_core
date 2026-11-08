@@ -35,6 +35,8 @@ FLOW_LOG_CFG_COMPONENT_DEFINE(SHM, 3)
 FLOW_LOG_CFG_COMPONENT_DEFINE(UTIL, 4)
 // Logging from namespace ipc::*::test.
 FLOW_LOG_CFG_COMPONENT_DEFINE(TEST, 5)
+// Logging from namespace ipc::*::shm::rpc.
+FLOW_LOG_CFG_COMPONENT_DEFINE(RPC, 6)
 
 // -v- Doxygen, please stop ignoring.
 /// @endcond

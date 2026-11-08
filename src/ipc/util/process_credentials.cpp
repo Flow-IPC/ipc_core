@@ -19,9 +19,20 @@
 #include "ipc/util/process_credentials.hpp"
 #include <flow/error/error.hpp>
 #include <flow/common.hpp>
+#include <boost/filesystem/fstream.hpp>
+#include <boost/lexical_cast.hpp>
+#include <cassert>
+#include <cerrno>
+#include <ostream>
+#include <string>
+#include <unistd.h>
 
 namespace ipc::util
 {
+
+// Global initializations.
+
+const Process_credentials NULL_PROCESS_CREDENTIALS;
 
 // Process_credentials implementations.
 
@@ -35,7 +46,7 @@ Process_credentials::Process_credentials(process_id_t process_id_init, user_id_t
 {
   /* I don't really want to rely on the ordering of this annoying little Linux/whatever structure,
    * so just assign it manually instead of in the initializer above.
-   * @todo In C++20 can use the { .x = ..., .y = ... } syntax. */
+   * @todo In C++20 can use the { .x = ..., .y = ... } syntax.  In C++17 clang/gcc allow it anyway... but... etc. */
   m_val.pid = process_id_init;
   m_val.uid = user_id_init;
   m_val.gid = group_id_init;
@@ -76,9 +87,15 @@ std::string Process_credentials::process_invoked_as(Error_code* err_code) const
   static_assert(false, "process_invoked_as() depends on Linux /proc semantics.");
 #endif
 
-  path cmd_line_path("/proc");
+  path cmd_line_path{"/proc"};
   cmd_line_path /= lexical_cast<path>(process_id());
   cmd_line_path /= "cmdline";
+
+  /* @todo Below in a couple places we take errno as the reason for an ifstream failure.  That is not guaranteed by the
+   * standard; but in practice both libstdc++ and libc++ (whose filebuf uses fopen()/fread()) leave the libc errno
+   * in place.  If errno were somehow 0, we'd emit a success code alongside an empty result.  Nicer: set errno = 0
+   * before each op; if still 0 upon failure emit a dedicated util:: error code (cousin of
+   * transport::error::Code::S_MQ_BIPC_MISC_LIBRARY_ERROR) -- which requires a util:: error table. */
 
   /* This weird "file" (I believe it's really the kernel just pumping out these characters, as we read, as opposed
    * to anything actually being stored on a drive) is argv[0], argv[1], ..., right in a row, each one NUL-terminated.
@@ -86,8 +103,8 @@ std::string Process_credentials::process_invoked_as(Error_code* err_code) const
   ifstream cmd_line_file(cmd_line_path, ios_base::binary);
   if (!cmd_line_file.good())
   {
-    *err_code = Error_code(errno, system_category());
-    return string();
+    *err_code = {errno, system_category()};
+    return {};
   }
   // else
 
@@ -115,11 +132,12 @@ std::string Process_credentials::process_invoked_as(Error_code* err_code) const
   if ((!cmd_line_file.good()) && (!cmd_line_file.eof()))
   {
     assert((errno != 0) && "There had to be *some* reason file reading failed, and it wasn't EOF.");
-    *err_code = Error_code(errno, system_category());
-    return string();
+    *err_code = {errno, system_category()};
+    return {};
   }
   // else
 
+  err_code->clear();
   return result; // Might still be empty (unlikely though)... but as noted -- that's OK by us.
 } // Process_credentials::process_invoked_as()
 
@@ -140,7 +158,7 @@ group_id_t Process_credentials::own_group_id() // Static.
 
 Process_credentials Process_credentials::own_process_credentials() // Static.
 {
-  return Process_credentials(own_process_id(), own_user_id(), own_group_id());
+  return Process_credentials{own_process_id(), own_user_id(), own_group_id()};
 }
 
 bool operator==(const Process_credentials& val1, const Process_credentials& val2)
@@ -156,7 +174,19 @@ bool operator!=(const Process_credentials& val1, const Process_credentials& val2
 
 std::ostream& operator<<(std::ostream& os, const Process_credentials& val)
 {
-  return os << "pid[" << val.process_id() << "], user[" << val.user_id() << ':' << val.group_id() << ']';
+  const auto pid = val.process_id();
+  const auto uid = val.user_id();
+  const auto gid = val.group_id();
+  if ((pid == 0) && (uid == 0) && (gid == 0))
+  {
+    return os << "null";
+    /* Note, we've intentionally not added `operator bool` or `.empty()` (etc.) to Process_credentials as a logical
+     * convention; it's deliberately minimal/low-level; user can worry about exact interpretation of the individual
+     * values.  However, for pithy output -- and that thing only -- we've allowed ourselves the convention to represent
+     * an object that is as-if-default-cted as "null" as a string. */
+  }
+  // else
+  return os << "pid[" << pid << "], user[" << uid << ':' << gid << ']';
 }
 
 } // namespace ipc::util

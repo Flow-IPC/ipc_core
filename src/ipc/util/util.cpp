@@ -20,6 +20,12 @@
 #include "ipc/util/native_handle.hpp"
 #include <flow/error/error.hpp>
 #include <flow/common.hpp>
+#include <cassert>
+#include <cerrno>
+#include <cstdint>
+#include <string>
+#include <fcntl.h>
+#include <signal.h>
 #include <sys/stat.h>
 
 namespace ipc::util
@@ -48,7 +54,6 @@ void set_resource_permissions(flow::log::Logger* logger_ptr, const fs::path& pat
 {
   using boost::system::system_category;
   using ::open;
-  using ::close;
   // using ::O_PATH; // It's a macro apparently.
   // using ::errno; // It's a macro apparently.
 
@@ -68,20 +73,21 @@ void set_resource_permissions(flow::log::Logger* logger_ptr, const fs::path& pat
    * and that is for consistency (and not just in a cosmetic sense; I'd like both routines to work and fail in
    * similar ways with fewer degrees of freedom on how to differ based on some 3rd-party developer's whims).
    * (@todo It is certainly arguable.)  Thing is, there's an `fs` way of doing fs::permissions(path), but
-   * there's no fs::permissions(<FD>).  So we'd have to use a native call for the latter but `fs` for the other
-   * former?  Nah.  Let's just do it native all the way but build one on top of the other.  Also this repeats
-   * the technique in session::ensure_resource_owner_is_app(). */
+   * there's no fs::permissions(<FD>).  So we'd have to use a native call for the latter but `fs` for the former?
+   * Nah.  Let's just do it native all the way but build one on top of the other.  Also this repeats the technique
+   * in session::ensure_resource_owner_is_app(). */
 
-  int native_handle = open(path.c_str(), O_RDONLY); // Read-only is sufficient for ::fchmod().
+  // Read-only is sufficient for ::fchmod().  (Close-on-exec, so a fork()+exec() racing us cannot leak it.)
+  int native_handle = open(path.c_str(), O_RDONLY | O_CLOEXEC);
   if (native_handle == -1)
   {
-    *err_code = Error_code(errno, system_category());
+    *err_code = {errno, system_category()};
     FLOW_LOG_WARNING("Tried to set permissions of resource at [" << path << "] but while obtaining info-only handle "
                      "encountered error [" << *err_code << "] [" << err_code->message() << "]; unable to proceed.");
     return;
   }
   // else
-  Native_handle handle(native_handle);
+  Native_handle handle{native_handle};
 
   // For nicer messaging add some more logging on error.  A little code duplication, but it's OK.
   set_resource_permissions(logger_ptr, handle, perms, err_code);
@@ -92,7 +98,7 @@ void set_resource_permissions(flow::log::Logger* logger_ptr, const fs::path& pat
                      "other details.");
   }
 
-  close(native_handle);
+  handle.close();
 } // set_resource_permissions(1)
 
 void set_resource_permissions(flow::log::Logger* logger_ptr, Native_handle handle,
@@ -119,9 +125,9 @@ void set_resource_permissions(flow::log::Logger* logger_ptr, Native_handle handl
   const auto rc = fchmod(handle.m_native_handle, perms.get_permissions());
   if (rc == -1)
   {
-    *err_code = Error_code(errno, system_category());
+    *err_code = {errno, system_category()};
     FLOW_LOG_WARNING("Tried to set permissions of resources via descriptor/handle [" << handle << "] but encountered "
-                     "error [" << *err_code << "] [" << err_code->message() << "]; unable to check.");
+                     "error [" << *err_code << "] [" << err_code->message() << "]; unable to proceed.");
   }
   else
   {
@@ -144,14 +150,31 @@ bool process_running(process_id_t process_id)
                          "must be checked/tested.");
 #endif
 
-  if (kill(process_id, 0) == 0)
+  if (process_id <= 0)
   {
-    return true;
+    return false; // As promised.  (kill() would otherwise target a process group or all processes.)
   }
   // else
-  assert((Error_code(errno, system_category()) == boost::system::errc::no_such_process)
-         && "The fake signal zero is valid and is not actually sent so no permission problem possible; hence "
-              "ESRCH or equivalent must be the only possible error.");
+
+  if (kill(process_id, 0) == 0)
+  {
+    return true; // Caveat: It might be a zombie though.  Allowed by our contract.
+  }
+  // else
+
+  Error_code err_code{errno, system_category()};
+  if (err_code == boost::system::errc::operation_not_permitted)
+  {
+    return true; // Caveat: ditto.
+  }
+  // else
+
+  assert((err_code == boost::system::errc::no_such_process)
+         && "At least in Linux, nothing but ESRCH or EPERM is documented or makes sense.");
+
+  /* Caveat: Certain ultra-high-security implementations (not standard Linux) may return ESRCH instead of EPERM
+   * to prevent process existence from being used as a covert channel.  This is extremely rare in practice
+   * and not something to worry about in typical Linux deployments. */
   return false;
 } // process_running()
 

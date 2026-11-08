@@ -18,7 +18,7 @@
 /// @file
 #pragma once
 
-#include <ostream>
+#include <iosfwd>
 
 namespace ipc::util
 {

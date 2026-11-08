@@ -20,6 +20,8 @@
 
 #include "ipc/util/native_handle.hpp"
 #include <boost/asio.hpp>
+#include <cassert>
+#include <type_traits>
 
 namespace ipc::util::sync_io
 {
@@ -53,15 +55,16 @@ namespace ipc::util::sync_io
  *         in some situations.
  *
  * You may not use `*this` object directly to perform actual I/O; it lacks such methods as `async_read_some()`.
- * Moreover it is likely against the (informal) aim of Asio_waitable_native_handle to perform actual I/O
- * by obtaining the handle via `.native_handle()` and then doing reads/writes on that handle.
+ * Moreover, performing actual I/O by obtaining the handle via `.native_handle()` and then doing reads/writes on that
+ * handle is likely against the (informal) aim of Asio_waitable_native_handle.
  *
- * Construction is likely performed by internal Flow-IPC code only in practice, though you are free to use
- * it for your own purposes.
+ * Construction with a handle is likely performed by internal Flow-IPC code only, in practice.  If integrating with
+ * boost.asio, you will construct handle-less ones (associated with your execution context) in the function you pass
+ * to `replace_event_wait_handles()`.  Beyond that you are free to use it for your own purposes.
  *
  * @warning This object, like Asio_waitable_native_handle::Base, isn't *just* a Native_handle wrapper:
  *          It also has to be associated with an execution context, usually `Task_engine` (`boost::asio::io_context`)
- *          or boost.asio strand.  If you associate, via ctor or assign(), 2 `*this`es each wrapping
+ *          or boost.asio `strand`.  If you associate, via ctor or assign(), 2 `*this`es each wrapping
  *          the same-valued Native_handle (storing the same raw handle) with the same `Task_engine`,
  *          behavior is undefined formally; though internally it'll cause a duplicate-descriptor error/exception
  *          (in Linux from `errno == EEXIST` from an internal `epoll_ctl()`).  Even if you don't plan to
@@ -131,10 +134,10 @@ public:
    */
   template<typename Execution_context>
   explicit Asio_waitable_native_handle(Execution_context& context, Native_handle hndl,
-                                        typename std::enable_if_t<std::is_convertible_v
-                                                                    <Execution_context&,
-                                                                     boost::asio::execution_context&>>*
-                                          ignored = nullptr);
+                                       typename std::enable_if_t<std::is_convertible_v
+                                                                   <Execution_context&,
+                                                                    boost::asio::execution_context&>>*
+                                         ignored = nullptr);
 
   /**
    * Construct boost.asio descriptor object that stores no handle.  You may call assign() to change this.
@@ -154,27 +157,27 @@ public:
                                           ignored = nullptr);
 
   /**
-   * Move-construct.
+   * Move-construct.  See boost.asio docs for similar `posix::basic_descriptor` ctor.
    *
    * @param src
-   *        See boost.asio docs for similar `posix::basic_descriptor` ctor.
+   *        See above.
    */
   Asio_waitable_native_handle(Asio_waitable_native_handle&& src);
 
   /**
-   * Destructor that does *not* OS-close (`"::close()"`) the stored native handle (if any) but rather
-   * performs `this->release()` (eating any potential error in doing so).
+   * Destructor that does *not* OS-close (in the Native_handle::close() sense) the stored native handle (if any)
+   * but rather performs `this->release()` (eating any potential error in doing so).
    */
   ~Asio_waitable_native_handle();
 
   // Methods.
 
   /**
-   * Move-assign.
+   * Move-assign.  See boost.asio docs for similar `posix::basic_descriptor` method.
    *
    * @param src
-   *        See boost.asio docs for similar `posix::basic_descriptor` method.
-   * @return See boost.asio docs for similar `posix::basic_descriptor` method.
+   *        See above.
+   * @return See above.
    */
   Asio_waitable_native_handle& operator=(Asio_waitable_native_handle&& src);
 
@@ -190,7 +193,7 @@ public:
    * Loads value to be returned by native_handle().  As with the 2+-arg ctor(s) the handle must be valid
    * (not closed).  See also `.release()` and dtor.
    *
-   * If a handle is already loaded (`Base::is_open() == true`), this method automatically release()s it first.
+   * If a handle is already loaded (`Base::is_open() == true`), this method automatically `release()`s it first.
    *
    * @param hndl
    *        The handle that might be watched subsequently.  `.null()` leads to undefined behavior;

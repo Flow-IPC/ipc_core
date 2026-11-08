@@ -221,23 +221,22 @@ public:
    *        Absolute name at which the persistent MQ lives.
    * @param mode_tag
    *        API-choosing tag util::CREATE_ONLY.
+   * @param max_n_msg
+   *        Max # of unpopped messages in created queue.
+   * @param max_msg_sz
+   *        Max # of bytes in any one message in created queue.
    * @param perms
    *        Permissions to use for creation.  Suggest the use of util::shared_resource_permissions() to translate
    *        from one of a small handful of levels of access; these apply almost always in practice.
    *        The applied permissions shall *ignore* the process umask and shall thus exactly match `perms`,
    *        unless an error occurs.
-   * @param max_n_msg
-   *        Max # of unpopped messages in created queue.
-   * @param max_msg_sz
-   *        Max # of bytes in any one message in created queue.
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
    *        various.  Most likely creation failed due to permissions, or it already existed.
    */
   explicit Persistent_mq_handle(flow::log::Logger* logger_ptr, const Shared_name& absolute_name,
                                 util::Create_only mode_tag, size_t max_n_msg, size_t max_msg_sz,
-                                const util::Permissions& perms = util::Permissions(),
-                                Error_code* err_code = 0);
+                                const util::Permissions& perms = {}, Error_code* err_code = nullptr);
 
   /**
    * Construct handle to existing named MQ, or else if it does not exist creates it first and opens it (atomically).
@@ -250,23 +249,22 @@ public:
    *        Absolute name at which the persistent MQ lives.
    * @param mode_tag
    *        API-choosing tag util::OPEN_OR_CREATE.
+   * @param max_n_msg_on_create
+   *        Max # of unpopped messages in created queue if creation is required.
+   * @param max_msg_sz_on_create
+   *        Max # of bytes in any one message in created queue if creation is required.
    * @param perms_on_create
    *        Permissions to use if creation is required.  Suggest the use of util::shared_resource_permissions() to
    *        translate from one of a small handful of levels of access; these apply almost always in practice.
    *        The applied permissions shall *ignore* the process umask and shall thus exactly match `perms_on_create`,
    *        unless an error occurs.
-   * @param max_n_msg_on_create
-   *        Max # of unpopped messages in created queue if creation is required.
-   * @param max_msg_sz_on_create
-   *        Max # of bytes in any one message in created queue if creation is required.
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
    *        various.  Most likely creation failed due to permissions.
    */
   explicit Persistent_mq_handle(flow::log::Logger* logger_ptr, const Shared_name& absolute_name,
                                 util::Open_or_create mode_tag, size_t max_n_msg_on_create, size_t max_msg_sz_on_create,
-                                const util::Permissions& perms_on_create = util::Permissions(),
-                                Error_code* err_code = 0);
+                                const util::Permissions& perms_on_create = {}, Error_code* err_code = nullptr);
 
   /**
    * Construct handle to existing named MQ.  If it does not exist, it is an error.
@@ -284,7 +282,7 @@ public:
    *        various.  Most likely it already existed.
    */
   explicit Persistent_mq_handle(flow::log::Logger* logger_ptr, const Shared_name& absolute_name,
-                                util::Open_only mode_tag, Error_code* err_code = 0);
+                                util::Open_only mode_tag, Error_code* err_code = nullptr);
 
   /**
    * Constructs handle from the source handle while making the latter invalid.
@@ -329,7 +327,7 @@ public:
    * closed; their presence in this or other process is *not* an error.
    *
    * @see `util::remove_each_persistent_*`() for a convenient way to remove more than one item.  E.g.,
-   *      `util::remove_each_persistent_with_name_prefix<Pool_arena>()` combines remove_persistent() and
+   *      `util::remove_each_persistent_with_name_prefix<Persistent_mq_handle>()` combines remove_persistent() and
    *      for_each_persistent() in a common-sense way to remove only those `name`s starting with a given prefix;
    *      or simply all of them.
    *
@@ -349,7 +347,7 @@ public:
    *        various.
    */
   static void remove_persistent(flow::log::Logger* logger_ptr, const Shared_name& name,
-                                Error_code* err_code = 0);
+                                Error_code* err_code = nullptr);
 
   /**
    * Lists all named persistent MQs currently persisting, invoking the given handler synchronously on each one.
@@ -385,7 +383,7 @@ public:
    * @return `true` on success; `false` on failure; in the latter case `*err_code` distinguishes
    *         between would-block and fatal error.
    */
-  bool try_send(const util::Blob_const& blob, Error_code* err_code = 0);
+  bool try_send(const util::Blob_const& blob, Error_code* err_code = nullptr);
 
   /**
    * Blocking send: pushes copy of message to queue; if queue is full blocks until it is not.
@@ -394,7 +392,7 @@ public:
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: If `blob.size()` exceeds message size limit (if any), a particular error, which shall be
    * documented below, is emitted; this is not fatal to `*this`.  Exception to this: interrupt_sends()
-   * leads to the emission of a particular error which shall be documented below; this is not fatal to `*this.
+   * leads to the emission of a particular error which shall be documented below; this is not fatal to `*this`.
    *
    * @param blob
    *        See try_send().
@@ -405,7 +403,7 @@ public:
    *        max_msg_size()).
    *        error::Code::S_INTERRUPTED (preempted or interrupted by interrupt_sends()).
    */
-  void send(const util::Blob_const& blob, Error_code* err_code = 0);
+  void send(const util::Blob_const& blob, Error_code* err_code = nullptr);
 
   /**
    * Blocking timed send: pushes copy of message to queue; if queue is full blocks until it is not, or the
@@ -415,7 +413,7 @@ public:
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: If `blob.size()` exceeds message size limit (if any), a particular error, which shall be
    * documented below, is emitted; this is not fatal to `*this`.  Exception to this: interrupt_sends()
-   * leads to the emission of a particular error which shall be documented below; this is not fatal to `*this.
+   * leads to the emission of a particular error which shall be documented below; this is not fatal to `*this`.
    *
    * @warning The user must not count on precision/stability -- unlike with, say, boost.asio timers -- here.
    *          If timing precision is required, the user will have to add an async layer with more precise timing
@@ -437,7 +435,7 @@ public:
    * @return `true` on success; `false` on failure; in the latter case `*err_code` distinguishes
    *         between timeout and fatal error.
    */
-  bool timed_send(const util::Blob_const& blob, util::Fine_duration timeout_from_now, Error_code* err_code = 0);
+  bool timed_send(const util::Blob_const& blob, util::Fine_duration timeout_from_now, Error_code* err_code = nullptr);
 
   /**
    * Equivalent to try_send() except stops short of writing anything, with `true` result indicating that
@@ -445,7 +443,7 @@ public:
    *
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: interrupt_sends() leads to the emission of a particular error which shall be documented
-   * below; this is not fatal to `*this.
+   * below; this is not fatal to `*this`.
    *
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
@@ -453,7 +451,7 @@ public:
    *        error::Code::S_INTERRUPTED (preempted by interrupt_sends()).
    * @return `true` if transmissible; `false` if not, or on error.
    */
-  bool is_sendable(Error_code* err_code = 0);
+  bool is_sendable(Error_code* err_code = nullptr);
 
   /**
    * Equivalent to send() except stops short of writing anything, with non-error return indicating that
@@ -462,14 +460,14 @@ public:
    *
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: interrupt_sends() leads to the emission of a particular error which shall be documented
-   * below; this is not fatal to `*this.
+   * below; this is not fatal to `*this`.
    *
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
    *        various.  Would-block shall not be emitted.
    *        error::Code::S_INTERRUPTED (preempted or interrupted by interrupt_sends()).
    */
-  void wait_sendable(Error_code* err_code = 0);
+  void wait_sendable(Error_code* err_code = nullptr);
 
   /**
    * Equivalent to timed_send() except stops short of writing anything, with `true` result indicating that
@@ -478,7 +476,7 @@ public:
    *
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: interrupt_sends() leads to the emission of a particular error which shall be documented
-   * below; this is not fatal to `*this.
+   * below; this is not fatal to `*this`.
    *
    * @param timeout_from_now
    *        See timed_send().
@@ -489,7 +487,7 @@ public:
    * @return `true` if transmissible; `false` if not, or on error or timeout; in the latter case `*err_code`
    *         distinguishes between timeout and fatal error.
    */
-  bool timed_wait_sendable(util::Fine_duration timeout_from_now, Error_code* err_code = 0);
+  bool timed_wait_sendable(util::Fine_duration timeout_from_now, Error_code* err_code = nullptr);
 
   /**
    * Non-blocking receive: pops copy of message from queue into buffer and returns `true`; if queue is empty then no-op
@@ -501,7 +499,7 @@ public:
    * a particular error, which shall be documented below, is emitted; this is not fatal to `*this`.
    *
    * @param blob
-   *        Buffer into which to copy into MQ and whose `->size()` to update to the # of bytes received;
+   *        Buffer into which to copy the message from MQ and whose `->size()` to update to the # of bytes received;
    *        if message empty it is set to zero.  Original `->size()` value indicates capacity of buffer;
    *        if this is insufficient based on either the popped message size or an upper limit (if any), it is an error.
    * @param err_code
@@ -512,7 +510,7 @@ public:
    * @return `true` on success; `false` on failure; in the latter case `*err_code` distinguishes
    *         between would-block and fatal error.
    */
-  bool try_receive(util::Blob_mutable* blob, Error_code* err_code = 0);
+  bool try_receive(util::Blob_mutable* blob, Error_code* err_code = nullptr);
 
   /**
    * Blocking receive: pops copy of message from queue into buffer; if queue is empty blocks until it is not.
@@ -523,7 +521,7 @@ public:
    * Exception to this: If `blob->size()` is less than the required message size (or upper limit on this, if any),
    * a particular error, which shall be documented below, is emitted; this is not fatal to `*this`.
    * Exception to this: interrupt_receives()
-   * leads to the emission of a particular error which shall be documented below; this is not fatal to `*this.
+   * leads to the emission of a particular error which shall be documented below; this is not fatal to `*this`.
    *
    * @param blob
    *        See try_receive().
@@ -534,7 +532,7 @@ public:
    *        max_msg_size()).
    *        error::Code::S_INTERRUPTED (preempted or interrupted by interrupt_receives()).
    */
-  void receive(util::Blob_mutable* blob, Error_code* err_code = 0);
+  void receive(util::Blob_mutable* blob, Error_code* err_code = nullptr);
 
   /**
    * Blocking timed receive: pops copy of message from queue into buffer; if queue is empty blocks until it is not, or
@@ -561,7 +559,7 @@ public:
    * @return `true` on success; `false` on failure; in the latter case `*err_code` distinguishes
    *         between timeout and fatal error.
    */
-  bool timed_receive(util::Blob_mutable* blob, util::Fine_duration timeout_from_now, Error_code* err_code = 0);
+  bool timed_receive(util::Blob_mutable* blob, util::Fine_duration timeout_from_now, Error_code* err_code = nullptr);
 
   /**
    * Equivalent to try_receive() except stops short of reading anything, with `true` result indicating that
@@ -569,7 +567,7 @@ public:
    *
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: interrupt_receives() leads to the emission of a particular error which shall be documented
-   * below; this is not fatal to `*this.
+   * below; this is not fatal to `*this`.
    *
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
@@ -577,7 +575,7 @@ public:
    *        error::Code::S_INTERRUPTED (preempted by interrupt_receives()).
    * @return `true` if transmissible; `false` if not, or on error.
    */
-  bool is_receivable(Error_code* err_code = 0);
+  bool is_receivable(Error_code* err_code = nullptr);
 
   /**
    * Equivalent to receive() except stops short of reading anything, with non-error return indicating that
@@ -586,14 +584,14 @@ public:
    *
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: interrupt_receives() leads to the emission of a particular error which shall be documented
-   * below; this is not fatal to `*this.
+   * below; this is not fatal to `*this`.
    *
    * @param err_code
    *        See `flow::Error_code` docs for error reporting semantics.  #Error_code generated:
    *        various.  Would-block shall not be emitted.
    *        error::Code::S_INTERRUPTED (preempted or interrupted by interrupt_receives()).
    */
-  void wait_receivable(Error_code* err_code = 0);
+  void wait_receivable(Error_code* err_code = nullptr);
 
   /**
    * Equivalent to timed_receive() except stops short of reading anything, with `true` result indicating that
@@ -602,7 +600,7 @@ public:
    *
    * If error is emitted, `*this` shall be considered hosed: Behavior is undefined except dtor or move-assignment.
    * Exception to this: interrupt_receives() leads to the emission of a particular error which shall be documented
-   * below; this is not fatal to `*this.
+   * below; this is not fatal to `*this`.
    *
    * @param timeout_from_now
    *        See timed_receive().
@@ -613,14 +611,18 @@ public:
    * @return `true` if transmissible; `false` if not, or on error or timeout; in the latter case `*err_code`
    *         distinguishes between timeout and fatal error.
    */
-  bool timed_wait_receivable(util::Fine_duration timeout_from_now, Error_code* err_code = 0);
+  bool timed_wait_receivable(util::Fine_duration timeout_from_now, Error_code* err_code = nullptr);
 
   /**
    * Enables sends-interrupted mode: is_sendable() (future calls), send() (future or concurrent calls),
    * timed_send() (ditto), wait_sendable() (ditto), timed_wait_sendable() (ditto) shall emit
    * error::Code::S_INTERRUPTED as soon as possible.
    *
-   * @return `true` on success; `false` is already enabled.
+   * To be clear, regarding the transmitting ops among those (send(), timed_send()): interruption applies to
+   * their blocking/waiting aspect only; a call that can complete the transmission immediately (no would-block)
+   * shall simply succeed, interrupted mode or no.
+   *
+   * @return `true` on success; `false` if already enabled.
    */
   bool interrupt_sends();
 
@@ -636,7 +638,11 @@ public:
    * timed_receive() (ditto), wait_receivable() (ditto), timed_wait_receivable() (ditto) shall emit
    * error::Code::S_INTERRUPTED as soon as possible.
    *
-   * @return `true` on success; `false` is already enabled.
+   * To be clear, regarding the transmitting ops among those (receive(), timed_receive()): interruption applies to
+   * their blocking/waiting aspect only; a call that can complete the transmission immediately (no would-block)
+   * shall simply succeed, interrupted mode or no.
+   *
+   * @return `true` on success; `false` if already enabled.
    */
   bool interrupt_receives();
 

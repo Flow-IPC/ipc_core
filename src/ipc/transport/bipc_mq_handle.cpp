@@ -22,7 +22,14 @@
 #include <flow/error/error.hpp>
 #include <flow/common.hpp>
 #include <boost/interprocess/ipc/message_queue.hpp>
+#include <boost/version.hpp>
 #include <boost/move/make_unique.hpp>
+#include <boost/io/ios_state.hpp>
+#include <cassert>
+#include <cerrno>
+#include <ostream>
+#include <type_traits>
+#include <utility>
 
 namespace ipc::transport
 {
@@ -33,7 +40,12 @@ const Shared_name Bipc_mq_handle::S_RESOURCE_TYPE_ID = Shared_name::ct("bipcQ");
 
 // Implementations.
 
-Bipc_mq_handle::Bipc_mq_handle() = default;
+Bipc_mq_handle::Bipc_mq_handle() :
+  m_interrupting_snd(false), // (Not algorithmically needed as of this writing, but avoid some sanitizer complaints.)
+  m_interrupting_rcv(false)  // (Ditto.  E.g., swap() through clang's UBSAN => complains it's uninitialized.)
+{
+  // Right.
+}
 
 template<typename Mode_tag>
 Bipc_mq_handle::Bipc_mq_handle(Mode_tag mode_tag, flow::log::Logger* logger_ptr, const Shared_name& absolute_name_arg,
@@ -137,6 +149,8 @@ void swap(Bipc_mq_handle& val1, Bipc_mq_handle& val2)
   swap(static_cast<Log_context&>(val1), static_cast<Log_context&>(val2));
   swap(val1.m_mq, val2.m_mq);
   swap(val1.m_absolute_name, val2.m_absolute_name);
+  swap(val1.m_interrupting_snd, val2.m_interrupting_snd);
+  swap(val1.m_interrupting_rcv, val2.m_interrupting_rcv);
 }
 
 size_t Bipc_mq_handle::max_msg_size() const
@@ -149,7 +163,7 @@ size_t Bipc_mq_handle::max_n_msgs() const
 {
   assert(m_mq && "As advertised: max_n_msgs() => undefined behavior if not successfully cted or was moved-from.");
   return m_mq->get_max_msg();
-} // Bipc_mq_handle::max_msg_size()
+} // Bipc_mq_handle::max_n_msgs()
 
 bool Bipc_mq_handle::try_send(const util::Blob_const& blob, Error_code* err_code)
 {
@@ -243,7 +257,7 @@ void Bipc_mq_handle::send(const util::Blob_const& blob, Error_code* err_code)
       // Threw => true error => *err_code set; get out.  Didn't throw and returned true => success; get out.
       return;
     }
-    // else if (would-block): as promised, INFO logs.
+    // else if (would-block): TRACE-logs.
 
     FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                    "size [" << blob.size() << "]: would-block.  Executing blocking-wait.");
@@ -289,9 +303,8 @@ bool Bipc_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_duratio
     FLOW_LOG_DATA("Blob contents: [\n" << buffers_dump_string(blob, "  ") << "].");
   }
 
-  auto now = Fine_clock::now();
-  auto after = now;
   bool ok;
+  auto before = Fine_clock::now();
 
   while (true)
   {
@@ -310,12 +323,11 @@ bool Bipc_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_duratio
     {
       break; // Instant success.
     }
-    // else if (would-block): as promised, INFO logs.
+    // else if (would-block): TRACE-logs.
 
     FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-push of blob @[" << blob_data << "], "
                    "size [" << blob.size() << "]: would-block.  Executing blocking-wait.");
 
-    timeout_from_now -= (after - now); // No-op the first time; after that reduces time left.
     const bool ready = timed_wait_sendable(timeout_from_now, err_code);
     if (*err_code)
     {
@@ -332,8 +344,9 @@ bool Bipc_mq_handle::timed_send(const util::Blob_const& blob, util::Fine_duratio
     // else: successful wait for transmissibility.  Try nb-transmitting again.
     FLOW_LOG_TRACE("Blocking-wait reported transmissibility.  Retrying.");
 
-    after = Fine_clock::now();
-    assert((after >= now) && "Fine_clock is supposed to never go backwards.");
+    const auto after = Fine_clock::now();
+    timeout_from_now -= (after - before); // Reduce time left by the duration of the last attempt.
+    before = after;
   } // while (true)
 
   return true;
@@ -364,7 +377,7 @@ bool Bipc_mq_handle::try_receive(util::Blob_mutable* blob, Error_code* err_code)
       = m_mq->try_receive(blob->data(), blob->size(), n_rcvd, pri_ignored);
     if (not_blocked)
     {
-      *blob = Blob_mutable(blob->data(), n_rcvd);
+      *blob = Blob_mutable{blob->data(), n_rcvd};
       FLOW_LOG_TRACE("Received message sized [" << n_rcvd << "].");
       if (blob->size() != 0)
       {
@@ -430,7 +443,7 @@ void Bipc_mq_handle::receive(util::Blob_mutable* blob, Error_code* err_code)
     // else if (would-block or success):
     if (ok)
     {
-      *blob = Blob_mutable(blob->data(), n_rcvd);
+      *blob = Blob_mutable{blob->data(), n_rcvd};
       FLOW_LOG_TRACE("Received message sized [" << n_rcvd << "].");
       if (blob->size() != 0)
       {
@@ -438,7 +451,7 @@ void Bipc_mq_handle::receive(util::Blob_mutable* blob, Error_code* err_code)
       }
       return; // Instant success.
     }
-    // else if (would-block): as promised, INFO logs.
+    // else if (would-block): TRACE-logs.
 
     FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-pop to blob @[" << blob->data() << "], "
                   "max-size [" << blob->size() << "]: would-block.  Executing blocking-pop.");
@@ -477,13 +490,13 @@ bool Bipc_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duration
   size_t n_rcvd = {}; // (Why initialize?  See comment near first such initializer for explanation.)
   unsigned int pri_ignored;
 
-  auto now = Fine_clock::now();
-  auto after = now;
   bool ok;
+  auto before = Fine_clock::now();
 
   while (true)
   {
-    op_with_possible_bipc_mq_exception(err_code, "Bipc_mq_handle::timed_send(): bipc::message_queue::try_send()",
+    op_with_possible_bipc_mq_exception(err_code,
+                                       "Bipc_mq_handle::timed_receive(): bipc::message_queue::try_receive()",
                                        [&]()
     {
       ok = m_mq->try_receive(blob->data(), blob->size(), // Throws <=> error wrapper sets truthy *err_code.
@@ -497,7 +510,7 @@ bool Bipc_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duration
     // else if (would-block or success):
     if (ok)
     {
-      *blob = Blob_mutable(blob->data(), n_rcvd);
+      *blob = Blob_mutable{blob->data(), n_rcvd};
       FLOW_LOG_TRACE("Received message sized [" << n_rcvd << "].");
       if (blob->size() != 0)
       {
@@ -505,12 +518,11 @@ bool Bipc_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duration
       }
       break; // Instant success.
     }
-    // else if (would-block): as promised, INFO logs.
+    // else if (would-block): TRACE-logs.
 
     FLOW_LOG_TRACE("Bipc_mq_handle [" << *this << "]: Nb-pop to blob @[" << blob->data() << "], "
                   "max-size [" << blob->size() << "]: would-block.  Executing blocking-wait.");
 
-    timeout_from_now -= (after - now); // No-op the first time; after that reduces time left.
     const bool ready = timed_wait_receivable(timeout_from_now, err_code);
     if (*err_code)
     {
@@ -527,8 +539,9 @@ bool Bipc_mq_handle::timed_receive(util::Blob_mutable* blob, util::Fine_duration
     // else: successful wait for transmissibility.  Try nb-transmitting again.
     FLOW_LOG_TRACE("Blocking-wait reported transmissibility.  Retrying.");
 
-    after = Fine_clock::now();
-    assert((after >= now) && "Fine_clock is supposed to never go backwards.");
+    const auto after = Fine_clock::now();
+    timeout_from_now -= (after - before); // Reduce time left by the duration of the last attempt.
+    before = after;
   } // while (true)
 
   return true;
@@ -567,7 +580,7 @@ bool Bipc_mq_handle::interrupt_allow_impl()
   auto& cond = *cond_ptr;
 
   {
-    Bipc_mq_lock lock(mq_hdr->m_mutex);
+    Bipc_mq_lock lock{mq_hdr->m_mutex};
 
     if (interrupting == ON_ELSE_OFF)
     {
@@ -588,7 +601,7 @@ bool Bipc_mq_handle::interrupt_allow_impl()
        * their local m_interrupting_*.  (Note: If `*this` wakes up, it'll see it's `true`.  If another
        * one wakes up, it will probably see `false` and re-enter the wait.  If by some coincidence that non-`*this`
        * had just set *that* m_interrupting_*, then -- well, cool -- presumably we won a race against
-       * their own interrupt_allow_impl() doing the same thing. */
+       * their own interrupt_allow_impl() doing the same thing.) */
       cond.notify_all(); // By the docs, and even by the source code as of Boost-1.81, this does not throw.
 
       /* (bipc::message_queue code does .notify_one() in send/receive impl, which makes sense since one
@@ -645,7 +658,7 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
   [[maybe_unused]] Fine_time_pt timeout_since_epoch;
   if constexpr(WAIT_TYPE == Wait_type::S_TIMED_WAIT)
   {
-    timeout_since_epoch = Fine_time_pt(time_since_posix_epoch() + timeout_from_now);
+    timeout_since_epoch = Fine_time_pt{time_since_posix_epoch() + timeout_from_now};
   }
 
   /* Most likely the below code will elicit a "WTF."  The background is that bipc::message_queue lacks anything like
@@ -653,7 +666,7 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
    * and it can be used with epoll_*(), so that is what Posix_mq_handle uses.  To get the same thing here I had
    * to hack it as seen below.  What it does is it mimics *send() and *receive() internal Boost source code, but
    * it stops short of actually performing the read or write once the queue becomes pushable/poppable.
-   * To get it work I (ygoldfel) operate directly on their internal data structures, same as those methods do.
+   * To get it working I (ygoldfel) operate directly on their internal data structures, same as those methods do.
    * Normally this would be beyond the pale; however in this case a couple of points make it reasonable-enough.
    *
    * Firstly, we can even do it in the first place, because the data structures -- all of which are directly in
@@ -663,16 +676,16 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
    *
    * Secondly, and this is the main reason I consider this reasonably maintainable, is the fact that the code
    * itself -- including a comment above the BOOST_INTERPROCESS_MSG_QUEUE_CIRCULAR_INDEX define -- says that
-   * their goal was to make version A of bipc interoperable (this is IPC after all) if version B>A of bipc.
+   * their goal was to make version A of bipc interoperable (this is IPC after all) with version B>A of bipc.
    * That means that if they *do* change this stuff, it will be protected by #define(s) like
    * BOOST_INTERPROCESS_MSG_QUEUE_CIRCULAR_INDEX, so as to make any change possible to roll-back via a compile
    * flag.  They *could* rename a data member without changing the physical structures, in which case this
    * would stop building, but that seems unlikely, as Boost updates are not made willy-nilly.
    *
-   * Is there risk of this breaking with a newer Boost version?  Yes, but the above evidence shows the risk is
+   * Is there risk of this breaking with a newer Boost version?  Yes; but the above evidence shows the risk is
    * manageably low.  Note that this wait_impl() feature, particularly since I've made it interruptible, is quite
    * useful.  Without it one must used timed_*(), and even with that -- suppose we want to stop work on
-   * a queue from another thread -- we have to put up a deinit time equal to the fine-grainedness of the timeout
+   * a queue from another thread -- we have to put up with a deinit time equal to the fine-grainedness of the timeout
    * one would have to use.  Plus even that aside, it is annoying to have to break up an operation into smaller
    * ones. */
 
@@ -735,7 +748,12 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
                                        "bipc::interprocess_condition::[timed_]wait()",
                                      [&]()
   {
-#ifndef BOOST_INTERPROCESS_MSG_QUEUE_CIRCULAR_INDEX
+#if (BOOST_VERSION < 109100) && !defined(BOOST_INTERPROCESS_MSG_QUEUE_CIRCULAR_INDEX)
+    /* Through Boost 1.90 bipc offers 2 MQ algorithms; the macro selects the circular-index one, which bipc
+     * comments show is the default as of many Boost versions ago, unless unset which would decrease performance;
+     * and we do not do that.  Our code for simplicity assumes it and does not support the lower-perf algorithm.
+     * As of Boost 1.91 the macro is gone: the circular-index algorithm is the only one (mq_hdr_t layout unchanged,
+     * m_cur_first_msg included); so there is nothing to check. */
     static_assert(false,
                   "bipc comments show this shall be true as of many Boost versions ago, unless unset which "
                     "would decrease performance; and we do not do that.  Our code for simplicity assumes "
@@ -743,7 +761,7 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
 #endif
 
     {
-      Bipc_mq_lock lock(mq_hdr->m_mutex);
+      Bipc_mq_lock lock{mq_hdr->m_mutex};
 
       // See interrupt_allow_impl() to understand this check (also below on cond.*wait()).
       if (interrupting)
@@ -760,13 +778,13 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
 
         if constexpr(WAIT_TYPE == Wait_type::S_POLL)
         {
-          FLOW_LOG_TRACE("Not immediatelly unstarved.  Poll = done.");
+          FLOW_LOG_TRACE("Not immediately unstarved.  Poll = done.");
           not_starved = false;
           return;
         }
         else // if constexpr(WAIT_TYPE == Wait_type::S_[TIMED_]WAIT)
         {
-          FLOW_LOG_TRACE("Not immediatelly unstarved.  Awaiting unstarvedness or timeout.");
+          FLOW_LOG_TRACE("Not immediately unstarved.  Awaiting unstarvedness or timeout.");
 
           ++blocked_dudes;
           try
@@ -837,7 +855,7 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
         FLOW_LOG_TRACE("Immediately unstarved.");
         not_starved = true;
       }
-    } // Bipc_mq_lock lock(mq_hdr->m_mutex);
+    } // Bipc_mq_lock lock{mq_hdr->m_mutex};
   }); // op_with_possible_bipc_mq_exception()
 
   if ((!*err_code) && interrupted)
@@ -881,12 +899,12 @@ bool Bipc_mq_handle::wait_impl([[maybe_unused]] util::Fine_duration timeout_from
 
 bool Bipc_mq_handle::is_sendable(Error_code* err_code)
 {
-  return wait_impl<Wait_type::S_POLL, true>(util::Fine_duration(), err_code);
+  return wait_impl<Wait_type::S_POLL, true>(util::Fine_duration{}, err_code);
 }
 
 void Bipc_mq_handle::wait_sendable(Error_code* err_code)
 {
-  wait_impl<Wait_type::S_WAIT, true>(util::Fine_duration(), err_code);
+  wait_impl<Wait_type::S_WAIT, true>(util::Fine_duration{}, err_code);
 }
 
 bool Bipc_mq_handle::timed_wait_sendable(util::Fine_duration timeout_from_now, Error_code* err_code)
@@ -896,12 +914,12 @@ bool Bipc_mq_handle::timed_wait_sendable(util::Fine_duration timeout_from_now, E
 
 bool Bipc_mq_handle::is_receivable(Error_code* err_code)
 {
-  return wait_impl<Wait_type::S_POLL, false>(util::Fine_duration(), err_code);
+  return wait_impl<Wait_type::S_POLL, false>(util::Fine_duration{}, err_code);
 }
 
 void Bipc_mq_handle::wait_receivable(Error_code* err_code)
 {
-  wait_impl<Wait_type::S_WAIT, false>(util::Fine_duration(), err_code);
+  wait_impl<Wait_type::S_WAIT, false>(util::Fine_duration{}, err_code);
 }
 
 bool Bipc_mq_handle::timed_wait_receivable(util::Fine_duration timeout_from_now, Error_code* err_code)
@@ -943,7 +961,7 @@ void Bipc_mq_handle::remove_persistent(flow::log::Logger* logger_ptr, // Static.
   static_assert(false,
                 "Code in Bipc_mq_handle::remove_persistent() relies on Boost invoking Linux unlink() with errno.");
 #endif
-  const auto& sys_err_code = *err_code = Error_code(errno, system_category());
+  const auto& sys_err_code = *err_code = {errno, system_category()};
   FLOW_ERROR_SYS_ERROR_LOG_WARNING();
 } // Bipc_mq_handle::remove_persistent()
 
@@ -1000,11 +1018,11 @@ void Bipc_mq_handle::op_with_possible_bipc_mq_exception(Error_code* err_code, ut
     {
       /* At least in POSIX, interprocess_exception only does the following in this case:
        *   - strerror(native_code_raw) => the message.  But that's standard boost.system errno handling already;
-       *     so if just emit a system_category() Error_code, all will be equally well message-wise in what().
+       *     so if we just emit a system_category() Error_code, all will be equally well message-wise in what().
        *   - They have a table that maps certain native_code_raw values to one of a few (not super-many but not
        *     a handful) bipc_err_code_enum enum values.  Technically the following will lose that information;
        *     but (1) it is logged above; and (2) so what? */
-      const auto& sys_err_code = *err_code = Error_code(native_code_raw, system_category());
+      const auto& sys_err_code = *err_code = {native_code_raw, system_category()};
       FLOW_ERROR_SYS_ERROR_LOG_WARNING();
       return;
     }
